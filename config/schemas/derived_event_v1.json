@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "derived_event_v1.json",
+  "title": "DerivedEvent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "raw_event_id",
+    "object_type",
+    "intent",
+    "extracted_fields",
+    "confidence",
+    "proposed_operations",
+    "model",
+    "prompt_version",
+    "timestamp"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "raw_event_id": {
+      "type": "string",
+      "minLength": 28,
+      "pattern": "^R_[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "object_type": {
+      "type": "string",
+      "enum": ["note", "idea", "task", "event", "person", "unknown"]
+    },
+    "intent": {
+      "type": "string",
+      "enum": ["create", "update", "append", "unknown"]
+    },
+    "extracted_fields": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "proposed_operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["op", "fields"],
+        "properties": {
+          "op": { "type": "string" },
+          "target_id": { "type": "string" },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "model": {
+      "type": "string"
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,5 +1,10 @@
 Decisions/assumptions:
-- Canonical objects are the only mutable artifacts and are treated as the truthy state for queries and surfacing.
-- Strict derived-event JSON validation rejects extra keys and records derivation_error artifacts.
-- Confidence gate defaults to 0.6 with a needs_review path for borderline items.
-- Calendar creation requires explicit cal: prefix in v1; otherwise propose and request confirmation.
+- Canonical frontmatter schema is defined in JSON Schema and referenced as the source of truth.
+- Schema validation uses jsonschema if installed; otherwise raises a clear error.
+- raw_event_id uses ULID format with prefix R_ and uppercase Crockford base32.
+- Project uses a Python src/ layout with minimal pyproject.toml.
+
+Progress note:
+- Implemented derived and canonical JSON schemas plus a schema loader/validator.
+- Reorganized Python layout to src/squire_core.
+- Next up: raw-event writer, then canonical object writer.

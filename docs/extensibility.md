@@ -1,5 +1,5 @@
-Extensibility Model
+# Extensibility Model
 
-Stable Interfaces
+## Stable Interfaces
 
 Core extension points include IngestProvider, Interpreter, StoreProvider, and IndexProvider. Providers register via configuration and do not require changes to core logic.
