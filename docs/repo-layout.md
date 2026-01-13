@@ -1,4 +1,4 @@
-Repository Layout
+# Repository Layout
 
 The git repository is the contract. This layout shows the intended top-level structure and locations for prompts, schemas, and derived artifacts.
 

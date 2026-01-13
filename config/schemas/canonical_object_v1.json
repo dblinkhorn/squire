@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "canonical_object_v1.json",
+  "title": "Canonical Object v1",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/definitions/note" },
+    { "$ref": "#/definitions/idea" },
+    { "$ref": "#/definitions/task" },
+    { "$ref": "#/definitions/event" },
+    { "$ref": "#/definitions/person" }
+  ],
+  "definitions": {
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "title", "created_at", "updated_at", "archived"],
+      "properties": {
+        "id": { "type": "string", "minLength": 3 },
+        "type": { "type": "string" },
+        "title": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "archived": { "type": "boolean" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["to", "rel"],
+            "properties": {
+              "to": { "type": "string" },
+              "rel": { "type": "string" }
+            }
+          }
+        },
+        "source_event_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "note": {
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "note" },
+            "summary": { "type": "string" },
+            "importance": { "type": "string", "enum": ["low", "normal", "high"] },
+            "pin": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "idea": {
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "required": ["one_liner"],
+          "properties": {
+            "type": { "const": "idea" },
+            "one_liner": { "type": "string" },
+            "status": {
+              "type": "string",
+              "enum": ["seed", "incubating", "active", "parked", "done"]
+            },
+            "next_step": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "task": {
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "required": ["status", "next_action"],
+          "properties": {
+            "type": { "const": "task" },
+            "status": {
+              "type": "string",
+              "enum": ["open", "done", "blocked"]
+            },
+            "next_action": { "type": "string" },
+            "due": { "type": "string" },
+            "priority": { "type": "string", "enum": ["low", "normal", "high"] },
+            "blocked_reason": { "type": "string" },
+            "completed_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      ]
+    },
+    "event": {
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "required": ["start"],
+          "properties": {
+            "type": { "const": "event" },
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" },
+            "location": { "type": "string" },
+            "reminders": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["minutes_before"],
+                "properties": {
+                  "minutes_before": { "type": "integer", "minimum": 0 }
+                }
+              }
+            },
+            "gcal_event_id": { "type": "string" },
+            "status": {
+              "type": "string",
+              "enum": ["scheduled", "done", "canceled"]
+            }
+          }
+        }
+      ]
+    },
+    "person": {
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "type": { "const": "person" },
+            "name": { "type": "string" },
+            "context": { "type": "string" },
+            "follow_ups": { "type": "string" },
+            "last_contacted": { "type": "string" },
+            "next_contact": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

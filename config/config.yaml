@@ -1,0 +1,14 @@
+# Squire configuration (minimal stub)
+
+paths:
+  repo_root: "."
+  events_raw: "events/raw"
+  events_derived: "events/derived"
+  objects_root: "objects"
+  index_db: "index/sb.sqlite"
+
+confidence:
+  create_threshold: 0.6
+
+schedule:
+  daily_digest_time: "09:00"
