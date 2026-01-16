@@ -4,11 +4,10 @@
   "title": "Canonical Object v1",
   "type": "object",
   "oneOf": [
-    { "$ref": "#/definitions/note" },
-    { "$ref": "#/definitions/idea" },
-    { "$ref": "#/definitions/task" },
-    { "$ref": "#/definitions/event" },
-    { "$ref": "#/definitions/person" }
+    { "$ref": "#/definitions/people" },
+    { "$ref": "#/definitions/projects" },
+    { "$ref": "#/definitions/ideas" },
+    { "$ref": "#/definitions/admin" }
   ],
   "definitions": {
     "base": {
@@ -44,28 +43,55 @@
         }
       }
     },
-    "note": {
+    "people": {
       "allOf": [
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
+          "required": ["name"],
           "properties": {
-            "type": { "const": "note" },
-            "summary": { "type": "string" },
-            "importance": { "type": "string", "enum": ["low", "normal", "high"] },
-            "pin": { "type": "boolean" }
+            "type": { "const": "people" },
+            "name": { "type": "string" },
+            "context": { "type": "string" },
+            "follow_ups": { "type": "string" },
+            "last_contacted": { "type": "string" },
+            "next_contact": { "type": "string" }
           }
         }
       ]
     },
-    "idea": {
+    "projects": {
+      "allOf": [
+        { "$ref": "#/definitions/base" },
+        {
+          "type": "object",
+          "required": ["status", "next_action"],
+          "properties": {
+            "type": { "const": "projects" },
+            "status": {
+              "type": "string",
+              "enum": ["planning", "in_progress", "blocked", "completed", "on_hold"]
+            },
+            "next_action": { "type": "string" },
+            "goal": { "type": "string" },
+            "due": { "type": "string" },
+            "blocked_reason": { "type": "string" },
+            "stakeholders": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      ]
+    },
+    "ideas": {
       "allOf": [
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
           "required": ["one_liner"],
           "properties": {
-            "type": { "const": "idea" },
+            "type": { "const": "ideas" },
             "one_liner": { "type": "string" },
             "status": {
               "type": "string",
@@ -76,14 +102,14 @@
         }
       ]
     },
-    "task": {
+    "admin": {
       "allOf": [
         { "$ref": "#/definitions/base" },
         {
           "type": "object",
           "required": ["status", "next_action"],
           "properties": {
-            "type": { "const": "task" },
+            "type": { "const": "admin" },
             "status": {
               "type": "string",
               "enum": ["open", "done", "blocked"]
@@ -92,55 +118,8 @@
             "due": { "type": "string" },
             "priority": { "type": "string", "enum": ["low", "normal", "high"] },
             "blocked_reason": { "type": "string" },
-            "completed_at": { "type": "string", "format": "date-time" }
-          }
-        }
-      ]
-    },
-    "event": {
-      "allOf": [
-        { "$ref": "#/definitions/base" },
-        {
-          "type": "object",
-          "required": ["start"],
-          "properties": {
-            "type": { "const": "event" },
-            "start": { "type": "string", "format": "date-time" },
-            "end": { "type": "string", "format": "date-time" },
-            "location": { "type": "string" },
-            "reminders": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["minutes_before"],
-                "properties": {
-                  "minutes_before": { "type": "integer", "minimum": 0 }
-                }
-              }
-            },
-            "gcal_event_id": { "type": "string" },
-            "status": {
-              "type": "string",
-              "enum": ["scheduled", "done", "canceled"]
-            }
-          }
-        }
-      ]
-    },
-    "person": {
-      "allOf": [
-        { "$ref": "#/definitions/base" },
-        {
-          "type": "object",
-          "required": ["name"],
-          "properties": {
-            "type": { "const": "person" },
-            "name": { "type": "string" },
-            "context": { "type": "string" },
-            "follow_ups": { "type": "string" },
-            "last_contacted": { "type": "string" },
-            "next_contact": { "type": "string" }
+            "completed_at": { "type": "string", "format": "date-time" },
+            "gcal_event_id": { "type": "string" }
           }
         }
       ]

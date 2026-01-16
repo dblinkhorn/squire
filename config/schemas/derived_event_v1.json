@@ -28,7 +28,7 @@
     },
     "object_type": {
       "type": "string",
-      "enum": ["note", "idea", "task", "event", "person", "unknown"]
+      "enum": ["people", "projects", "ideas", "admin", "unknown"]
     },
     "intent": {
       "type": "string",

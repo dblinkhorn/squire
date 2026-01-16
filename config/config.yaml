@@ -12,3 +12,18 @@ confidence:
 
 schedule:
   daily_digest_time: "09:00"
+
+surfacing:
+  admin:
+    due_soon_days: 1
+    include_open_limit: 5
+  projects:
+    stale_days: 14
+  ideas:
+    weekly_review: true
+  people:
+    next_contact_days: 0
+
+querying:
+  execute_threshold: 0.8
+  confirm_threshold: 0.6

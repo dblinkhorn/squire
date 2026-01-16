@@ -13,7 +13,7 @@ repo/
       calendar_parse_v1.txt
     schemas/
       derived_event_v1.json
-      canonical_task_v1.json
+      canonical_object_v1.json
   events/
     raw/
       <raw_event_id>.md
@@ -23,16 +23,14 @@ repo/
         raw_model_output.txt
         errors.json
   objects/
-    tasks/
-      T_<id>.md
-    notes/
-      N_<id>.md
+    admin/
+      A_<id>.md
     ideas/
       I_<id>.md
     people/
       P_<id>.md
-    events/
-      E_<id>.md
+    projects/
+      PR_<id>.md
   index/
     sb.sqlite
   docs/
