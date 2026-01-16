@@ -2,7 +2,7 @@
 
 ## High-Level Flow
 
-Discord DM → Ingest → Raw Event (git) → Interpretation (LLM) → Derived Artifact (git) → Canonical Objects (git) → Index (SQLite) → Surfacing (push or pull) → User feedback / repair.
+Discord bot DM → Ingest → Raw Event (git) → Interpretation (LLM) → Derived Artifact (git) → Canonical Objects (git) → Index (SQLite) → Surfacing (push or pull) → User feedback / repair.
 
 ## Runtime Model
 
