@@ -16,7 +16,7 @@ LLM-assisted surfacing uses structured inputs and fixed response formats to keep
 
 ## Configuration Defaults
 
-Surfacing rules are configurable in `config/config.yaml`. Default behavior is:
+Surfacing rules are configurable in `config.yaml`. Default behavior is:
 
 - Admin: due today/overdue plus up to a small set of open items.
 - Projects: included in weekly review and when status is blocked or stale.

@@ -4,16 +4,15 @@ The git repository is the contract. This layout shows the intended top-level str
 
 ```
 repo/
-  config/
-    config.yaml
-    prompts/
-      classify_v1.txt
-      digest_daily_v1.txt
-      review_weekly_v1.txt
-      calendar_parse_v1.txt
-    schemas/
-      derived_event_v1.json
-      canonical_object_v1.json
+  config.yaml
+  prompts/
+    classify_v1.txt
+    digest_daily_v1.txt
+    review_weekly_v1.txt
+    calendar_parse_v1.txt
+  schemas/
+    derived_event_v1.json
+    canonical_object_v1.json
   events/
     raw/
       <raw_event_id>.md
