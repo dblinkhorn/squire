@@ -3,16 +3,21 @@
   "$id": "canonical_object_v1.json",
   "title": "Canonical Object v1",
   "type": "object",
-  "oneOf": [
-    { "$ref": "#/definitions/people" },
-    { "$ref": "#/definitions/projects" },
-    { "$ref": "#/definitions/ideas" },
-    { "$ref": "#/definitions/admin" }
+  "allOf": [
+    { "$ref": "#/definitions/base" },
+    {
+      "oneOf": [
+        { "$ref": "#/definitions/people" },
+        { "$ref": "#/definitions/projects" },
+        { "$ref": "#/definitions/ideas" },
+        { "$ref": "#/definitions/admin" }
+      ]
+    }
   ],
+  "unevaluatedProperties": false,
   "definitions": {
     "base": {
       "type": "object",
-      "additionalProperties": false,
       "required": ["id", "type", "title", "created_at", "updated_at", "archived"],
       "properties": {
         "id": { "type": "string", "minLength": 3 },
@@ -44,85 +49,65 @@
       }
     },
     "people": {
-      "allOf": [
-        { "$ref": "#/definitions/base" },
-        {
-          "type": "object",
-          "required": ["name"],
-          "properties": {
-            "type": { "const": "people" },
-            "name": { "type": "string" },
-            "context": { "type": "string" },
-            "follow_ups": { "type": "string" },
-            "last_contacted": { "type": "string" },
-            "next_contact": { "type": "string" }
-          }
-        }
-      ]
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "type": { "const": "people" },
+        "name": { "type": "string" },
+        "context": { "type": "string" },
+        "follow_ups": { "type": "string" },
+        "last_contacted": { "type": "string" },
+        "next_contact": { "type": "string" }
+      }
     },
     "projects": {
-      "allOf": [
-        { "$ref": "#/definitions/base" },
-        {
-          "type": "object",
-          "required": ["status", "next_action"],
-          "properties": {
-            "type": { "const": "projects" },
-            "status": {
-              "type": "string",
-              "enum": ["planning", "in_progress", "blocked", "completed", "on_hold"]
-            },
-            "next_action": { "type": "string" },
-            "goal": { "type": "string" },
-            "due": { "type": "string" },
-            "blocked_reason": { "type": "string" },
-            "stakeholders": {
-              "type": "array",
-              "items": { "type": "string" }
-            }
-          }
+      "type": "object",
+      "required": ["status", "next_action"],
+      "properties": {
+        "type": { "const": "projects" },
+        "status": {
+          "type": "string",
+          "enum": ["planning", "in_progress", "blocked", "completed", "on_hold"]
+        },
+        "next_action": { "type": "string" },
+        "goal": { "type": "string" },
+        "due": { "type": "string" },
+        "blocked_reason": { "type": "string" },
+        "stakeholders": {
+          "type": "array",
+          "items": { "type": "string" }
         }
-      ]
+      }
     },
     "ideas": {
-      "allOf": [
-        { "$ref": "#/definitions/base" },
-        {
-          "type": "object",
-          "required": ["one_liner"],
-          "properties": {
-            "type": { "const": "ideas" },
-            "one_liner": { "type": "string" },
-            "status": {
-              "type": "string",
-              "enum": ["seed", "incubating", "active", "parked", "done"]
-            },
-            "next_step": { "type": "string" }
-          }
-        }
-      ]
+      "type": "object",
+      "required": ["one_liner"],
+      "properties": {
+        "type": { "const": "ideas" },
+        "one_liner": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["seed", "incubating", "active", "parked", "done"]
+        },
+        "next_step": { "type": "string" }
+      }
     },
     "admin": {
-      "allOf": [
-        { "$ref": "#/definitions/base" },
-        {
-          "type": "object",
-          "required": ["status", "next_action"],
-          "properties": {
-            "type": { "const": "admin" },
-            "status": {
-              "type": "string",
-              "enum": ["open", "done", "blocked"]
-            },
-            "next_action": { "type": "string" },
-            "due": { "type": "string" },
-            "priority": { "type": "string", "enum": ["low", "normal", "high"] },
-            "blocked_reason": { "type": "string" },
-            "completed_at": { "type": "string", "format": "date-time" },
-            "gcal_event_id": { "type": "string" }
-          }
-        }
-      ]
+      "type": "object",
+      "required": ["status", "next_action"],
+      "properties": {
+        "type": { "const": "admin" },
+        "status": {
+          "type": "string",
+          "enum": ["open", "done", "blocked"]
+        },
+        "next_action": { "type": "string" },
+        "due": { "type": "string" },
+        "priority": { "type": "string", "enum": ["low", "normal", "high"] },
+        "blocked_reason": { "type": "string" },
+        "completed_at": { "type": "string", "format": "date-time" },
+        "gcal_event_id": { "type": "string" }
+      }
     }
   }
 }

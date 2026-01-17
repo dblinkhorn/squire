@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "derived_event_people_v1.json",
+  "title": "DerivedEvent People v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "raw_event_id",
+    "object_type",
+    "intent",
+    "extracted_fields",
+    "confidence",
+    "proposed_operations",
+    "model",
+    "prompt_version",
+    "timestamp"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "raw_event_id": { "type": ["string", "null"] },
+    "object_type": { "type": "string", "const": "people" },
+    "intent": {
+      "type": ["string", "null"],
+      "enum": ["create", "update", "append", "unknown", null]
+    },
+    "extracted_fields": { "$ref": "#/definitions/people_fields" },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "proposed_operations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/operation" }
+    },
+    "model": { "type": ["string", "null"] },
+    "prompt_version": { "type": ["string", "null"] },
+    "timestamp": { "type": ["string", "null"], "format": "date-time" }
+  },
+  "definitions": {
+    "people_fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "context", "follow_ups", "last_contacted", "next_contact"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "context": { "type": ["string", "null"] },
+        "follow_ups": { "type": ["string", "null"] },
+        "last_contacted": { "type": ["string", "null"] },
+        "next_contact": { "type": ["string", "null"] }
+      }
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "target_id", "fields"],
+      "properties": {
+        "op": {
+          "type": ["string", "null"],
+          "enum": ["create", "update", "append", "unknown", null]
+        },
+        "target_id": { "type": ["string", "null"] },
+        "fields": { "$ref": "#/definitions/people_fields" }
+      }
+    }
+  }
+}
