@@ -10,7 +10,7 @@ Raw events are stored as markdown. Frontmatter includes id, source, source_messa
 
 ## Derived Event (immutable, versioned)
 
-Derived events are stored as JSON. Fields include raw_event_id, intent/type, extracted fields, confidence (0–1), proposed operations, model name, prompt version, schema version, and timestamp. Derived JSON must match schema exactly with no extra keys.
+Derived events are stored as JSON. Fields include raw_event_id, intent/type, extracted fields, confidence (0–1), proposed operations, model name, prompt version, schema version, and timestamp. Derived JSON must match schema exactly with no extra keys. Classification and extraction use separate bucket-specific schemas to keep strict validation while avoiding ambiguous unions.
 
 ## Canonical Objects (mutable)
 

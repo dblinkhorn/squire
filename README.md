@@ -1,7 +1,6 @@
 # squire
 
-<img src="hero_logo.png" width="600" alt="Squire logo">
-<p>
+![Squire logo](hero_logo.png)
 
 Squire is a self-hosted, modular, AI-assisted personal organization and reminder system. It captures items frictionlessly (via a Discord bot DM), interprets them into structured entities, stores them durably in a git-backed archive, indexes them locally for fast queries, and proactively or interactively surfaces relevant information.
 
