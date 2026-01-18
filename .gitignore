@@ -17,6 +17,7 @@ env/
 
 # Local config
 .env
+config.yaml
 
 # OS/editor
 .DS_Store

@@ -28,13 +28,13 @@ repo/
         errors.json
   objects/
     admin/
-      A_<id>.md
+      A_<uuid>.md
     ideas/
-      I_<id>.md
+      I_<uuid>.md
     people/
-      P_<id>.md
+      P_<uuid>.md
     projects/
-      PR_<id>.md
+      PR_<uuid>.md
   index/
     sb.sqlite
   docs/
