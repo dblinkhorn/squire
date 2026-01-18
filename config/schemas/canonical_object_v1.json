@@ -101,9 +101,10 @@
           "type": "string",
           "enum": ["open", "done", "blocked"]
         },
-        "next_action": { "type": "string" },
-        "due": { "type": "string" },
-        "priority": { "type": "string", "enum": ["low", "normal", "high"] },
+            "next_action": { "type": "string" },
+            "due_date": { "type": "string" },
+            "due_at": { "type": "string", "format": "date-time" },
+            "priority": { "type": "string", "enum": ["low", "normal", "high"] },
         "blocked_reason": { "type": "string" },
         "completed_at": { "type": "string", "format": "date-time" },
         "gcal_event_id": { "type": "string" }

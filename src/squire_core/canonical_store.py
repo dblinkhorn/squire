@@ -43,7 +43,13 @@ def _object_path(objects_root: str | Path, object_type: str, object_id: str) -> 
     directory = _TYPE_DIR.get(object_type)
     if not directory:
         raise ValueError(f"Unsupported object type: {object_type}")
-    return Path(objects_root) / directory / f"{object_id}.md"
+    prefix = {
+        "people": "P_",
+        "projects": "PR_",
+        "ideas": "I_",
+        "admin": "A_",
+    }.get(object_type, "X_")
+    return Path(objects_root) / directory / f"{prefix}{object_id}.md"
 
 
 def write_canonical_object(

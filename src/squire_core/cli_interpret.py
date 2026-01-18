@@ -6,27 +6,19 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from squire_core.interpreter import interpret_text
 from squire_core.llm.openai_provider import OpenAIProvider
-
-
-_CLASSIFY_PROMPT = (
-    "You are Squire's classifier. "
-    "Classify the user input into one of: people, projects, ideas, admin, or unknown. "
-    "Include a confidence score between 0 and 1. "
-    "If the input is ambiguous, set object_type to unknown and keep confidence low. "
-    "Return only JSON that matches the provided schema."
+from squire_core.llm.prompts import DEFAULT_CLASSIFY_PROMPT, DEFAULT_EXTRACT_PROMPT
+from squire_core.timezone_utils import (
+    format_reference_date,
+    format_reference_time,
+    format_reference_weekday,
+    resolve_timezone,
 )
 
-_EXTRACT_PROMPT = (
-    "You are Squire's interpreter. "
-    "Extract structured fields required by the schema and include a confidence score between 0 and 1. "
-    "If the input is ambiguous, keep confidence low and set unknown fields to null. "
-    "Only use fields allowed by the schema for the chosen object_type. "
-    "If a field is unknown or not present, include it as null rather than omitting it. "
-    "Return only JSON that matches the provided schema."
-)
+
+_CLASSIFY_PROMPT = DEFAULT_CLASSIFY_PROMPT
+_EXTRACT_PROMPT = DEFAULT_EXTRACT_PROMPT
 
 
 def _load_config(path: str | Path) -> dict[str, Any]:
@@ -40,6 +32,11 @@ def main() -> int:
     parser.add_argument("text", help="User input to interpret")
     parser.add_argument("--model", help="Model name to use")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Apply proposed operations to canonical objects",
+    )
     parser.add_argument(
         "--classify-schema",
         default="config/schemas/derived_event_classify_v1.json",
@@ -65,6 +62,11 @@ def main() -> int:
         default="config/schemas/derived_event_admin_v1.json",
         help="Path to admin derived schema",
     )
+    parser.add_argument(
+        "--canonical-schema",
+        default="config/schemas/canonical_object_v1.json",
+        help="Path to canonical schema",
+    )
     parser.add_argument("--classify-prompt", default="", help="Override classifier prompt")
     parser.add_argument("--extract-prompt", default="", help="Override extraction prompt")
     args = parser.parse_args()
@@ -77,6 +79,15 @@ def main() -> int:
     provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
     classify_prompt = args.classify_prompt or config.get("llm", {}).get("classify_prompt") or _CLASSIFY_PROMPT
     extract_prompt = args.extract_prompt or config.get("llm", {}).get("interpreter_prompt") or _EXTRACT_PROMPT
+
+    tz_name = config.get("timezone")
+    tz = resolve_timezone(tz_name)
+    reference = (
+        f"Reference date: {format_reference_date(tz)}. "
+        f"Reference weekday: {format_reference_weekday(tz)}. "
+        f"Reference time: {format_reference_time(tz)}."
+    )
+    extract_prompt = f"{extract_prompt} {reference}"
 
     classification = interpret_text(
         provider=provider,
@@ -117,6 +128,20 @@ def main() -> int:
         system_prompt=extract_prompt,
         schema_path=Path(schema_path),
     )
+
+    if args.apply:
+        from squire_core.operation_apply import apply_operations
+
+        objects_root = config.get("paths", {}).get("objects_root", "objects")
+        result = apply_operations(
+            interpretation.derived,
+            objects_root=objects_root,
+            canonical_schema_path=Path(args.canonical_schema),
+            derived_schema_path=Path(schema_path),
+        )
+        for path in result.written_paths:
+            print(f"Wrote: {path}")
+        return 0
 
     print(interpretation.raw_text)
     return 0
