@@ -1,4 +1,4 @@
-# squire
+# Squire
 
 ![Squire logo](hero_logo.png)
 

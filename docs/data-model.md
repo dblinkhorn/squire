@@ -15,6 +15,7 @@ Derived events are stored as JSON. Fields include raw_event_id, intent/type, ext
 ## Canonical Objects (mutable)
 
 Canonical objects are stored as markdown with YAML frontmatter. Supported object types are people, projects, ideas, and admin. Common required fields are id, type, title, created_at, updated_at, and archived (bool, default false). Common optional fields are tags, links (array of {to, rel}), and source_event_ids.
+source_event_ids links a canonical object to the raw events that created or updated it. Each apply operation appends the current raw_event_id to this list for auditability.
 
 ### People
 

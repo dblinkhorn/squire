@@ -8,6 +8,8 @@ Decisions/assumptions:
 - IDs use python-ulid for time-sortable ULID strings; raw events are prefixed (e.g., R_).
 - Planned: optional GitHub repo creation/backup for the archive storage.
 - Next: link raw events to canonical objects (source_event_ids) and add pending action confirmation flow.
+- Possible future task: add a scripts/utils directory for helper commands (e.g., clear-archive).
+- Possible future functionality: support locally hosted LLMs as an optional backend.
 
 Notes:
 - Add bot-side logging (raw id, classification, apply result) later.
