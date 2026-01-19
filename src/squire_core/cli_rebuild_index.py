@@ -4,15 +4,8 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from squire_core.indexer import rebuild_index
-
-
-def _load_config(path: str | Path) -> dict[str, Any]:
-    config_path = Path(path)
-    with config_path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
+from squire_core.config_utils import load_config, normalize_archive_config
 
 
 def main() -> int:
@@ -24,7 +17,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    config = _load_config(args.config)
+    config = load_config(args.config)
+    config = normalize_archive_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
 

@@ -5,26 +5,18 @@ import os
 from pathlib import Path
 from typing import Any
 
-import yaml
-from squire_core.interpreter import interpret_text
+from squire_core.config_utils import load_config, normalize_archive_config
+from squire_core.derived_event_store import write_derived_event
+from squire_core.id_utils import generate_prefixed_id
+from squire_core.interpreter import InterpretationValidationError, interpret_text
 from squire_core.llm.openai_provider import OpenAIProvider
-from squire_core.llm.prompts import DEFAULT_CLASSIFY_PROMPT, DEFAULT_EXTRACT_PROMPT
+from squire_core.llm.prompts import load_prompt
 from squire_core.timezone_utils import (
     format_reference_date,
     format_reference_time,
     format_reference_weekday,
     resolve_timezone,
 )
-
-
-_CLASSIFY_PROMPT = DEFAULT_CLASSIFY_PROMPT
-_EXTRACT_PROMPT = DEFAULT_EXTRACT_PROMPT
-
-
-def _load_config(path: str | Path) -> dict[str, Any]:
-    config_path = Path(path)
-    with config_path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
 
 
 def main() -> int:
@@ -67,18 +59,29 @@ def main() -> int:
         default="config/schemas/canonical_object_v1.json",
         help="Path to canonical schema",
     )
-    parser.add_argument("--classify-prompt", default="", help="Override classifier prompt")
-    parser.add_argument("--extract-prompt", default="", help="Override extraction prompt")
+    parser.add_argument("--classify-prompt-path", default="", help="Path to classifier prompt")
+    parser.add_argument("--extract-prompt-path", default="", help="Path to extraction prompt")
     args = parser.parse_args()
 
-    config = _load_config(args.config)
+    config = load_config(args.config)
+    config = normalize_archive_config(config)
     model = args.model or config.get("llm", {}).get("interpreter_model")
     if not model:
         raise SystemExit("Model required. Provide --model or set llm.interpreter_model in config.yaml")
 
     provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
-    classify_prompt = args.classify_prompt or config.get("llm", {}).get("classify_prompt") or _CLASSIFY_PROMPT
-    extract_prompt = args.extract_prompt or config.get("llm", {}).get("interpreter_prompt") or _EXTRACT_PROMPT
+    classify_prompt_path = args.classify_prompt_path or config.get("llm", {}).get("classify_prompt_path")
+    extract_prompt_path = args.extract_prompt_path or config.get("llm", {}).get("interpreter_prompt_path")
+    if not classify_prompt_path or not extract_prompt_path:
+        raise SystemExit("Prompt paths required. Set llm.classify_prompt_path and llm.interpreter_prompt_path.")
+    try:
+        classify_prompt = load_prompt(classify_prompt_path)
+        extract_prompt = load_prompt(extract_prompt_path)
+    except OSError as exc:
+        raise SystemExit(f"Failed to load prompt files: {exc}") from exc
+
+    derived_root = config.get("paths", {}).get("events_derived", "events/derived")
+    run_id = generate_prefixed_id("CLI_")
 
     tz_name = config.get("timezone")
     tz = resolve_timezone(tz_name)
@@ -89,12 +92,44 @@ def main() -> int:
     )
     extract_prompt = f"{extract_prompt} {reference}"
 
-    classification = interpret_text(
-        provider=provider,
-        text=args.text,
-        model=model,
-        system_prompt=classify_prompt,
-        schema_path=Path(args.classify_schema),
+    try:
+        classification = interpret_text(
+            provider=provider,
+            text=args.text,
+            model=model,
+            system_prompt=classify_prompt,
+            schema_path=Path(args.classify_schema),
+        )
+    except InterpretationValidationError as exc:
+        write_derived_event(
+            derived=exc.payload,
+            raw_text=exc.raw_text,
+            derived_root=derived_root,
+            raw_event_id=run_id,
+            label="invalid",
+            error=exc,
+        )
+        print(exc.raw_text)
+        print("Classifier output failed schema validation.")
+        return 2
+    except Exception as exc:
+        write_derived_event(
+            derived=None,
+            raw_text="",
+            derived_root=derived_root,
+            raw_event_id=run_id,
+            label="invalid",
+            error=exc,
+        )
+        print(f"Interpretation failed: {exc}")
+        return 2
+
+    write_derived_event(
+        derived=classification.derived,
+        raw_text=classification.raw_text,
+        derived_root=derived_root,
+        raw_event_id=run_id,
+        label="classify",
     )
     object_type = classification.derived.get("object_type")
     if not isinstance(object_type, str):
@@ -121,12 +156,44 @@ def main() -> int:
         print("Unrecognized object_type.")
         return 2
 
-    interpretation = interpret_text(
-        provider=provider,
-        text=args.text,
-        model=model,
-        system_prompt=extract_prompt,
-        schema_path=Path(schema_path),
+    try:
+        interpretation = interpret_text(
+            provider=provider,
+            text=args.text,
+            model=model,
+            system_prompt=extract_prompt,
+            schema_path=Path(schema_path),
+        )
+    except InterpretationValidationError as exc:
+        write_derived_event(
+            derived=exc.payload,
+            raw_text=exc.raw_text,
+            derived_root=derived_root,
+            raw_event_id=run_id,
+            label="invalid",
+            error=exc,
+        )
+        print(exc.raw_text)
+        print("Interpreter output failed schema validation.")
+        return 2
+    except Exception as exc:
+        write_derived_event(
+            derived=None,
+            raw_text="",
+            derived_root=derived_root,
+            raw_event_id=run_id,
+            label="invalid",
+            error=exc,
+        )
+        print(f"Interpretation failed: {exc}")
+        return 2
+
+    write_derived_event(
+        derived=interpretation.derived,
+        raw_text=interpretation.raw_text,
+        derived_root=derived_root,
+        raw_event_id=run_id,
+        label="derived",
     )
 
     if args.apply:

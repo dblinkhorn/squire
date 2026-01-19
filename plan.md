@@ -1,4 +1,3 @@
 Next steps:
-1) Update canonical ID generation to use short random alphanumeric suffixes (no deps).
-2) Add derived-event logging to events/derived/.
-3) Add basic bot logging (raw id, classification, apply result).
+1) Link raw events to canonical objects via source_event_ids.
+2) Add pending actions + confirmation commands for delayed user responses.

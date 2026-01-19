@@ -14,6 +14,13 @@ class Interpretation:
     raw_text: str
 
 
+class InterpretationValidationError(ValueError):
+    def __init__(self, message: str, raw_text: str, payload: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.raw_text = raw_text
+        self.payload = payload
+
+
 def interpret_text(
     provider: LLMProvider,
     text: str,
@@ -23,5 +30,8 @@ def interpret_text(
 ) -> Interpretation:
     schema = load_json_schema(schema_path)
     result: LLMResult = provider.interpret(text=text, schema=schema, model=model, system_prompt=system_prompt)
-    validate_json(schema, result.payload)
+    try:
+        validate_json(schema, result.payload)
+    except Exception as exc:
+        raise InterpretationValidationError(str(exc), raw_text=result.raw_text, payload=result.payload) from exc
     return Interpretation(derived=result.payload, raw_text=result.raw_text)

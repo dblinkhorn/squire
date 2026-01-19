@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from squire_core.canonical_store import CanonicalObject, write_canonical_object
+from squire_core.id_utils import generate_ulid
 from squire_core.schema_loader import load_json_schema, validate_json
 
 
@@ -76,7 +77,7 @@ def apply_operations(
         if not title:
             title = _require("title", fields)
         fields["title"] = title
-        object_id = fields.get("id") or _generate_uuid()
+        object_id = fields.get("id") or generate_ulid()
         fields = dict(fields)
         fields["id"] = object_id
 
@@ -90,6 +91,8 @@ def apply_operations(
         if object_type == "admin":
             if not fields.get("next_action") and fields.get("title"):
                 fields["next_action"] = fields["title"]
+            if not fields.get("status"):
+                fields["status"] = "open"
             _require("next_action", fields)
             _require("status", fields)
 
@@ -115,8 +118,3 @@ def apply_operations(
 
     return ApplyResult(written_paths=written)
 
-
-def _generate_uuid() -> str:
-    import uuid
-
-    return str(uuid.uuid4())

@@ -23,3 +23,29 @@ Squire can also interpret natural-language queries via the LLM, translate them i
 Planned follow-ons include `!due [days]`, `!archive`, `!help`, `!rebuild-index`, and `!confirm <pending_action_id>` for proposed calendar actions.
 
 Commands never generate new canonical objects unless explicitly stated.
+
+## Update & Append Strategy (Planned)
+
+Squire aims to keep capture friction low while avoiding accidental mutations. The default behavior is create-on-capture with selective updates/append when confidence is high or the user confirms.
+
+Core principles:
+- Default to create unless the target is a uniquely identifiable existing record.
+- If ambiguity exists, ask for confirmation before mutating canonical state.
+- Prefer lightweight interactions (buttons/selects) when possible, but always provide a text fallback.
+
+Retrieval + decision flow:
+1) Run a local index search against the user’s message to find candidate objects.
+2) Provide a small shortlist (IDs, titles, short snippets) to the LLM.
+3) The LLM proposes create/append/update with a confidence score.
+4) Apply automatically only when confidence is high and the match is unique; otherwise ask the user.
+
+Discord interaction patterns:
+- If a single strong match is found, reply with a confirmation button (e.g., “Append to Alex Chen?”).
+- If multiple candidates exist, present a dropdown to choose the target.
+- For multi-entity notes (e.g., “Met A and B”), propose a multi-update and confirm in one step.
+- If the user is slow to respond, the system should store a pending action and allow `!confirm <id>` or `!cancel <id>` later.
+
+Explicit commands remain available for precision:
+- `!append <id> …` (force append)
+- `!done <id>` (mark admin done)
+- `!fix <id> field=value` (field updates)

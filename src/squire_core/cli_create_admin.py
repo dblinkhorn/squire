@@ -5,15 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from squire_core.canonical_store import CanonicalObject, write_canonical_object
+from squire_core.id_utils import generate_ulid
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _generate_id(seed: str) -> str:
-    suffix = "".join([c for c in seed.upper() if c.isalnum()])[:6]
-    return f"A_{suffix or 'ITEM'}"
 
 
 def main() -> int:
@@ -32,7 +28,7 @@ def main() -> int:
     now = _now_iso()
     canonical = CanonicalObject(
         frontmatter={
-            "id": _generate_id(args.title),
+            "id": generate_ulid(),
             "type": "admin",
             "title": args.title,
             "status": "open",
