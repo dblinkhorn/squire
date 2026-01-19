@@ -20,6 +20,16 @@ Squire uses the user’s LLM provider to transform natural language queries into
 - If confidence is low, Squire asks a clarification question instead of executing.
 - Returned responses must include IDs and never invent missing data.
 
+## Update/Append Decision (Planned)
+
+For natural-language captures that might refer to existing records, Squire uses a retrieve-then-decide pattern:
+
+1) Retrieve: run a local search to fetch the top candidate objects (IDs, titles, short snippets).
+2) Decide: provide only those candidates to the LLM and ask it to propose create vs append vs update, with a confidence score.
+3) Gate: auto-apply only if a single candidate is a clear match and confidence is high; otherwise request confirmation.
+
+This keeps LLM context small, reduces error risk, and preserves auditability.
+
 ## Confidence Thresholds
 
 Squire uses configured thresholds to decide whether to execute or clarify:

@@ -2,10 +2,13 @@
 
 llm:
   interpreter_model: gpt-5-mini
-  classify_prompt: "" # Leave empty to use the built-in default classifier prompt.
-  interpreter_prompt: "" # Leave empty to use the built-in default extraction prompt.
+  classify_prompt_path: "config/prompts/classify_v1.txt"
+  interpreter_prompt_path: "config/prompts/extract_v1.txt"
 
 timezone: "local" # Use system local timezone, or set an IANA name like "America/Los_Angeles".
+
+archive_root: "~/squire-archive" # Default archive location. Override to move durable storage.
+archive_git_enabled: true # Set false to skip git initialization for the archive.
 
 paths:
   events_raw: "events/raw"

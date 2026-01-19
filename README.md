@@ -27,3 +27,15 @@ People track relationships and follow-ups. Projects track ongoing work with stat
 ## Development
 
 Python dependencies are declared in `pyproject.toml`. Install them with your preferred tool (e.g., `pip install -e .`).
+
+Prompt templates live in `config/prompts/`. To override them, create your own prompt files and update the paths in `config.yaml`.
+
+## Initialize archive storage
+
+Run the init helper to set up a durable archive folder and update `config.yaml` paths:
+
+```sh
+make init
+```
+
+Defaults to `~/squire-archive`. Override with `--archive-root` or disable git initialization with `--no-git` (or set `archive_git_enabled: false` in `config.yaml`).

@@ -5,13 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-
-def _load_config(path: str | Path) -> dict[str, Any]:
-    config_path = Path(path)
-    with config_path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle) or {}
+from squire_core.config_utils import load_config, normalize_archive_config
 
 
 def _parse_query(query: str) -> tuple[str, str | None]:
@@ -54,7 +48,8 @@ def main() -> int:
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
     args = parser.parse_args()
 
-    config = _load_config(args.config)
+    config = load_config(args.config)
+    config = normalize_archive_config(config)
     db_path = config.get("paths", {}).get("index_db", "index/sb.sqlite")
 
     search_terms, tag = _parse_query(args.query)
