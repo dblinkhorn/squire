@@ -32,7 +32,6 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     if not content:
         return
     await _safe_add_reaction(message, "⏳")
-    response_channel = await _get_response_channel(message)
 
     raw_dir = Path(config.get("paths", {}).get("events_raw", "events/raw"))
     derived_root = Path(config.get("paths", {}).get("events_derived", "events/derived"))
@@ -54,7 +53,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     model = config.get("llm", {}).get("interpreter_model")
     if not model:
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("No interpreter model configured.")
+        await _send_response(message, "No interpreter model configured.")
         return
 
     classify_schema = Path("config/schemas/derived_event_classify_v1.json")
@@ -71,7 +70,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     extract_prompt_path = config.get("llm", {}).get("interpreter_prompt_path")
     if not classify_prompt_path or not extract_prompt_path:
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("Prompt paths are missing. Set llm.classify_prompt_path and llm.interpreter_prompt_path.")
+        await _send_response(message, "Prompt paths are missing. Set llm.classify_prompt_path and llm.interpreter_prompt_path.")
         return
 
     try:
@@ -79,7 +78,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         extract_prompt = load_prompt(extract_prompt_path)
     except OSError as exc:
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send(f"Failed to load prompt files: {exc}")
+        await _send_response(message, f"Failed to load prompt files: {exc}")
         return
 
     tz_name = config.get("timezone")
@@ -110,7 +109,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         )
         logging.warning("classification_invalid id=%s error=%s", raw_id, exc)
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("I couldn't parse that reliably. Please rephrase or use a prefix.")
+        await _send_response(message, "I couldn't parse that reliably. Please rephrase or use a prefix.")
         return
     except Exception as exc:
         write_derived_event(
@@ -123,7 +122,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         )
         logging.exception("classification_failed id=%s", raw_id)
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("Interpretation failed. Please try again.")
+        await _send_response(message, "Interpretation failed. Please try again.")
         return
 
     write_derived_event(
@@ -153,7 +152,8 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             threshold,
         )
         await _swap_reaction(message, "⏳", "❓")
-        await response_channel.send(
+        await _send_response(
+            message,
             "I couldn't confidently classify that. Please clarify or use a prefix (admin:, project:, idea:, person:)."
         )
         return
@@ -171,6 +171,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             system_prompt=extract_prompt,
             schema_path=schema_path,
         )
+        interpretation.derived["raw_event_id"] = raw_id
     except InterpretationValidationError as exc:
         write_derived_event(
             derived=exc.payload,
@@ -182,7 +183,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         )
         logging.warning("interpretation_invalid id=%s error=%s", raw_id, exc)
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("I couldn't parse that reliably. Please rephrase or use a prefix.")
+        await _send_response(message, "I couldn't parse that reliably. Please rephrase or use a prefix.")
         return
     except Exception as exc:
         write_derived_event(
@@ -195,7 +196,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         )
         logging.exception("interpretation_failed id=%s", raw_id)
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("Interpretation failed. Please try again.")
+        await _send_response(message, "Interpretation failed. Please try again.")
         return
 
     write_derived_event(
@@ -223,7 +224,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     except Exception as exc:
         logging.exception("apply_failed id=%s object_type=%s", raw_id, object_type)
         await _swap_reaction(message, "⏳", "⚠️")
-        await response_channel.send("Failed to save item. Please try again.")
+        await _send_response(message, "Failed to save item. Please try again.")
         return
     logging.info(
         "apply_ok id=%s object_type=%s written=%s",
@@ -234,7 +235,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
 
     title = interpretation.derived.get("extracted_fields", {}).get("title") or content
     await _swap_reaction(message, "⏳", "✅")
-    await response_channel.send(f"Saved \"{title}\" to {object_type.capitalize()}.")
+    await _send_response(message, f"Saved \"{title}\" to {object_type.capitalize()}.")
 
 
 def _generate_raw_id() -> str:
@@ -257,17 +258,19 @@ async def _swap_reaction(message: discord.Message, remove_emoji: str, add_emoji:
         return
 
 
-async def _get_response_channel(message: discord.Message) -> discord.abc.Messageable:
+async def _send_response(message: discord.Message, content: str) -> None:
     if isinstance(message.channel, discord.Thread):
-        return message.channel
+        await message.channel.send(content)
+        return
     try:
         thread = await message.create_thread(
             name=f"squire: {message.author.display_name}",
             auto_archive_duration=1440,
         )
-        return thread
+        await thread.send(content)
+        return
     except (discord.HTTPException, discord.Forbidden):
-        return message.channel
+        await message.channel.send(content)
 
 
 class SquireBot(discord.Client):

@@ -11,3 +11,4 @@ The system runs as a single deployable service (squire-core) with modular intern
 ## Trust Model
 
 Raw input is immutable, derived interpretations are versioned, canonical state is repairable, and the index can be rebuilt at any time. Canonical objects are the only mutable artifacts and are treated as the source of truth for surfacing and queries.
+Canonical objects record source_event_ids so any item can be traced back to the raw events that created or modified it.
