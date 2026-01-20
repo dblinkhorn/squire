@@ -5,9 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from squire_core.canonical_store import CanonicalObject, write_canonical_object
+from squire_core.canonical_store import CanonicalObject, load_frontmatter, write_canonical_object
 from squire_core.id_utils import generate_ulid
 from squire_core.schema_loader import load_json_schema, validate_json
 
@@ -73,12 +71,7 @@ def _object_path(objects_root: str | Path, object_type: str, object_id: str) -> 
 def _load_existing_frontmatter(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    content = path.read_text(encoding="utf-8")
-    parts = content.split("---", 2)
-    if len(parts) != 3:
-        return {}
-    frontmatter_raw = parts[1]
-    return yaml.safe_load(frontmatter_raw) or {}
+    return load_frontmatter(path)
 
 
 def _merge_source_event_ids(existing: list[Any] | None, additional: list[Any] | None, new_id: str) -> list[str]:
@@ -114,7 +107,7 @@ def apply_operations(
 
     for op in ops:
         action = op.get("op")
-        if action not in {"create", "append"}:
+        if action not in {"create", "append", "update"}:
             raise ValueError(f"Unsupported operation: {action}")
 
         fields = op.get("fields") or {}
@@ -123,6 +116,29 @@ def apply_operations(
             merged = dict(extracted)
             merged.update(fields)
             fields = merged
+        existing_frontmatter: dict[str, Any] = {}
+        if action in {"append", "update"}:
+            target_id = op.get("target_id") or fields.get("id")
+            if not target_id:
+                raise ValueError("Missing target_id for append/update operation")
+            object_id = target_id
+            existing_path = _object_path(objects_root, object_type, object_id)
+            if not existing_path.exists():
+                raise ValueError("Target object not found for append/update operation")
+            existing_frontmatter = _load_existing_frontmatter(existing_path)
+            existing_type = existing_frontmatter.get("type")
+            if existing_type and existing_type != object_type:
+                raise ValueError("Target object type does not match operation type")
+            fields = dict(existing_frontmatter) | dict(fields)
+            fields["id"] = object_id
+            fields["updated_at"] = _now_iso()
+        else:
+            object_id = fields.get("id") or generate_ulid()
+            fields = dict(fields)
+            fields["id"] = object_id
+
+        body_field = fields.pop("body", None)
+
         title = fields.get("title")
         if not title and object_type == "people":
             title = _require("name", fields)
@@ -131,19 +147,6 @@ def apply_operations(
         if not title:
             title = _require("title", fields)
         fields["title"] = title
-        object_id = fields.get("id") or generate_ulid()
-        fields = dict(fields)
-        fields["id"] = object_id
-
-        existing_frontmatter: dict[str, Any] = {}
-        if action == "append":
-            target_id = op.get("target_id") or fields.get("id")
-            if not target_id:
-                raise ValueError("Missing target_id for append operation")
-            object_id = target_id
-            fields["id"] = object_id
-            existing_frontmatter = _load_existing_frontmatter(_object_path(objects_root, object_type, object_id))
-            fields["updated_at"] = _now_iso()
 
         if raw_event_id:
             existing_ids = existing_frontmatter.get("source_event_ids") if existing_frontmatter else None
@@ -166,11 +169,11 @@ def apply_operations(
             _require("status", fields)
 
         frontmatter = _build_frontmatter(object_type, fields, existing_frontmatter or None)
-        body = fields.get("body") or fields.get("next_action") or title
+        body = body_field or fields.get("next_action") or title
         append_text = None
 
         if action == "append":
-            append_text = fields.get("body") or fields.get("next_action") or title
+            append_text = body_field or fields.get("next_action") or title
 
         path = write_canonical_object(
             canonical=CanonicalObject(frontmatter=frontmatter, body=body),

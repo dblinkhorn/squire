@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import discord
 from dotenv import load_dotenv
@@ -16,6 +16,7 @@ from squire_core.llm.openai_provider import OpenAIProvider
 from squire_core.llm.prompts import load_prompt
 from squire_core.operation_apply import apply_operations
 from squire_core.raw_event import RawEvent, Source, write_raw_event
+from squire_core.canonical_store import find_object_path, load_frontmatter
 from squire_core.timezone_utils import (
     format_reference_date,
     format_reference_time,
@@ -49,6 +50,11 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         raw_id,
         message.id,
     )
+
+    if content.startswith("!"):
+        handled = await _handle_command(message, content, raw_id, config)
+        if handled:
+            return
 
     model = config.get("llm", {}).get("interpreter_model")
     if not model:
@@ -235,7 +241,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
 
     title = interpretation.derived.get("extracted_fields", {}).get("title") or content
     await _swap_reaction(message, "⏳", "✅")
-    await _send_response(message, f"Saved \"{title}\" to {object_type.capitalize()}.")
+    await _send_response(message, f"Saved \"{title}\" to {object_type.capitalize()}.", thread_title=title)
 
 
 def _generate_raw_id() -> str:
@@ -253,24 +259,181 @@ async def _swap_reaction(message: discord.Message, remove_emoji: str, add_emoji:
     await _safe_add_reaction(message, add_emoji)
     try:
         bot_user = message.guild.me if message.guild else message._state.user
-        await message.remove_reaction(remove_emoji, bot_user)
+        if bot_user is None:
+            return
+        await message.remove_reaction(remove_emoji, cast(discord.abc.Snowflake, bot_user))
     except (discord.HTTPException, discord.Forbidden, AttributeError):
         return
 
 
-async def _send_response(message: discord.Message, content: str) -> None:
+async def _send_response(message: discord.Message, content: str, thread_title: str | None = None) -> None:
     if isinstance(message.channel, discord.Thread):
-        await message.channel.send(content)
+        try:
+            await message.channel.send(content)
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            logging.warning("response_send_failed channel=thread error=%s", exc)
         return
     try:
+        name = "Squire"
+        if thread_title:
+            trimmed = thread_title.strip()
+            if len(trimmed) > 60:
+                trimmed = trimmed[:57].rstrip() + "..."
+            name = f"Squire: {trimmed}"
+        else:
+            name = f"Squire: {message.author.display_name}"
         thread = await message.create_thread(
-            name=f"squire: {message.author.display_name}",
+            name=name,
             auto_archive_duration=1440,
         )
         await thread.send(content)
+        logging.info("response_sent thread=%s", thread.id)
         return
-    except (discord.HTTPException, discord.Forbidden):
-        await message.channel.send(content)
+    except (discord.HTTPException, discord.Forbidden) as exc:
+        logging.warning("thread_create_failed channel=%s error=%s", message.channel.id, exc)
+        try:
+            await message.channel.send(content)
+            logging.info("response_sent channel=%s", message.channel.id)
+        except (discord.HTTPException, discord.Forbidden) as send_exc:
+            logging.warning("response_send_failed channel=%s error=%s", message.channel.id, send_exc)
+
+
+async def _handle_command(
+    message: discord.Message,
+    content: str,
+    raw_id: str,
+    config: dict[str, Any],
+) -> bool:
+    parts = content.split()
+    command = parts[0].lower()
+    if command == "!append":
+        if len(parts) < 3:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !append <id> <text>")
+            return True
+        target_id = parts[1]
+        text = content.split(None, 2)[2].strip()
+        if not text:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !append <id> <text>")
+            return True
+        return await _apply_command_operation(
+            message,
+            raw_id,
+            config,
+            target_id=target_id,
+            op="append",
+            fields={"body": text},
+        )
+    if command == "!done":
+        if len(parts) != 2:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !done <id>")
+            return True
+        target_id = parts[1]
+        return await _apply_command_operation(
+            message,
+            raw_id,
+            config,
+            target_id=target_id,
+            op="update",
+            fields={"status": "done", "completed_at": _now_iso()},
+        )
+    if command == "!fix":
+        if len(parts) < 3:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !fix <id> field=value [field=value...]")
+            return True
+        target_id = parts[1]
+        updates: dict[str, Any] = {}
+        for token in parts[2:]:
+            if "=" not in token:
+                await _swap_reaction(message, "⏳", "⚠️")
+                await _send_response(message, "Usage: !fix <id> field=value [field=value...]")
+                return True
+            key, value = token.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key in {"id", "type", "created_at"}:
+                continue
+            updates[key] = value
+        if not updates:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "No valid fields provided.")
+            return True
+        return await _apply_command_operation(
+            message,
+            raw_id,
+            config,
+            target_id=target_id,
+            op="update",
+            fields=updates,
+        )
+    return False
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _apply_command_operation(
+    message: discord.Message,
+    raw_id: str,
+    config: dict[str, Any],
+    target_id: str,
+    op: str,
+    fields: dict[str, Any],
+) -> bool:
+    objects_root = config.get("paths", {}).get("objects_root", "objects")
+    target_path = find_object_path(objects_root, target_id)
+    if not target_path:
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, f"Unknown ID: {target_id}")
+        return True
+    frontmatter = load_frontmatter(target_path)
+    object_type = frontmatter.get("type")
+    if not object_type:
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, f"Unable to determine object type for {target_id}")
+        return True
+    if op == "update" and object_type != "admin" and fields.get("status") == "done":
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, "Only admin items can be marked done.")
+        return True
+    derived = {
+        "object_type": object_type,
+        "raw_event_id": raw_id,
+        "extracted_fields": {},
+        "proposed_operations": [
+            {
+                "op": op,
+                "target_id": target_id,
+                "fields": fields,
+            }
+        ],
+    }
+    try:
+        result = apply_operations(
+            derived,
+            objects_root=objects_root,
+            canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+            derived_schema_path=None,
+        )
+    except Exception as exc:
+        logging.exception("command_apply_failed id=%s op=%s", raw_id, op)
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, "Command failed. Check logs for details.")
+        return True
+    await _swap_reaction(message, "⏳", "✅")
+    title = frontmatter.get("title") or target_id
+    await _send_response(
+        message,
+        f"Updated {object_type} \"{title}\".",
+        thread_title=title,
+    )
+    return True
 
 
 class SquireBot(discord.Client):
