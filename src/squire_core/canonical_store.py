@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+from yaml.loader import SafeLoader
+
 from squire_core.schema_loader import load_json_schema, validate_json
 
 
@@ -17,14 +20,17 @@ def _format_frontmatter(frontmatter: dict[str, Any]) -> str:
     lines = ["---"]
     for key, value in frontmatter.items():
         if isinstance(value, list):
-            lines.append(f"{key}:")
-            for item in value:
-                if isinstance(item, dict):
-                    lines.append("  -")
-                    for sub_key, sub_value in item.items():
-                        lines.append(f"    {sub_key}: {sub_value}")
-                else:
-                    lines.append(f"  - {item}")
+            if not value:
+                lines.append(f"{key}: []")
+            else:
+                lines.append(f"{key}:")
+                for item in value:
+                    if isinstance(item, dict):
+                        lines.append("  -")
+                        for sub_key, sub_value in item.items():
+                            lines.append(f"    {sub_key}: {sub_value}")
+                    else:
+                        lines.append(f"  - {item}")
         else:
             lines.append(f"{key}: {value}")
     lines.append("---")
@@ -37,19 +43,53 @@ _TYPE_DIR = {
     "ideas": "ideas",
     "admin": "admin",
 }
+_TYPE_PREFIX = {
+    "people": "P_",
+    "projects": "PR_",
+    "ideas": "I_",
+    "admin": "A_",
+}
+
+
+class _NoDatesSafeLoader(SafeLoader):
+    pass
+
+
+for _ch, _patterns in list(_NoDatesSafeLoader.yaml_implicit_resolvers.items()):
+    _NoDatesSafeLoader.yaml_implicit_resolvers[_ch] = [
+        (tag, regexp) for tag, regexp in _patterns if tag != "tag:yaml.org,2002:timestamp"
+    ]
 
 
 def _object_path(objects_root: str | Path, object_type: str, object_id: str) -> Path:
     directory = _TYPE_DIR.get(object_type)
     if not directory:
         raise ValueError(f"Unsupported object type: {object_type}")
-    prefix = {
-        "people": "P_",
-        "projects": "PR_",
-        "ideas": "I_",
-        "admin": "A_",
-    }.get(object_type, "X_")
+    prefix = _TYPE_PREFIX.get(object_type, "X_")
     return Path(objects_root) / directory / f"{prefix}{object_id}.md"
+
+
+def find_object_path(objects_root: str | Path, object_id: str) -> Path | None:
+    root = Path(objects_root)
+    for object_type, directory in _TYPE_DIR.items():
+        prefix = _TYPE_PREFIX.get(object_type, "X_")
+        candidate = root / directory / f"{prefix}{object_id}.md"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_frontmatter(path: Path) -> dict[str, Any]:
+    content = path.read_text(encoding="utf-8")
+    parts = content.split("---", 2)
+    if len(parts) != 3:
+        raise ValueError("Invalid frontmatter format")
+    frontmatter = yaml.load(parts[1], Loader=_NoDatesSafeLoader) or {}
+    if frontmatter.get("tags") is None:
+        frontmatter["tags"] = []
+    if frontmatter.get("source_event_ids") is None:
+        frontmatter["source_event_ids"] = []
+    return frontmatter
 
 
 def write_canonical_object(
