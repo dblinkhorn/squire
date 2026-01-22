@@ -12,12 +12,20 @@ Prefixes:
 
 ## Minimal Command Set (v1)
 
-`!status` shows top due or overdue admin items and the three most recent captures needing attention. `!recent [N]` shows the last N canonical objects created or updated, with IDs. `!find` searches title and body via SQLite FTS and returns the top matches with IDs. `!show` prints a compact view with title, key fields, and the first several lines of the body. `!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value [field=value…]` modifies frontmatter fields from an allowlist.
+`!status` returns the daily digest (due/overdue admin items, optional due-soon items, a stuck item when present,
+and a small set of suggested next actions). `!recent [N]` shows the last N canonical objects created or updated,
+with IDs. `!find` searches title and body via SQLite FTS and returns the top matches with IDs. `!show` prints a
+compact view with title, key fields, and the first several lines of the body. `!done` sets an admin item status to
+done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
+[field=value…]` modifies frontmatter fields from an allowlist. `!confirm <pending_id>` applies a pending action,
+and `!cancel <pending_id>` dismisses it.
 
 The following commands are implemented for explicit updates (no LLM inference):
 - `!append <id> <text>`
 - `!done <id>`
 - `!fix <id> field=value [field=value…]`
+- `!confirm <pending_id>`
+- `!cancel <pending_id>`
 
 Tags are optional user-defined categories. Users can include inline hashtags (for example, `#work`) or update tags later with `!fix`. The system can support queries like `!find tag:work` and a summary command (for example, `!tags`) to list tags and counts.
 
@@ -25,7 +33,7 @@ Squire can also interpret natural-language queries via the LLM, translate them i
 
 ## Nice-to-Have (v1.1+)
 
-Planned follow-ons include `!due [days]`, `!archive`, `!help`, `!rebuild-index`, and `!confirm <pending_action_id>` for proposed calendar actions.
+Planned follow-ons include `!due [days]`, `!archive`, `!help`, and `!rebuild-index` for proposed calendar actions.
 
 Commands never generate new canonical objects unless explicitly stated.
 
@@ -49,6 +57,7 @@ Discord interaction patterns:
 - If multiple candidates exist, present a dropdown to choose the target.
 - For multi-entity notes (e.g., “Met A and B”), propose a multi-update and confirm in one step.
 - If the user is slow to respond, the system should store a pending action and allow `!confirm <id>` or `!cancel <id>` later.
+- After auto-apply, include a quick “Was this incorrect?” action with a text fallback to `!fix`/`!append`.
 
 Explicit commands remain available for precision:
 - `!append <id> …` (force append)

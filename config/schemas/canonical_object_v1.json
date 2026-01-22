@@ -45,6 +45,9 @@
         "source_event_ids": {
           "type": "array",
           "items": { "type": "string" }
+        },
+        "last_decision_id": {
+          "type": "string"
         }
       }
     },

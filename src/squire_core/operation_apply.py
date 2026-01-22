@@ -96,6 +96,7 @@ def apply_operations(
     objects_root: str | Path,
     canonical_schema_path: str | Path,
     derived_schema_path: str | Path | None = None,
+    last_decision_id: str | None = None,
 ) -> ApplyResult:
     if derived_schema_path is not None:
         validate_json(load_json_schema(derived_schema_path), derived)
@@ -152,6 +153,8 @@ def apply_operations(
             existing_ids = existing_frontmatter.get("source_event_ids") if existing_frontmatter else None
             incoming_ids = fields.get("source_event_ids")
             fields["source_event_ids"] = _merge_source_event_ids(existing_ids, incoming_ids, raw_event_id)
+        if last_decision_id:
+            fields["last_decision_id"] = last_decision_id
 
         if object_type == "people":
             _require("name", fields)

@@ -18,9 +18,15 @@ env/
 # Local config
 .env
 config.yaml
+PROMPT.md
 
 # OS/editor
 .DS_Store
+
+# Ralph / local agent artifacts
+.agent/
+.ralph/
+.sop/
 
 # Derived index
 index/sb.sqlite
