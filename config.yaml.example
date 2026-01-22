@@ -4,6 +4,8 @@ llm:
   interpreter_model: gpt-5-mini
   classify_prompt_path: "config/prompts/classify_v1.txt"
   interpreter_prompt_path: "config/prompts/extract_v1.txt"
+  decision_prompt_path: "config/prompts/decision_v1.txt"
+  candidate_query_prompt_path: "config/prompts/candidate_query_v1.txt"
 
 timezone: "local" # Use system local timezone, or set an IANA name like "America/Los_Angeles".
 
@@ -13,14 +15,23 @@ archive_git_enabled: true # Set false to skip git initialization for the archive
 paths:
   events_raw: "events/raw"
   events_derived: "events/derived"
+  pending_actions: "events/pending"
   objects_root: "objects"
   index_db: "index/sb.sqlite"
 
 confidence:
   create_threshold: 0.6
 
+decision:
+  auto_apply_threshold: 0.85
+  confirm_threshold: 0.65
+  candidate_limit: 3
+  candidate_score_threshold: 0.2
+
 schedule:
   daily_digest_time: "09:00"
+  # daily_digest_channel_id: 123456789012345678
+  # daily_digest_user_id: 123456789012345678
 
 surfacing:
   admin:

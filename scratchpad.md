@@ -10,7 +10,22 @@ Decisions/assumptions:
 - Next: link raw events to canonical objects (source_event_ids) and add pending action confirmation flow.
 - Possible future task: add a scripts/utils directory for helper commands (e.g., clear-archive).
 - Possible future functionality: support locally hosted LLMs as an optional backend.
+- PDD: update/append thresholds (auto >=0.85 single match; confirm 0.65–0.84 or multiple; create <0.65 or reject).
+- Added decision config defaults: auto_apply_threshold 0.85, confirm_threshold 0.65, candidate_limit 3, candidate_score_threshold 0.2.
+- PDD: confirmations via buttons, select menus for multiple candidates, text fallback; add “Was this incorrect?” button even on auto-apply.
+- PDD: pending actions should track last_updated; canonical objects should record last_decision_id.
+- Pending actions are stored as JSON under events/pending with status transitions (pending/confirmed/cancelled/failed).
+- Decision gating: update/append auto-apply only for single target at/above auto_apply_threshold; otherwise create pending actions at/above confirm_threshold; otherwise force create.
+- PDD: Slack integration and multi-user support are out of scope for now; production hardening gets its own plan.
 
 Notes:
 - Add bot-side logging (raw id, classification, apply result) later.
 - Replace title-based IDs with short random alphanumeric IDs (no extra deps).
+- Tests: config defaults test skips when PyYAML is unavailable in the environment.
+- Normalize `paths.index_db` under `archive_root`; rebuild SQLite index on bot startup if missing.
+
+Session notes (2026-01-21):
+- ./specs directory not found; confirm where specs live.
+- Need decisions on pending action storage format/location and surfacing scheduler model.
+- Reviewed docs/; implementation plan aligns with current task list.
+- Confidence gating + pending action confirm/cancel flows are in place; next task is Discord UI confirmations/select + auto-apply feedback.

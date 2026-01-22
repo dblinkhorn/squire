@@ -1,16 +1,33 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-_ARCHIVE_PATH_KEYS = ("events_raw", "events_derived", "objects_root")
+_ARCHIVE_PATH_KEYS = ("events_raw", "events_derived", "objects_root", "pending_actions", "index_db")
 _DEFAULT_ARCHIVE_SUBPATHS = {
     "events_raw": Path("events") / "raw",
     "events_derived": Path("events") / "derived",
     "objects_root": Path("objects"),
+    "pending_actions": Path("events") / "pending",
+    "index_db": Path("index") / "sb.sqlite",
 }
+_DEFAULT_DECISION_CONFIG = {
+    "auto_apply_threshold": 0.85,
+    "confirm_threshold": 0.65,
+    "candidate_limit": 3,
+    "candidate_score_threshold": 0.2,
+}
+
+
+@dataclass(frozen=True)
+class DecisionConfig:
+    auto_apply_threshold: float
+    confirm_threshold: float
+    candidate_limit: int
+    candidate_score_threshold: float
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -46,3 +63,28 @@ def normalize_archive_config(config: dict[str, Any]) -> dict[str, Any]:
 
     config["archive_root"] = str(archive_root)
     return config
+
+
+def load_decision_config(config: dict[str, Any]) -> DecisionConfig:
+    raw = config.get("decision")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _get_float(key: str) -> float:
+        value = raw.get(key, _DEFAULT_DECISION_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(_DEFAULT_DECISION_CONFIG[key])
+
+    def _get_int(key: str) -> int:
+        value = raw.get(key, _DEFAULT_DECISION_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return int(value)
+        return int(_DEFAULT_DECISION_CONFIG[key])
+
+    return DecisionConfig(
+        auto_apply_threshold=_get_float("auto_apply_threshold"),
+        confirm_threshold=_get_float("confirm_threshold"),
+        candidate_limit=_get_int("candidate_limit"),
+        candidate_score_threshold=_get_float("candidate_score_threshold"),
+    )
