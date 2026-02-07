@@ -57,6 +57,28 @@ If your homelab Compose files live in another repository, copy the `squire-core`
 
 Keep the same bind mounts and environment variables.
 
+### Using a prebuilt Docker Hub image
+
+If you publish from this repo's `Docker Publish` workflow, use tags from Docker Hub instead of `build`.
+
+Example:
+
+```yaml
+services:
+  squire-core:
+    image: docker.io/<dockerhub-username>/squire:v0.1.0
+    container_name: squire-core
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./config:/app/config:ro
+      - ./archive:/data/archive
+```
+
+Prefer pinned tags (`vX.Y.Z`) for homelab stability. Use `latest` only if you explicitly want automatic upgrades.
+
 ## Initialization Helper
 
 `make init` now works via `python -m squire_core.cli_init` and can bootstrap `config.yaml` paths and archive
