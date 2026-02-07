@@ -7,6 +7,8 @@ one stuck item if present, and one to three suggested next actions (rule-based; 
 People with `next_contact` due are surfaced alongside the digest. A weekly review is a nice-to-have that focuses
 on what changed, open loops, and suggested focus.
 
+Planned baseline changes for a note-only surfacing mode are documented in `docs/surfacing-spec.md`.
+
 ## Pull (Interactive)
 
 Pull surfacing is driven by contextual queries via commands, always includes IDs, and is designed for repair loops.
@@ -15,7 +17,8 @@ Pull surfacing is driven by contextual queries via commands, always includes IDs
 
 Outputs should be small and predictable. Rules come first and LLMs come second. The system never invents data and always keeps outputs actionable.
 
-LLM-assisted surfacing uses structured inputs and fixed response formats to keep outputs consistent and auditable. Responses always include object IDs.
+LLM-assisted surfacing uses structured inputs and fixed response formats to keep outputs consistent and auditable.
+Current surfacing responses include object IDs; planned no-ID baseline behavior is tracked in `docs/surfacing-spec.md`.
 
 ## Configuration Defaults
 

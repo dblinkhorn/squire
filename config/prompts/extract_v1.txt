@@ -5,7 +5,7 @@ Only use fields allowed by the schema for the chosen object_type.
 If a field is unknown or not present, include it as null rather than omitting it.
 For admin items, status should be "open" by default and remain open until the user explicitly confirms completion.
 For admin items, if next_action is unclear but the user wrote a short imperative, use the title as next_action.
-If a time is specified, set due_at to a full ISO datetime and leave due_date null.
+If a time is specified, set due_at to a full ISO datetime with timezone offset (use the provided reference timezone) and leave due_date null.
 If only a date is specified, set due_date and leave due_at null.
 When time is ambiguous, use context from the note to choose the most likely time of day.
 When a relative date is mentioned, convert it to an ISO date using the reference date and timezone provided.
