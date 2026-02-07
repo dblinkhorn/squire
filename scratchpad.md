@@ -37,6 +37,11 @@ Notes:
   - `src/squire_core/cli_init.py` implemented (working `make init` target path).
   - `Dockerfile`, `.dockerignore`, and baseline `docker-compose.yml` added.
   - docs updated for Docker Compose + homelab integration and `/data/archive` mount path.
+- CI/release baseline added:
+  - GitHub Actions `CI` workflow runs compile checks + `pytest` on PRs and pushes to `main`.
+  - GitHub Actions `Docker Publish` workflow publishes multi-arch images to Docker Hub on `vX.Y.Z` tags.
+  - Required GitHub secrets: `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+  - Release pattern is tag-driven SemVer (`git tag vX.Y.Z && git push origin vX.Y.Z`), no release automation bot required yet.
 
 Session notes (2026-01-21):
 - ./specs directory not found; confirm where specs live.

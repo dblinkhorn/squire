@@ -30,6 +30,34 @@ Python dependencies are declared in `pyproject.toml`. Install them with your pre
 
 Prompt templates live in `config/prompts/`. To override them, create your own prompt files and update the paths in `config.yaml`.
 
+## CI, Versioning, and Docker Releases
+
+This repo uses two GitHub Actions workflows:
+
+- `CI` (`.github/workflows/ci.yml`): runs on pushes to `main` and on pull requests.
+- `Docker Publish` (`.github/workflows/docker-publish.yml`): builds and pushes multi-arch images (`linux/amd64`, `linux/arm64`) to Docker Hub on SemVer tags (`vX.Y.Z`).
+
+Set these GitHub Actions secrets before publishing:
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN` (Docker Hub access token)
+
+Recommended release pattern:
+
+1. Merge release-ready changes to `main`.
+2. Create and push a SemVer tag (for example, `v0.1.0`).
+3. The Docker publish workflow pushes:
+   - `<DOCKERHUB_USERNAME>/squire:v0.1.0`
+   - `<DOCKERHUB_USERNAME>/squire:v0.1`
+   - `<DOCKERHUB_USERNAME>/squire:latest`
+
+Example commands:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Initialize archive storage
 
 Run the init helper to set up a durable archive folder and update `config.yaml` paths:

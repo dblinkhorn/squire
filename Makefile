@@ -5,7 +5,7 @@ help:
 	@echo "  install   Install dependencies (pip -e .)"
 	@echo "  init      Initialize archive storage (squire init)"
 	@echo "  run-bot   Run the Discord bot"
-	@echo "  test      Placeholder for tests"
+	@echo "  test      Run test suite"
 	@echo "  clear-archive  Delete archive contents (uses archive_root from config.yaml)"
 
 install:
@@ -18,7 +18,7 @@ run-bot:
 	python -m squire_core.discord_bot
 
 test:
-	@echo "No tests configured yet."
+	python3 -m pytest -q
 
 clear-archive:
 	@archive_root=$$(grep -E '^archive_root:' config.yaml | head -n1 | sed 's/^[^:]*:[[:space:]]*//; s/[[:space:]]*#.*$$//; s/^"//; s/"$$//; s/^[\\x27]//; s/[\\x27]$$//'); \
