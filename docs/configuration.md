@@ -38,6 +38,8 @@ To customize behavior, copy the default prompt files, edit them, and point `conf
 
 The archive root controls where durable artifacts are stored and is required. By default, `squire init` creates `~/squire-archive` and writes the derived paths into `config.yaml`. `archive_root` must be an absolute path (use `~/...` for home). You can disable git initialization with `archive_git_enabled: false` or `squire init --no-git`.
 
+For Docker Compose deployments, set `archive_root` to the in-container mount path (for example, `"/data/archive"`).
+
 Archive paths include:
 - events_raw
 - events_derived
@@ -70,3 +72,16 @@ and one of the following optional destination keys:
 
 If neither destination is configured, the bot falls back to the last DM channel it received and logs a warning if no
 channel is available.
+
+## Surfacing Settings
+
+Surfacing behavior is configured under `surfacing` in `config.yaml`.
+
+- `surfacing.output.include_ids`: include canonical IDs in surfaced list output (default false).
+- `surfacing.admin.due_soon_days`: include admin items due within this many days in the due-soon section.
+- `surfacing.projects.stale_days`: threshold for stale project surfacing.
+- `surfacing.projects.blocked_limit`: maximum blocked/stale projects shown in digest.
+- `surfacing.people.next_contact_days`: include people with `next_contact` due within this window.
+- `surfacing.pull.default_recent_limit`: default row count for `!recent`.
+- `surfacing.pull.default_find_limit`: default row count for `!find`.
+- `surfacing.pull.cursor_ttl_minutes`: how long numbered result selections remain available for `!show <number>`.

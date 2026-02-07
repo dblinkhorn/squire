@@ -1,0 +1,23 @@
+services:
+  squire-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: squire-core
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./config:/app/config:ro
+      - ./archive:/data/archive
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import os,sys;sys.exit(0 if os.getenv('DISCORD_TOKEN') and os.getenv('OPENAI_API_KEY') else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

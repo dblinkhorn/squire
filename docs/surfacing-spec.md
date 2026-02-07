@@ -96,7 +96,6 @@ surfacing:
     include_ids: false
   admin:
     due_soon_days: 1
-    include_open_limit: 5
   projects:
     stale_days: 14
     blocked_limit: 3

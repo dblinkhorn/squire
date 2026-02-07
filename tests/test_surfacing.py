@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from squire_core.canonical_store import CanonicalObject, write_canonical_object
-from squire_core.surfacing import build_daily_digest
+from squire_core.indexer import rebuild_index
+from squire_core.surfacing import build_daily_digest, build_find_list, build_item_detail, build_recent_list
 
 
 def _write_object(objects_root: Path, frontmatter: dict, body: str = "") -> None:
@@ -23,6 +24,7 @@ def _base_frontmatter(
     title: str,
     created_at: str,
     updated_at: str,
+    archived: bool = False,
 ) -> dict:
     return {
         "id": object_id,
@@ -30,15 +32,14 @@ def _base_frontmatter(
         "title": title,
         "created_at": created_at,
         "updated_at": updated_at,
-        "archived": False,
+        "archived": archived,
     }
 
 
-def test_daily_digest_rules(tmp_path: Path) -> None:
+def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
     objects_root = tmp_path / "objects"
     created_at = "2026-01-01T00:00:00+00:00"
-    updated_at = "2026-01-10T00:00:00+00:00"
 
     _write_object(
         objects_root,
@@ -48,7 +49,7 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
                 object_type="admin",
                 title="Pay rent",
                 created_at=created_at,
-                updated_at=updated_at,
+                updated_at="2026-01-10T00:00:00+00:00",
             ),
             "status": "open",
             "next_action": "Pay rent",
@@ -64,7 +65,7 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
                 object_type="admin",
                 title="Call vet",
                 created_at=created_at,
-                updated_at=updated_at,
+                updated_at="2026-01-11T00:00:00+00:00",
             ),
             "status": "open",
             "next_action": "Call vet",
@@ -79,7 +80,7 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
                 object_type="admin",
                 title="Submit report",
                 created_at=created_at,
-                updated_at=updated_at,
+                updated_at="2026-01-12T00:00:00+00:00",
             ),
             "status": "open",
             "next_action": "Submit report",
@@ -90,39 +91,11 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
         objects_root,
         {
             **_base_frontmatter(
-                object_id="ADM004",
-                object_type="admin",
-                title="File taxes",
-                created_at=created_at,
-                updated_at=updated_at,
-            ),
-            "status": "open",
-            "next_action": "File taxes",
-        },
-    )
-    _write_object(
-        objects_root,
-        {
-            **_base_frontmatter(
-                object_id="ADM005",
-                object_type="admin",
-                title="Update budget",
-                created_at=created_at,
-                updated_at=updated_at,
-            ),
-            "status": "open",
-            "next_action": "Update budget",
-        },
-    )
-    _write_object(
-        objects_root,
-        {
-            **_base_frontmatter(
                 object_id="PR001",
                 object_type="projects",
                 title="Launch beta",
                 created_at=created_at,
-                updated_at=updated_at,
+                updated_at="2026-01-10T00:00:00+00:00",
             ),
             "status": "blocked",
             "next_action": "Wait on vendor",
@@ -137,7 +110,7 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
                 object_type="people",
                 title="Alex",
                 created_at=created_at,
-                updated_at=updated_at,
+                updated_at="2026-01-10T00:00:00+00:00",
             ),
             "name": "Alex",
             "next_contact": "2026-01-22",
@@ -147,8 +120,9 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
     config = {
         "timezone": "UTC",
         "surfacing": {
-            "admin": {"due_soon_days": 1, "include_open_limit": 1},
-            "projects": {"stale_days": 14},
+            "output": {"include_ids": False},
+            "admin": {"due_soon_days": 1},
+            "projects": {"stale_days": 14, "blocked_limit": 2},
             "people": {"next_contact_days": 0},
         },
     }
@@ -156,24 +130,152 @@ def test_daily_digest_rules(tmp_path: Path) -> None:
     digest = build_daily_digest(objects_root, config, now=now)
     sections = {section.title: section.lines for section in digest.sections}
 
-    due_lines = sections["Admin due/overdue"]
-    assert any("[overdue]" in line and "ADM001" in line for line in due_lines)
-    assert any("[today]" in line and "ADM002" in line for line in due_lines)
-    assert any("[soon]" in line and "ADM003" in line for line in due_lines)
+    assert "Suggested next actions" not in sections
+    assert any("Pay rent" in line for line in sections["Admin overdue"])
+    assert any("Call vet" in line for line in sections["Admin due today"])
+    assert any("Submit report" in line for line in sections["Admin due soon"])
+    assert any("Launch beta" in line for line in sections["Projects needing attention"])
+    assert any("Alex" in line for line in sections["People to follow up"])
 
-    open_lines = sections.get("Open admin")
-    assert open_lines is not None
-    assert len(open_lines) == 1
-    assert ("ADM004" in open_lines[0]) or ("ADM005" in open_lines[0])
+    all_lines = [line for lines in sections.values() for line in lines]
+    assert all("ADM001" not in line for line in all_lines)
+    assert all("PR001" not in line for line in all_lines)
 
-    stuck_lines = sections.get("Stuck item")
-    assert stuck_lines is not None
-    assert "PR001" in stuck_lines[0]
 
-    suggestions = sections["Suggested next actions"]
-    assert len(suggestions) <= 3
-    assert any("ADM001" in line for line in suggestions)
+def test_daily_digest_can_include_ids(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
 
-    people_lines = sections.get("People to follow up")
-    assert people_lines is not None
-    assert any("P001" in line for line in people_lines)
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM900",
+                object_type="admin",
+                title="Call dentist",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-10T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Call dentist",
+            "due_date": "2026-01-22",
+        },
+    )
+
+    config = {
+        "timezone": "UTC",
+        "surfacing": {
+            "output": {"include_ids": True},
+            "admin": {"due_soon_days": 1},
+        },
+    }
+
+    digest = build_daily_digest(objects_root, config, now=now)
+    due_today = next(section for section in digest.sections if section.title == "Admin due today")
+    assert any("ADM900" in line for line in due_today.lines)
+
+
+def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="A_1",
+                object_type="admin",
+                title="Newest active",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-25T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Do it",
+        },
+        body="Body A",
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="A_2",
+                object_type="admin",
+                title="Archived note",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-26T00:00:00+00:00",
+                archived=True,
+            ),
+            "status": "open",
+            "next_action": "Ignore",
+        },
+        body="Body B",
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="A_3",
+                object_type="ideas",
+                title="Older active",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-20T00:00:00+00:00",
+            ),
+            "one_liner": "Idea",
+        },
+        body="Body C",
+    )
+
+    config = {"timezone": "UTC", "surfacing": {"pull": {"default_recent_limit": 2}}}
+    surfaced = build_recent_list(objects_root, config)
+
+    assert surfaced.object_ids == ["A_1", "A_3"]
+    assert len(surfaced.lines) == 2
+    assert surfaced.lines[0].startswith("1. Newest active")
+    assert all("A_1" not in line and "A_3" not in line for line in surfaced.lines)
+
+
+def test_build_find_list_and_item_detail(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    index_db = tmp_path / "index.sqlite"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_DENTIST",
+                object_type="admin",
+                title="Call dentist",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Call dentist",
+            "due_date": "2026-01-23",
+        },
+        body="Need to reschedule cleaning appointment.",
+    )
+
+    rebuild_index(objects_root, index_db)
+    config = {"timezone": "UTC", "surfacing": {"output": {"include_ids": False}}}
+
+    surfaced = build_find_list(objects_root, index_db, config, "dentist")
+    assert surfaced.object_ids == ["ADM_DENTIST"]
+    assert len(surfaced.lines) == 1
+    assert surfaced.lines[0].startswith("1. Call dentist")
+    assert "ADM_DENTIST" not in surfaced.lines[0]
+
+    detail = build_item_detail(objects_root, surfaced.object_ids[0], config)
+    assert detail is not None
+    assert "Title: Call dentist" in detail
+    assert "Type: admin" in detail
+    assert "ID:" not in detail
+    assert "Notes:" in detail
+
+
+
+def test_build_find_list_blank_query_returns_empty(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    index_db = tmp_path / "index.sqlite"
+    config = {"timezone": "UTC"}
+    surfaced = build_find_list(objects_root, index_db, config, "   ")
+    assert surfaced.lines == []
+    assert surfaced.object_ids == []

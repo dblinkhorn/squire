@@ -39,3 +39,20 @@ make init
 ```
 
 Defaults to `~/squire-archive`. Override with `--archive-root` or disable git initialization with `--no-git` (or set `archive_git_enabled: false` in `config.yaml`).
+
+## Docker Compose
+
+This repository includes a baseline `Dockerfile` and `docker-compose.yml` for self-hosted deployment.
+
+Quick start:
+
+1. Copy `config.yaml.example` to `config.yaml`.
+2. Set `archive_root: "/data/archive"` in `config.yaml`.
+3. Add required secrets to `.env` (`DISCORD_TOKEN`, `OPENAI_API_KEY`).
+4. Run:
+
+```sh
+docker compose up -d --build
+```
+
+See `docs/deployment.md` for homelab integration details.

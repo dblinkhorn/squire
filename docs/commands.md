@@ -12,15 +12,18 @@ Prefixes:
 
 ## Minimal Command Set (v1)
 
-`!status` returns the daily digest (due/overdue admin items, optional due-soon items, a stuck item when present,
-and a small set of suggested next actions). `!recent [N]` shows the last N canonical objects created or updated,
-with IDs. `!find` searches title and body via SQLite FTS and returns the top matches with IDs. `!show` prints a
-compact view with title, key fields, and the first several lines of the body. `!done` sets an admin item status to
-done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
+`!status` returns the daily digest (admin overdue/today/soon sections, project attention, and people follow-ups).
+`!recent [N]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
+returns numbered matches. `!show <number>` prints a compact view for an item from the latest `!recent` or `!find`
+result set. `!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
 [field=value…]` modifies frontmatter fields from an allowlist. `!confirm <pending_id>` applies a pending action,
 and `!cancel <pending_id>` dismisses it.
 
-The following commands are implemented for explicit updates (no LLM inference):
+The following commands are currently implemented:
+- `!status`
+- `!recent [N]`
+- `!find <query>`
+- `!show <number>`
 - `!append <id> <text>`
 - `!done <id>`
 - `!fix <id> field=value [field=value…]`
