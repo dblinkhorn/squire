@@ -9,7 +9,7 @@ llm:
 
 timezone: "local" # Use system local timezone, or set an IANA name like "America/Los_Angeles".
 
-archive_root: "~/squire-archive" # Default archive location. Override to move durable storage.
+archive_root: "~/squire-archive" # For Docker, set this to "/data/archive".
 archive_git_enabled: true # Set false to skip git initialization for the archive.
 
 paths:
@@ -34,15 +34,21 @@ schedule:
   # daily_digest_user_id: 123456789012345678
 
 surfacing:
+  output:
+    include_ids: false
   admin:
     due_soon_days: 1
-    include_open_limit: 5
   projects:
     stale_days: 14
+    blocked_limit: 3
   ideas:
     weekly_review: true
   people:
     next_contact_days: 0
+  pull:
+    default_recent_limit: 10
+    default_find_limit: 5
+    cursor_ttl_minutes: 45
 
 querying:
   execute_threshold: 0.8

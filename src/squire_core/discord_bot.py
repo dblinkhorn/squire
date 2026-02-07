@@ -4,7 +4,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,7 +30,13 @@ from squire_core.pending_actions import (
 )
 from squire_core.raw_event import RawEvent, Source, write_raw_event
 from squire_core.canonical_store import find_object_path, load_frontmatter
-from squire_core.surfacing import build_daily_digest
+from squire_core.surfacing import (
+    build_daily_digest,
+    build_find_list,
+    build_item_detail,
+    build_recent_list,
+    load_surfacing_config,
+)
 from squire_core.timezone_utils import (
     format_reference_date,
     format_reference_time,
@@ -47,6 +54,15 @@ _VIEW_TIMEOUT_SECONDS = 3600
 _SELECT_OPTION_LIMIT = 25
 _SELECT_LABEL_LIMIT = 100
 _SELECT_DESCRIPTION_LIMIT = 100
+
+
+@dataclass(frozen=True)
+class _ResultCursor:
+    object_ids: list[str]
+    expires_at: datetime
+
+
+_RESULT_CURSORS: dict[tuple[int, int], _ResultCursor] = {}
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -84,6 +100,46 @@ def _next_daily_run(now: datetime, target: time) -> datetime:
     if candidate <= now:
         candidate = candidate + timedelta(days=1)
     return candidate
+
+
+def _parse_positive_int(value: str) -> int | None:
+    trimmed = value.strip()
+    if not trimmed.isdigit():
+        return None
+    parsed = int(trimmed)
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _cursor_key(message: discord.Message) -> tuple[int, int]:
+    return (message.author.id, message.channel.id)
+
+
+def _prune_result_cursors(now: datetime | None = None) -> None:
+    current = now or datetime.now(timezone.utc)
+    expired = [key for key, value in _RESULT_CURSORS.items() if value.expires_at <= current]
+    for key in expired:
+        _RESULT_CURSORS.pop(key, None)
+
+
+def _store_result_cursor(message: discord.Message, config: dict[str, Any], object_ids: list[str]) -> None:
+    surfacing = load_surfacing_config(config)
+    ttl_minutes = max(1, surfacing.pull_cursor_ttl_minutes)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    _RESULT_CURSORS[_cursor_key(message)] = _ResultCursor(object_ids=list(object_ids), expires_at=expires_at)
+    _prune_result_cursors()
+
+
+def _resolve_result_cursor(message: discord.Message, number: int) -> str | None:
+    _prune_result_cursors()
+    cursor = _RESULT_CURSORS.get(_cursor_key(message))
+    if cursor is None:
+        return None
+    index = number - 1
+    if index < 0 or index >= len(cursor.object_ids):
+        return None
+    return cursor.object_ids[index]
 
 
 def _truncate_text(value: str | None, limit: int) -> str:
@@ -833,8 +889,9 @@ async def _handle_command(
 ) -> bool:
     parts = content.split()
     command = parts[0].lower()
+    objects_root = config.get("paths", {}).get("objects_root", "objects")
+    index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
     if command == "!status":
-        objects_root = config.get("paths", {}).get("objects_root", "objects")
         try:
             digest = build_daily_digest(objects_root, config)
         except Exception:
@@ -844,6 +901,70 @@ async def _handle_command(
             return True
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(message, digest.render())
+        return True
+    if command == "!recent":
+        limit: int | None = None
+        if len(parts) > 2:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !recent [N]")
+            return True
+        if len(parts) == 2:
+            parsed = _parse_positive_int(parts[1])
+            if parsed is None:
+                await _swap_reaction(message, "⏳", "⚠️")
+                await _send_response(message, "Usage: !recent [N]")
+                return True
+            limit = parsed
+        surfaced = build_recent_list(objects_root, config, limit=limit)
+        if not surfaced.lines:
+            await _swap_reaction(message, "⏳", "✅")
+            await _send_response(message, "No recent notes found.")
+            return True
+        _store_result_cursor(message, config, surfaced.object_ids)
+        await _swap_reaction(message, "⏳", "✅")
+        await _send_response(message, "Recent notes:\n" + "\n".join(surfaced.lines))
+        return True
+    if command == "!find":
+        if len(parts) < 2:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !find <query>")
+            return True
+        query = content.split(None, 1)[1].strip()
+        if not query:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !find <query>")
+            return True
+        surfaced = build_find_list(objects_root, index_db, config, query)
+        if not surfaced.lines:
+            await _swap_reaction(message, "⏳", "✅")
+            await _send_response(message, f'No matches found for \"{query}\".')
+            return True
+        _store_result_cursor(message, config, surfaced.object_ids)
+        await _swap_reaction(message, "⏳", "✅")
+        await _send_response(message, "Matches:\n" + "\n".join(surfaced.lines))
+        return True
+    if command == "!show":
+        if len(parts) != 2:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !show <number>")
+            return True
+        number = _parse_positive_int(parts[1])
+        if number is None:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !show <number>")
+            return True
+        object_id = _resolve_result_cursor(message, number)
+        if object_id is None:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "No active result list for that number. Run !recent or !find first.")
+            return True
+        detail = build_item_detail(objects_root, object_id, config)
+        if not detail:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "That note is no longer available.")
+            return True
+        await _swap_reaction(message, "⏳", "✅")
+        await _send_response(message, detail)
         return True
     if command == "!append":
         if len(parts) < 3:
@@ -930,7 +1051,6 @@ async def _handle_command(
             await _swap_reaction(message, "⏳", "⚠️")
             await _send_response(message, "Pending action has an unsupported object type.")
             return True
-        objects_root = config.get("paths", {}).get("objects_root", "objects")
         try:
             result = apply_operations(
                 pending.derived,

@@ -29,6 +29,14 @@ Notes:
   deterministic boosts + stricter auto-apply gate first, optional semantic retrieval second.
 - Surfacing priority updated: implement `docs/surfacing-spec.md` first, with note-only outputs
   (no suggested next actions, no object IDs in user-facing surfaced lists by default).
+- Implemented surfacing phase 1:
+  `!recent`, `!find`, `!show <number>` with cursor TTL, digest sections updated to note-only surfacing,
+  and configurable no-ID output (default false for include_ids).
+- Removed unused `surfacing.admin.include_open_limit` from code/example config.
+- Deployment readiness added:
+  - `src/squire_core/cli_init.py` implemented (working `make init` target path).
+  - `Dockerfile`, `.dockerignore`, and baseline `docker-compose.yml` added.
+  - docs updated for Docker Compose + homelab integration and `/data/archive` mount path.
 
 Session notes (2026-01-21):
 - ./specs directory not found; confirm where specs live.
