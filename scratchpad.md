@@ -23,6 +23,12 @@ Notes:
 - Replace title-based IDs with short random alphanumeric IDs (no extra deps).
 - Tests: config defaults test skips when PyYAML is unavailable in the environment.
 - Normalize `paths.index_db` under `archive_root`; rebuild SQLite index on bot startup if missing.
+- Canonical admin due fields are mutually exclusive during apply: setting `due_at` clears `due_date`, and setting `due_date` clears `due_at`.
+- Extraction prompt now asks for timezone offsets in `due_at` values to reduce ambiguity across hosts/timezones.
+- Matching roadmap documented in `docs/matching-spec.md` with a phased plan:
+  deterministic boosts + stricter auto-apply gate first, optional semantic retrieval second.
+- Surfacing priority updated: implement `docs/surfacing-spec.md` first, with note-only outputs
+  (no suggested next actions, no object IDs in user-facing surfaced lists by default).
 
 Session notes (2026-01-21):
 - ./specs directory not found; confirm where specs live.

@@ -91,6 +91,16 @@ def _merge_source_event_ids(existing: list[Any] | None, additional: list[Any] | 
     return merged
 
 
+def _admin_due_mode(incoming_fields: dict[str, Any]) -> str | None:
+    due_at = incoming_fields.get("due_at")
+    if due_at not in (None, ""):
+        return "due_at"
+    due_date = incoming_fields.get("due_date")
+    if due_date not in (None, ""):
+        return "due_date"
+    return None
+
+
 def apply_operations(
     derived: dict[str, Any],
     objects_root: str | Path,
@@ -111,12 +121,14 @@ def apply_operations(
         if action not in {"create", "append", "update"}:
             raise ValueError(f"Unsupported operation: {action}")
 
-        fields = op.get("fields") or {}
+        incoming_fields = op.get("fields") or {}
+        fields = incoming_fields
         extracted = derived.get("extracted_fields") or {}
         if extracted:
             merged = dict(extracted)
             merged.update(fields)
             fields = merged
+        due_mode = _admin_due_mode(fields) if object_type == "admin" else None
         existing_frontmatter: dict[str, Any] = {}
         if action in {"append", "update"}:
             target_id = op.get("target_id") or fields.get("id")
@@ -133,10 +145,20 @@ def apply_operations(
             fields = dict(existing_frontmatter) | dict(fields)
             fields["id"] = object_id
             fields["updated_at"] = _now_iso()
+            if due_mode == "due_at":
+                fields.pop("due_date", None)
+                existing_frontmatter.pop("due_date", None)
+            elif due_mode == "due_date":
+                fields.pop("due_at", None)
+                existing_frontmatter.pop("due_at", None)
         else:
             object_id = fields.get("id") or generate_ulid()
             fields = dict(fields)
             fields["id"] = object_id
+            if due_mode == "due_at":
+                fields.pop("due_date", None)
+            elif due_mode == "due_date":
+                fields.pop("due_at", None)
 
         body_field = fields.pop("body", None)
 

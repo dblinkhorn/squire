@@ -30,6 +30,8 @@ For natural-language captures that might refer to existing records, Squire uses 
 
 This keeps LLM context small, reduces error risk, and preserves auditability.
 
+Detailed design and rollout for matching reliability is documented in `docs/matching-spec.md`.
+
 ## Confidence Thresholds
 
 Squire uses configured thresholds to decide whether to execute or clarify:

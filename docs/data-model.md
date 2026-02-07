@@ -42,7 +42,9 @@ Ideas are captured insights or proposals. Required fields include the common fie
 
 ### Admin
 
-Admin items are tasks and commitments that need completion (including calendarable items). Required fields include the common fields plus status (open|done|blocked, default open) and next_action. Optional fields include due_date (YYYY-MM-DD) or due_at (ISO datetime), priority (low|normal|high), blocked_reason, completed_at (set when done), and gcal_event_id when a calendar event is created.
+Admin items are tasks and commitments that need completion (including calendarable items). Required fields include the common fields plus status (open|done|blocked, default open) and next_action. Optional fields include due_date (YYYY-MM-DD) or due_at (ISO datetime with timezone offset), priority (low|normal|high), blocked_reason, completed_at (set when done), and gcal_event_id when a calendar event is created.
+
+`due_date` and `due_at` are mutually exclusive in canonical state. When an update sets `due_at`, existing `due_date` is removed. When an update sets `due_date`, existing `due_at` is removed.
 
 ## SQLite Index (derived)
 
