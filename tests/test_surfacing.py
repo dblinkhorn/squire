@@ -5,7 +5,13 @@ from pathlib import Path
 
 from squire_core.canonical_store import CanonicalObject, write_canonical_object
 from squire_core.indexer import rebuild_index
-from squire_core.surfacing import build_daily_digest, build_find_list, build_item_detail, build_recent_list
+from squire_core.surfacing import (
+    build_daily_digest,
+    build_find_list,
+    build_item_detail,
+    build_recent_list,
+    build_weekly_review,
+)
 
 
 def _write_object(objects_root: Path, frontmatter: dict, body: str = "") -> None:
@@ -279,3 +285,130 @@ def test_build_find_list_blank_query_returns_empty(tmp_path: Path) -> None:
     surfaced = build_find_list(objects_root, index_db, config, "   ")
     assert surfaced.lines == []
     assert surfaced.object_ids == []
+
+
+def test_build_weekly_review_sections(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
+    created_at = "2026-01-01T00:00:00+00:00"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_OLD",
+                object_type="admin",
+                title="Old unscheduled admin",
+                created_at=created_at,
+                updated_at="2026-01-10T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Do old item",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_NEW",
+                object_type="admin",
+                title="New unscheduled admin",
+                created_at="2026-01-15T00:00:00+00:00",
+                updated_at="2026-01-21T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Do new item",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="PR_BLOCKED",
+                object_type="projects",
+                title="Blocked project",
+                created_at=created_at,
+                updated_at="2026-01-20T00:00:00+00:00",
+            ),
+            "status": "blocked",
+            "next_action": "Wait",
+            "blocked_reason": "Dependency pending",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="P_OVERDUE",
+                object_type="people",
+                title="Jordan",
+                created_at=created_at,
+                updated_at="2026-01-20T00:00:00+00:00",
+            ),
+            "name": "Jordan",
+            "next_contact": "2026-01-20",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="I_RECENT",
+                object_type="ideas",
+                title="Recent idea",
+                created_at=created_at,
+                updated_at="2026-01-21T00:00:00+00:00",
+            ),
+            "one_liner": "Prototype workflow",
+        },
+    )
+
+    config = {
+        "timezone": "UTC",
+        "surfacing": {
+            "output": {"include_ids": False},
+            "projects": {"stale_days": 14, "blocked_limit": 3},
+            "ideas": {"weekly_review": True},
+        },
+    }
+    review = build_weekly_review(objects_root, config, now=now)
+    sections = {section.title: section.lines for section in review.sections}
+
+    assert any("New unscheduled admin" in line for line in sections["Recently changed notes"])
+    assert sections["Open admin without due dates"][0].startswith("Old unscheduled admin")
+    assert any("Blocked project" in line for line in sections["Blocked or stale projects"])
+    assert any("Jordan" in line for line in sections["People overdue for contact"])
+    assert any("Recent idea" in line for line in sections["Ideas updated recently"])
+
+    all_lines = [line for lines in sections.values() for line in lines]
+    assert all("ADM_OLD" not in line for line in all_lines)
+    assert all("PR_BLOCKED" not in line for line in all_lines)
+
+
+def test_build_weekly_review_ideas_section_optional(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="I_1",
+                object_type="ideas",
+                title="Idea hidden when disabled",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-21T00:00:00+00:00",
+            ),
+            "one_liner": "Draft",
+        },
+    )
+
+    config = {
+        "timezone": "UTC",
+        "surfacing": {
+            "ideas": {"weekly_review": False},
+        },
+    }
+    review = build_weekly_review(objects_root, config, now=now)
+    titles = [section.title for section in review.sections]
+    assert "Ideas updated recently" not in titles

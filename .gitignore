@@ -30,3 +30,6 @@ PROMPT.md
 
 # Derived index
 index/sb.sqlite
+
+# uv
+uv.lock

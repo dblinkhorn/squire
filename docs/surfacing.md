@@ -6,7 +6,8 @@ The v1 daily digest includes overdue and due-today admin items (plus any due soo
 projects needing attention (blocked/stale), and people with `next_contact` due.
 Sections are list-only and do not include suggested next actions.
 
-A weekly review remains a planned follow-on and is documented in `docs/surfacing-spec.md`.
+Weekly review is also supported on a separate weekly schedule. It includes recently changed notes, open unscheduled
+admin items, blocked/stale projects, people overdue for contact, and optional recently updated ideas.
 
 ## Pull (Interactive)
 
@@ -25,5 +26,5 @@ Surfacing rules are configurable in `config.yaml`. Default behavior is:
 
 - Admin: overdue, due-today, and due-soon sections.
 - Projects: surfaced when status is blocked or stale.
-- Ideas: included in a weekly review (planned).
+- Ideas: included in the weekly review when `surfacing.ideas.weekly_review` is true.
 - People: surfaced when `next_contact` is due.

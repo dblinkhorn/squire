@@ -64,8 +64,14 @@ timezone: "America/Los_Angeles"
 
 ## Schedule Destinations
 
-Daily digests are sent to a Discord channel or user when configured. The scheduler uses `schedule.daily_digest_time`
-and one of the following optional destination keys:
+Daily digests and weekly reviews are sent to a Discord channel or user when configured.
+The scheduler supports:
+
+- `schedule.daily_digest_time`: local-time daily digest send time (`HH:MM`).
+- `schedule.weekly_review_day`: weekly review day (`MON`..`SUN`).
+- `schedule.weekly_review_time`: local-time weekly review send time (`HH:MM`).
+
+Both schedules use one shared destination and one of the following optional destination keys:
 
 - `schedule.daily_digest_channel_id`: Discord channel ID to post the digest.
 - `schedule.daily_digest_user_id`: Discord user ID to DM the digest.

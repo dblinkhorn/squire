@@ -18,7 +18,7 @@ The index parses canonical objects, builds queryable tables and FTS, and is full
 
 ## Surfacer
 
-The surfacer provides push (scheduled digests and reminders) and pull (interactive commands), always includes object IDs, and never mutates state directly.
+The surfacer provides push (scheduled daily/weekly digests) and pull (interactive commands), omits object IDs in user-facing list output by default, and never mutates state directly.
 
 ## Optional Providers
 
