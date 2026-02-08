@@ -7,7 +7,7 @@ Define a practical first-pass surfacing experience that helps users see importan
 This baseline explicitly avoids:
 
 - suggested next actions
-- object IDs in user-facing surfacing output
+- object IDs in scheduled digest output
 
 ## What "Responses" Means
 
@@ -61,13 +61,13 @@ Rules:
 ### Commands
 
 - `!status`: returns the same sectioned digest view used for daily push.
-- `!recent [N]`: returns recent notes as numbered rows.
-- `!find <query>`: returns ranked matches as numbered rows.
-- `!show <number>`: expands the selected row from the last `!recent` or `!find` result set.
+- `!recent [N]`: returns recent notes as numbered rows with IDs.
+- `!find <query>`: returns ranked matches as numbered rows with IDs.
+- `!show <number>`: expands the selected row from the last `!recent` or `!find` result set and includes the ID.
 
 ### Result Cursor Model
 
-To avoid exposing object IDs while still allowing drill-down:
+To support quick drill-down by list position:
 
 - store the last surfaced result list per user/thread
 - map `1..N` to canonical object IDs internally
@@ -80,6 +80,8 @@ For list views (`!status`, `!recent`, `!find`):
 - include section title
 - include up to configured limit rows
 - each row is plain text with compact metadata
+- `!recent` and `!find` include canonical IDs
+- `!status` follows digest no-ID behavior by default
 
 For detail view (`!show <number>`):
 - title
@@ -93,7 +95,7 @@ Add/extend in `config.yaml`:
 ```yaml
 surfacing:
   output:
-    include_ids: false
+    show_ids_daily_weekly: false
   admin:
     due_soon_days: 1
   projects:
@@ -111,8 +113,8 @@ schedule:
 ```
 
 Notes:
-- `include_ids` defaults to `false` for this baseline.
-- IDs may still be used internally for command execution and logs.
+- `show_ids_daily_weekly` defaults to `false` for this baseline.
+- `!recent`, `!find`, and `!show` include IDs regardless of this setting.
 
 ## Implementation Plan
 
@@ -130,17 +132,17 @@ Notes:
 4. Add tests:
 - digest section inclusion/exclusion
 - numbered cursor behavior (`!find` -> `!show 2`)
-- no IDs in surfaced output when `include_ids` is `false`
+- no IDs in digest output when `show_ids_daily_weekly` is `false`
+- pull commands include IDs
 
 ## Acceptance Criteria
 
 - Daily digest contains only note surfacing sections (no suggestion section).
-- `!recent`, `!find`, and `!show` are functional without exposing IDs.
+- `!recent`, `!find`, and `!show` are functional and include IDs.
 - Cursor-based `!show <number>` works for active cursor windows.
 - Surfacing output stays concise and deterministic across repeated runs.
 
 ## Future Extensions
 
-- optional toggle to include IDs for power users
 - richer filtering (`!due`, tags, types)
 - optional LLM summary mode behind explicit config flag

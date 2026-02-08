@@ -16,9 +16,11 @@ Prefixes:
 `!weekly` returns the weekly review sections on demand.
 `!recent [N]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest `!recent` or `!find`
-result set. `!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
-[field=value…]` modifies frontmatter fields from an allowlist. `!confirm <pending_id>` applies a pending action,
-and `!cancel <pending_id>` dismisses it.
+result set. Manual pull commands (`!recent`, `!find`, `!show`) include IDs to support intentional follow-up edits.
+Scheduled/on-demand digest commands (`!status`, `!weekly`) remain list-first and avoid IDs by default.
+`!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
+[field=value…]` modifies frontmatter fields from a strict per-type allowlist with value validation (for example enum-only status values and ISO date/time checks). For values with spaces, quote them (for example `next_action="Call dentist tomorrow at 4pm"`). `!confirm <pending_id>` applies a pending action,
+and `!cancel <pending_id>` dismisses it. `!clear-archive` starts a destructive archive reset flow and requires a separate `DELETE` confirmation message within a short TTL before data is removed.
 
 The following commands are currently implemented:
 - `!status`
@@ -31,6 +33,7 @@ The following commands are currently implemented:
 - `!fix <id> field=value [field=value…]`
 - `!confirm <pending_id>`
 - `!cancel <pending_id>`
+- `!clear-archive` (requires follow-up `DELETE` confirmation)
 
 Tags are optional user-defined categories. Users can include inline hashtags (for example, `#work`) or update tags later with `!fix`. The system can support queries like `!find tag:work` and a summary command (for example, `!tags`) to list tags and counts.
 

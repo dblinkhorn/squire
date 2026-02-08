@@ -83,7 +83,7 @@ channel is available.
 
 Surfacing behavior is configured under `surfacing` in `config.yaml`.
 
-- `surfacing.output.include_ids`: include canonical IDs in surfaced list output (default false).
+- `surfacing.output.show_ids_daily_weekly`: include canonical IDs in daily/weekly digest output (default false). Manual pull commands (`!recent`, `!find`, `!show`) always include IDs.
 - `surfacing.admin.due_soon_days`: include admin items due within this many days in the due-soon section.
 - `surfacing.projects.stale_days`: threshold for stale project surfacing.
 - `surfacing.projects.blocked_limit`: maximum blocked/stale projects shown in digest.
