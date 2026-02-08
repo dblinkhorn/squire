@@ -35,6 +35,7 @@ from squire_core.surfacing import (
     build_find_list,
     build_item_detail,
     build_recent_list,
+    build_weekly_review,
     load_surfacing_config,
 )
 from squire_core.timezone_utils import (
@@ -54,6 +55,22 @@ _VIEW_TIMEOUT_SECONDS = 3600
 _SELECT_OPTION_LIMIT = 25
 _SELECT_LABEL_LIMIT = 100
 _SELECT_DESCRIPTION_LIMIT = 100
+_WEEKDAY_MAP = {
+    "MON": 0,
+    "MONDAY": 0,
+    "TUE": 1,
+    "TUESDAY": 1,
+    "WED": 2,
+    "WEDNESDAY": 2,
+    "THU": 3,
+    "THURSDAY": 3,
+    "FRI": 4,
+    "FRIDAY": 4,
+    "SAT": 5,
+    "SATURDAY": 5,
+    "SUN": 6,
+    "SUNDAY": 6,
+}
 
 
 @dataclass(frozen=True)
@@ -99,6 +116,26 @@ def _next_daily_run(now: datetime, target: time) -> datetime:
     candidate = now.replace(hour=target.hour, minute=target.minute, second=0, microsecond=0)
     if candidate <= now:
         candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _parse_weekly_review_day(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        if 0 <= value <= 6:
+            return value
+        return None
+    label = str(value).strip().upper()
+    return _WEEKDAY_MAP.get(label)
+
+
+def _next_weekly_run(now: datetime, target_day: int, target_time: time) -> datetime:
+    days_ahead = (target_day - now.weekday()) % 7
+    candidate = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
+    candidate = candidate + timedelta(days=days_ahead)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=7)
     return candidate
 
 
@@ -902,6 +939,17 @@ async def _handle_command(
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(message, digest.render())
         return True
+    if command == "!weekly":
+        try:
+            review = build_weekly_review(objects_root, config)
+        except Exception:
+            logging.exception("weekly_review_build_failed id=%s", raw_id)
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Failed to build weekly review. Check logs for details.")
+            return True
+        await _swap_reaction(message, "⏳", "✅")
+        await _send_response(message, review.render())
+        return True
     if command == "!recent":
         limit: int | None = None
         if len(parts) > 2:
@@ -1188,17 +1236,22 @@ class SquireBot(discord.Client):
         self._config = config
         schedule = config.get("schedule", {}) if isinstance(config.get("schedule"), dict) else {}
         self._digest_time = _parse_daily_digest_time(schedule.get("daily_digest_time"))
+        self._weekly_review_day = _parse_weekly_review_day(schedule.get("weekly_review_day"))
+        self._weekly_review_time = _parse_daily_digest_time(schedule.get("weekly_review_time"))
         self._digest_channel_id = _coerce_int(schedule.get("daily_digest_channel_id"))
         self._digest_user_id = _coerce_int(schedule.get("daily_digest_user_id"))
         self._last_dm_channel_id: int | None = None
         self._last_dm_user_id: int | None = None
         self._timezone = resolve_timezone(config.get("timezone"))
         self._digest_task: asyncio.Task | None = None
+        self._weekly_review_task: asyncio.Task | None = None
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user}")
         if self._digest_time and self._digest_task is None:
             self._digest_task = asyncio.create_task(self._daily_digest_loop())
+        if self._weekly_review_day is not None and self._weekly_review_time and self._weekly_review_task is None:
+            self._weekly_review_task = asyncio.create_task(self._weekly_review_loop())
 
     async def on_message(self, message: discord.Message) -> None:
         if not message.author.bot and isinstance(message.channel, discord.DMChannel):
@@ -1272,6 +1325,32 @@ class SquireBot(discord.Client):
                 await self._send_daily_digest()
             except Exception:
                 logging.exception("daily_digest_failed")
+
+    async def _send_weekly_review(self) -> None:
+        channel = await self._resolve_digest_channel()
+        if not channel:
+            logging.warning("weekly_review_skipped reason=no_channel")
+            return
+        objects_root = self._config.get("paths", {}).get("objects_root", "objects")
+        review = build_weekly_review(objects_root, self._config)
+        try:
+            await channel.send(content=review.render())
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            logging.warning("weekly_review_send_failed error=%s", exc)
+
+    async def _weekly_review_loop(self) -> None:
+        if self._weekly_review_day is None or not self._weekly_review_time:
+            return
+        while not self.is_closed():
+            now = datetime.now(self._timezone)
+            target = _next_weekly_run(now, self._weekly_review_day, self._weekly_review_time)
+            delay = (target - now).total_seconds()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            try:
+                await self._send_weekly_review()
+            except Exception:
+                logging.exception("weekly_review_failed")
 
 
 def main() -> None:

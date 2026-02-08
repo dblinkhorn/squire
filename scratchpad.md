@@ -48,3 +48,34 @@ Session notes (2026-01-21):
 - Need decisions on pending action storage format/location and surfacing scheduler model.
 - Reviewed docs/; implementation plan aligns with current task list.
 - Confidence gating + pending action confirm/cancel flows are in place; next task is Discord UI confirmations/select + auto-apply feedback.
+
+Session notes (2026-02-08):
+- Repository familiarization pass completed across README, docs/, src/, and tests/.
+- Surfacing phase 1 appears shipped (`!status`, `!recent`, `!find`, `!show` + cursor TTL + no-ID output mode).
+- Highest-priority v1 gap: weekly review scheduling/formatting from `docs/surfacing-spec.md` is still not implemented in runtime/config plumbing.
+- Next highest gap: matching-spec phase 1 deterministic improvements (hybrid retrieval boosts, deterministic auto-apply gate, matching trace artifact) are still pending.
+- UX mismatch to resolve: with `surfacing.output.include_ids: false`, mutation commands still require raw IDs (`!done/!append/!fix <id>`), which weakens no-ID workflows.
+- Local test command currently unavailable in this shell because `python3 -m pytest` cannot run without installing pytest in the environment.
+
+Session notes (2026-02-08, task 1):
+- Implemented weekly review surfacing composer (`build_weekly_review`) with list-only sections:
+  recently changed notes, open admin without due dates, blocked/stale projects, people overdue for contact,
+  and optional recent ideas.
+- Added weekly schedule runtime support in Discord bot:
+  `schedule.weekly_review_day` + `schedule.weekly_review_time` parsing, next-run calculation, and async send loop.
+- Added config example keys for weekly scheduling and updated docs to reflect shipped weekly review behavior.
+- Added tests:
+  - `tests/test_surfacing.py`: weekly review composition + optional ideas section.
+  - `tests/test_discord_schedule.py`: weekday parsing and next weekly run behavior.
+- Validation:
+  - `.venv/bin/python -m pytest -q` => `28 passed`.
+
+Session notes (2026-02-08, task 1 follow-up):
+- Added manual `!weekly` command so weekly review output can be triggered on demand without waiting for scheduler time.
+- Updated command docs and added command-handler coverage in `tests/test_discord_schedule.py`.
+- Validation:
+  - `.venv/bin/python -m pytest -q` => `29 passed`.
+
+Session notes (2026-02-08, env/tooling):
+- Chose to stay on `pip` install paths for now (no migration to `uv` in CI/Makefile/Docker yet).
+- Added `uv.lock` to `.gitignore` to avoid tracking lockfile drift while `pip` remains the install source of truth.

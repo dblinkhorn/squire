@@ -13,6 +13,7 @@ Prefixes:
 ## Minimal Command Set (v1)
 
 `!status` returns the daily digest (admin overdue/today/soon sections, project attention, and people follow-ups).
+`!weekly` returns the weekly review sections on demand.
 `!recent [N]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest `!recent` or `!find`
 result set. `!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
@@ -21,6 +22,7 @@ and `!cancel <pending_id>` dismisses it.
 
 The following commands are currently implemented:
 - `!status`
+- `!weekly`
 - `!recent [N]`
 - `!find <query>`
 - `!show <number>`

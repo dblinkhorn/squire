@@ -30,6 +30,8 @@ decision:
 
 schedule:
   daily_digest_time: "09:00"
+  weekly_review_day: "SUN"
+  weekly_review_time: "10:00"
   # daily_digest_channel_id: 123456789012345678
   # daily_digest_user_id: 123456789012345678
 
