@@ -79,3 +79,67 @@ Session notes (2026-02-08, task 1 follow-up):
 Session notes (2026-02-08, env/tooling):
 - Chose to stay on `pip` install paths for now (no migration to `uv` in CI/Makefile/Docker yet).
 - Added `uv.lock` to `.gitignore` to avoid tracking lockfile drift while `pip` remains the install source of truth.
+
+Session notes (2026-02-08, v1.0 gap assessment):
+- Branch currently only changes `README.md`; test suite is green (`29 passed`).
+- Highest remaining roadmap item is still matching reliability phase 1 from `docs/matching-spec.md`
+  (hybrid retrieval boosts, deterministic auto-apply gate, matching trace artifact).
+- Command-path consistency gap: `!confirm` applies pending actions but does not refresh SQLite index afterward.
+- Product UX gap: `surfacing.output.include_ids: false` hides IDs while mutation commands (`!done/!append/!fix`) still require raw IDs.
+- Safety gap: `!fix` currently accepts broad key/value updates instead of a strict allowlist.
+- Docs/runtime alignment gaps remain for natural-language querying claims and other planned integrations.
+
+Session notes (2026-02-08, task 2):
+- Implemented command-path index refresh for `!confirm` so text confirmations now refresh SQLite immediately
+  (parity with button-based confirmations).
+- Hardened `!fix`:
+  - switched token parsing to `shlex.split` to support quoted multi-word values.
+  - added strict per-type editable field allowlists.
+  - blocked immutable/internal fields (`id`, `type`, `created_at`, `updated_at`, `source_event_ids`, `last_decision_id`).
+  - added strict value validation for enums and ISO date/datetime fields (including timezone requirement for admin datetime fields).
+- Updated `docs/commands.md` to reflect strict `!fix` validation and quoting behavior.
+- Added command tests in `tests/test_discord_commands.py` covering:
+  - `!confirm` refresh behavior
+  - quoted `!fix` parsing
+  - disallowed field rejection
+  - invalid enum rejection
+- Validation:
+  - `.venv/bin/python -m pytest -q` => `33 passed`.
+
+Session notes (2026-02-08, task 3):
+- Added destructive bot command flow for archive reset:
+  - `!clear-archive` starts a confirmation window for the same user/channel.
+  - User must send plain `DELETE` within 2 minutes to execute.
+  - Confirmation message `DELETE` is intercepted before capture, so it does not become a note.
+- Archive clear behavior mirrors Makefile intent:
+  removes all top-level entries under `archive_root` while preserving `.git`.
+- Added tests for:
+  - starting confirmation
+  - successful DELETE-based clear (with `.git` preserved)
+  - DELETE without pending confirmation warning.
+- Updated README/docs command lists to include `!clear-archive`.
+- Validation:
+  - `.venv/bin/python -m pytest -q` => `36 passed`.
+
+Session notes (2026-02-08, task 4):
+- Updated command-level surfacing behavior so manual pull commands always include IDs:
+  - `!recent`, `!find`, and `!show` now force `surfacing.output.include_ids=true` via command-local config override.
+  - `!status` and `!weekly` remain unchanged and continue to follow digest/no-ID behavior.
+- Added tests to verify command overrides for `!recent`, `!find`, and `!show` even when global config has `include_ids: false`.
+- Updated `docs/commands.md` to document manual-command ID inclusion vs digest behavior.
+- Validation:
+  - `.venv/bin/python -m pytest -q` => `39 passed`.
+
+Session notes (2026-02-08, task 5):
+- Refined ID visibility config to be digest-specific:
+  - renamed surfacing key to `surfacing.output.show_ids_daily_weekly`.
+  - removed legacy `surfacing.output.include_ids` fallback; only the new key is honored.
+- Manual pull surfacing (`!recent`, `!find`, `!show`) now includes IDs directly in `surfacing.py`
+  and no longer relies on any command-level config override.
+- Updated docs/config/template:
+  - `config.yaml.example`, `docs/configuration.md`, `docs/surfacing-spec.md`.
+- Updated tests:
+  - `tests/test_surfacing.py` now expects IDs for manual pull output while preserving digest no-ID behavior by default.
+  - `tests/test_discord_commands.py` verifies command handlers do not override digest ID config.
+- Validation:
+  - `.venv/bin/python -m pytest -q` => `39 passed`.

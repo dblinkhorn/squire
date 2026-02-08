@@ -4,8 +4,10 @@ import asyncio
 import json
 import logging
 import os
+import shlex
+import shutil
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -55,6 +57,7 @@ _VIEW_TIMEOUT_SECONDS = 3600
 _SELECT_OPTION_LIMIT = 25
 _SELECT_LABEL_LIMIT = 100
 _SELECT_DESCRIPTION_LIMIT = 100
+_ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS = 120
 _WEEKDAY_MAP = {
     "MON": 0,
     "MONDAY": 0,
@@ -71,6 +74,64 @@ _WEEKDAY_MAP = {
     "SUN": 6,
     "SUNDAY": 6,
 }
+_FIX_IMMUTABLE_FIELDS = {
+    "id",
+    "type",
+    "created_at",
+    "updated_at",
+    "source_event_ids",
+    "last_decision_id",
+}
+_FIX_ALLOWED_FIELDS = {
+    "admin": {
+        "title",
+        "status",
+        "next_action",
+        "due_date",
+        "due_at",
+        "priority",
+        "blocked_reason",
+        "completed_at",
+        "gcal_event_id",
+    },
+    "projects": {
+        "title",
+        "status",
+        "next_action",
+        "goal",
+        "due",
+        "blocked_reason",
+    },
+    "people": {
+        "title",
+        "name",
+        "context",
+        "follow_ups",
+        "last_contacted",
+        "next_contact",
+    },
+    "ideas": {
+        "title",
+        "one_liner",
+        "status",
+        "next_step",
+    },
+}
+_FIX_ENUM_VALUES = {
+    ("admin", "status"): {"open", "done", "blocked"},
+    ("admin", "priority"): {"low", "normal", "high"},
+    ("projects", "status"): {"planning", "in_progress", "blocked", "completed", "on_hold"},
+    ("ideas", "status"): {"seed", "incubating", "active", "parked", "done"},
+}
+_FIX_DATE_FIELDS = {
+    ("admin", "due_date"),
+    ("people", "last_contacted"),
+    ("people", "next_contact"),
+}
+_FIX_DATETIME_FIELDS = {
+    ("admin", "due_at"),
+    ("admin", "completed_at"),
+}
 
 
 @dataclass(frozen=True)
@@ -80,6 +141,14 @@ class _ResultCursor:
 
 
 _RESULT_CURSORS: dict[tuple[int, int], _ResultCursor] = {}
+
+
+@dataclass(frozen=True)
+class _ArchiveClearConfirmation:
+    expires_at: datetime
+
+
+_ARCHIVE_CLEAR_CONFIRMATIONS: dict[tuple[int, int], _ArchiveClearConfirmation] = {}
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -149,8 +218,118 @@ def _parse_positive_int(value: str) -> int | None:
     return parsed
 
 
+def _is_iso_date(value: str) -> bool:
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError:
+        return False
+    return parsed.isoformat() == value
+
+
+def _is_iso_datetime(value: str, *, require_timezone: bool) -> bool:
+    if "T" not in value:
+        return False
+    candidate = value
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return False
+    if require_timezone and parsed.tzinfo is None:
+        return False
+    return True
+
+
+def _validate_fix_updates(object_type: str, updates: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    allowed_fields = _FIX_ALLOWED_FIELDS.get(object_type)
+    if not allowed_fields:
+        return None, f"Unsupported object type for !fix: {object_type}"
+
+    validated: dict[str, Any] = {}
+    for raw_key, raw_value in updates.items():
+        key = str(raw_key).strip()
+        if not key:
+            return None, "Field name cannot be empty."
+        if key in _FIX_IMMUTABLE_FIELDS:
+            return None, f"Field `{key}` is not editable."
+        if key not in allowed_fields:
+            allowed = ", ".join(sorted(allowed_fields))
+            return None, f"Field `{key}` is not allowed for {object_type}. Allowed fields: {allowed}"
+        if not isinstance(raw_value, str):
+            return None, f"Field `{key}` must be provided as text."
+        value = raw_value.strip()
+        if not value:
+            return None, f"Field `{key}` cannot be empty."
+
+        enum_values = _FIX_ENUM_VALUES.get((object_type, key))
+        if enum_values and value not in enum_values:
+            allowed = ", ".join(sorted(enum_values))
+            return None, f"Invalid value for `{key}`. Allowed values: {allowed}"
+
+        if (object_type, key) in _FIX_DATE_FIELDS and not _is_iso_date(value):
+            return None, f"Invalid value for `{key}`. Use YYYY-MM-DD."
+        if (object_type, key) in _FIX_DATETIME_FIELDS and not _is_iso_datetime(value, require_timezone=True):
+            return None, f"Invalid value for `{key}`. Use ISO datetime with timezone offset."
+        if (object_type, key) == ("projects", "due"):
+            if not _is_iso_date(value) and not _is_iso_datetime(value, require_timezone=False):
+                return None, "Invalid value for `due`. Use YYYY-MM-DD or ISO datetime."
+
+        validated[key] = value
+
+    if not validated:
+        return None, "No valid fields provided."
+    return validated, None
+
+
 def _cursor_key(message: discord.Message) -> tuple[int, int]:
     return (message.author.id, message.channel.id)
+
+
+def _archive_clear_key(message: discord.Message) -> tuple[int, int]:
+    return (message.author.id, message.channel.id)
+
+
+def _prune_archive_clear_confirmations(now: datetime | None = None) -> None:
+    current = now or datetime.now(timezone.utc)
+    expired = [key for key, value in _ARCHIVE_CLEAR_CONFIRMATIONS.items() if value.expires_at <= current]
+    for key in expired:
+        _ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
+
+
+def _start_archive_clear_confirmation(message: discord.Message) -> None:
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS)
+    _ARCHIVE_CLEAR_CONFIRMATIONS[_archive_clear_key(message)] = _ArchiveClearConfirmation(expires_at=expires_at)
+    _prune_archive_clear_confirmations()
+
+
+def _consume_archive_clear_confirmation(message: discord.Message) -> bool:
+    _prune_archive_clear_confirmations()
+    key = _archive_clear_key(message)
+    confirmation = _ARCHIVE_CLEAR_CONFIRMATIONS.get(key)
+    if confirmation is None:
+        return False
+    _ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
+    return True
+
+
+def _clear_archive_contents(archive_root: str | Path) -> int:
+    root = Path(archive_root).expanduser()
+    if not root.exists():
+        raise ValueError(f"archive_root does not exist: {root}")
+    if not root.is_dir():
+        raise ValueError(f"archive_root is not a directory: {root}")
+
+    removed = 0
+    for child in root.iterdir():
+        if child.name == ".git":
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        removed += 1
+    return removed
 
 
 def _prune_result_cursors(now: datetime | None = None) -> None:
@@ -420,6 +599,10 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     content = (message.content or "").strip()
     if not content:
         return
+    if content == "DELETE":
+        handled = await _handle_archive_clear_confirmation(message, config)
+        if handled:
+            return
     await _safe_add_reaction(message, "⏳")
 
     raw_dir = Path(config.get("paths", {}).get("events_raw", "events/raw"))
@@ -1048,22 +1231,30 @@ async def _handle_command(
             fields={"status": "done", "completed_at": _now_iso()},
         )
     if command == "!fix":
-        if len(parts) < 3:
+        try:
+            fix_parts = shlex.split(content)
+        except ValueError:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Invalid !fix syntax. Quote values with spaces.")
+            return True
+        if len(fix_parts) < 3:
             await _swap_reaction(message, "⏳", "⚠️")
             await _send_response(message, "Usage: !fix <id> field=value [field=value...]")
             return True
-        target_id = parts[1]
+        target_id = fix_parts[1]
         updates: dict[str, Any] = {}
-        for token in parts[2:]:
+        for token in fix_parts[2:]:
             if "=" not in token:
                 await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, "Usage: !fix <id> field=value [field=value...]")
+                await _send_response(message, "Invalid !fix syntax. Use field=value and quote values with spaces.")
                 return True
             key, value = token.split("=", 1)
             key = key.strip()
             value = value.strip()
-            if key in {"id", "type", "created_at"}:
-                continue
+            if not key:
+                await _swap_reaction(message, "⏳", "⚠️")
+                await _send_response(message, "Field name cannot be empty.")
+                return True
             updates[key] = value
         if not updates:
             await _swap_reaction(message, "⏳", "⚠️")
@@ -1076,7 +1267,20 @@ async def _handle_command(
             target_id=target_id,
             op="update",
             fields=updates,
+            validate_fix=True,
         )
+    if command == "!clear-archive":
+        if len(parts) != 1:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !clear-archive")
+            return True
+        _start_archive_clear_confirmation(message)
+        await _swap_reaction(message, "⏳", "❓")
+        await _send_response(
+            message,
+            "This will permanently clear all archive data (except `.git`). Reply with `DELETE` within 2 minutes to confirm.",
+        )
+        return True
     if command == "!confirm":
         if len(parts) != 2:
             await _swap_reaction(message, "⏳", "⚠️")
@@ -1113,6 +1317,7 @@ async def _handle_command(
             await _swap_reaction(message, "⏳", "⚠️")
             await _send_response(message, "Failed to apply pending action. Check logs for details.")
             return True
+        _refresh_index(objects_root, index_db)
         update_pending_action_status(pending_root, pending_id, "confirmed")
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(
@@ -1176,6 +1381,8 @@ async def _apply_command_operation(
     target_id: str,
     op: str,
     fields: dict[str, Any],
+    *,
+    validate_fix: bool = False,
 ) -> bool:
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     target_path = find_object_path(objects_root, target_id)
@@ -1189,6 +1396,16 @@ async def _apply_command_operation(
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, f"Unable to determine object type for {target_id}")
         return True
+    if not isinstance(object_type, str):
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, f"Unable to determine object type for {target_id}")
+        return True
+    if validate_fix:
+        fields, validation_error = _validate_fix_updates(object_type, fields)
+        if validation_error:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, validation_error)
+            return True
     if op == "update" and object_type != "admin" and fields.get("status") == "done":
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "Only admin items can be marked done.")
@@ -1225,6 +1442,29 @@ async def _apply_command_operation(
         f"Updated {object_type} \"{title}\".",
         thread_title=title,
     )
+    return True
+
+
+async def _handle_archive_clear_confirmation(message: discord.Message, config: dict[str, Any]) -> bool:
+    if not _consume_archive_clear_confirmation(message):
+        await _safe_add_reaction(message, "⚠️")
+        await _send_response(message, "No pending archive clear request. Run `!clear-archive` first.")
+        return True
+    archive_root = config.get("archive_root")
+    if not isinstance(archive_root, str) or not archive_root.strip():
+        await _safe_add_reaction(message, "⚠️")
+        await _send_response(message, "archive_root is not configured.")
+        return True
+    try:
+        removed = _clear_archive_contents(archive_root)
+    except Exception as exc:
+        logging.exception("archive_clear_failed error=%s", exc)
+        await _safe_add_reaction(message, "⚠️")
+        await _send_response(message, f"Failed to clear archive: {exc}")
+        return True
+    _RESULT_CURSORS.clear()
+    await _safe_add_reaction(message, "✅")
+    await _send_response(message, f"Archive cleared. Removed {removed} top-level entries from `{archive_root}`.")
     return True
 
 

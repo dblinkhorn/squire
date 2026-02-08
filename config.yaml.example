@@ -37,7 +37,7 @@ schedule:
 
 surfacing:
   output:
-    include_ids: false
+    show_ids_daily_weekly: false
   admin:
     due_soon_days: 1
   projects:

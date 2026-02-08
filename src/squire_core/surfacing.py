@@ -43,7 +43,7 @@ class SurfacingConfig:
     projects_blocked_limit: int
     ideas_weekly_review: bool
     people_next_contact_days: int
-    include_ids: bool
+    show_ids_daily_weekly: bool
     pull_default_recent_limit: int
     pull_default_find_limit: int
     pull_cursor_ttl_minutes: int
@@ -101,7 +101,7 @@ _DEFAULT_SURFACING_CONFIG = {
     "projects": {"stale_days": 14, "blocked_limit": 3},
     "ideas": {"weekly_review": True},
     "people": {"next_contact_days": 0},
-    "output": {"include_ids": False},
+    "output": {"show_ids_daily_weekly": False},
     "pull": {"default_recent_limit": 10, "default_find_limit": 5, "cursor_ttl_minutes": 45},
 }
 
@@ -139,6 +139,15 @@ def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
             return value.strip().lower() in {"1", "true", "yes", "y"}
         return bool(fallback)
 
+    output_section = _section("output")
+    show_ids_raw = output_section.get("show_ids_daily_weekly", _DEFAULT_SURFACING_CONFIG["output"]["show_ids_daily_weekly"])
+    if isinstance(show_ids_raw, bool):
+        show_ids_daily_weekly = show_ids_raw
+    elif isinstance(show_ids_raw, str):
+        show_ids_daily_weekly = show_ids_raw.strip().lower() in {"1", "true", "yes", "y"}
+    else:
+        show_ids_daily_weekly = bool(_DEFAULT_SURFACING_CONFIG["output"]["show_ids_daily_weekly"])
+
     return SurfacingConfig(
         admin_due_soon_days=_get_int("admin", "due_soon_days", _DEFAULT_SURFACING_CONFIG["admin"]["due_soon_days"]),
         projects_stale_days=_get_int("projects", "stale_days", _DEFAULT_SURFACING_CONFIG["projects"]["stale_days"]),
@@ -149,7 +158,7 @@ def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
         people_next_contact_days=_get_int(
             "people", "next_contact_days", _DEFAULT_SURFACING_CONFIG["people"]["next_contact_days"]
         ),
-        include_ids=_get_bool("output", "include_ids", _DEFAULT_SURFACING_CONFIG["output"]["include_ids"]),
+        show_ids_daily_weekly=show_ids_daily_weekly,
         pull_default_recent_limit=_get_int(
             "pull", "default_recent_limit", _DEFAULT_SURFACING_CONFIG["pull"]["default_recent_limit"]
         ),
@@ -643,19 +652,19 @@ def build_daily_digest(
             ),
         )
 
-    overdue_lines = _format_admin_due_lines(_sort_due(overdue), surfacing.include_ids)
-    today_lines = _format_admin_due_lines(_sort_due(today), surfacing.include_ids)
-    soon_lines = _format_admin_due_lines(_sort_due(soon), surfacing.include_ids)
+    overdue_lines = _format_admin_due_lines(_sort_due(overdue), surfacing.show_ids_daily_weekly)
+    today_lines = _format_admin_due_lines(_sort_due(today), surfacing.show_ids_daily_weekly)
+    soon_lines = _format_admin_due_lines(_sort_due(soon), surfacing.show_ids_daily_weekly)
     project_lines = _build_project_attention_lines(
         project_items,
         now=now,
         stale_days=surfacing.projects_stale_days,
         limit=surfacing.projects_blocked_limit,
-        include_ids=surfacing.include_ids,
+        include_ids=surfacing.show_ids_daily_weekly,
     )
 
     people_cutoff = now.date() + timedelta(days=surfacing.people_next_contact_days)
-    people_lines = _format_people_lines(people_items, people_cutoff, tz, surfacing.include_ids)
+    people_lines = _format_people_lines(people_items, people_cutoff, tz, surfacing.show_ids_daily_weekly)
 
     sections = [
         DigestSection(title="Admin overdue", lines=overdue_lines),
@@ -692,25 +701,25 @@ def build_weekly_review(
         items,
         now=now,
         tz=tz,
-        include_ids=surfacing.include_ids,
+        include_ids=surfacing.show_ids_daily_weekly,
     )
     unscheduled_admin_lines = _build_open_admin_without_due_lines(
         admin_items,
         tz=tz,
-        include_ids=surfacing.include_ids,
+        include_ids=surfacing.show_ids_daily_weekly,
     )
     project_lines = _build_project_attention_lines(
         project_items,
         now=now,
         stale_days=surfacing.projects_stale_days,
         limit=surfacing.projects_blocked_limit,
-        include_ids=surfacing.include_ids,
+        include_ids=surfacing.show_ids_daily_weekly,
     )
     overdue_people_lines = _build_overdue_people_lines(
         people_items,
         today=now.date(),
         tz=tz,
-        include_ids=surfacing.include_ids,
+        include_ids=surfacing.show_ids_daily_weekly,
     )
 
     sections = [
@@ -727,7 +736,7 @@ def build_weekly_review(
                     items,
                     now=now,
                     tz=tz,
-                    include_ids=surfacing.include_ids,
+                    include_ids=surfacing.show_ids_daily_weekly,
                 ),
             )
         )
@@ -750,7 +759,7 @@ def build_recent_list(
     selected = items[:effective_limit]
 
     lines = [
-        _render_list_row(index + 1, item, include_ids=surfacing.include_ids, tz=tz)
+        _render_list_row(index + 1, item, include_ids=True, tz=tz)
         for index, item in enumerate(selected)
     ]
     object_ids = [item.object_id for item in selected]
@@ -809,7 +818,7 @@ def build_find_list(
                 len(rows) + 1,
                 item,
                 candidate.snippet,
-                include_ids=surfacing.include_ids,
+                include_ids=True,
                 tz=tz,
             )
         )
@@ -832,15 +841,13 @@ def build_item_detail(
     except Exception:
         return None
 
-    surfacing = load_surfacing_config(config)
     title = frontmatter.get("title")
     object_type = frontmatter.get("type")
     if not isinstance(title, str) or not isinstance(object_type, str):
         return None
 
     lines = [f"Title: {title}", f"Type: {_render_type_label(object_type)}"]
-    if surfacing.include_ids:
-        lines.append(f"ID: {object_id}")
+    lines.append(f"ID: {object_id}")
 
     field_map = [
         ("status", "Status"),
