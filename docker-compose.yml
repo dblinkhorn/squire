@@ -9,6 +9,10 @@ services:
       - .env
     environment:
       PYTHONUNBUFFERED: "1"
+      HEALTH_HOST: "0.0.0.0"
+      HEALTH_PORT: "${HEALTH_PORT:-8080}"
+    ports:
+      - "${HEALTH_PORT:-8080}:${HEALTH_PORT:-8080}"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./config:/app/config:ro
@@ -16,8 +20,8 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - python -c "import os,sys;sys.exit(0 if os.getenv('DISCORD_TOKEN') and os.getenv('OPENAI_API_KEY') else 1)"
+        - python -c "import os,urllib.request as u;p=os.getenv('HEALTH_PORT','8080');r=u.urlopen(f'http://127.0.0.1:{p}/health',timeout=3);c=r.getcode();r.close();raise SystemExit(0 if c==200 else 1)"
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 45s
