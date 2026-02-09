@@ -87,6 +87,34 @@ Data mounts used by compose:
 - `./config/` -> `/app/config/` (read-only)
 - `./archive/` -> `/data/archive/` (your data)
 
+## Monitoring Squire
+
+Squire exposes a lightweight liveness endpoint:
+
+- Route: `GET /health`
+- Default bind: `0.0.0.0`
+- Default port: `8080` (override with `HEALTH_PORT`)
+- Response: HTTP `200` with `{"status":"ok"}`
+
+Quick check:
+
+```sh
+curl http://<host>:<health-port>/health
+```
+
+### Uptime Kuma setup
+
+Use an HTTP(s) monitor:
+
+- Monitor Type: HTTP(s)
+- URL: `http://<host-or-container-name>:<port>/health`
+- Expected status code: `200`
+
+Examples:
+
+- Same Docker network as Squire: `http://squire-core:8080/health`
+- External to Docker network: `http://pi4:8080/health`
+
 ## Run from Source
 
 ### Prerequisites

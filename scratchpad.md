@@ -143,3 +143,10 @@ Session notes (2026-02-08, task 5):
   - `tests/test_discord_commands.py` verifies command handlers do not override digest ID config.
 - Validation:
   - `.venv/bin/python -m pytest -q` => `39 passed`.
+
+Session notes (2026-02-09, uptime monitoring):
+- Added first-class HTTP liveness endpoint in runtime: `GET /health` served by a lightweight stdlib HTTP server.
+- Health server config is env-based: `HEALTH_HOST` (default `0.0.0.0`), `HEALTH_PORT` (default `8080`, `0` disables).
+- Docker health checks now probe `http://127.0.0.1:${HEALTH_PORT}/health` instead of env-var presence checks.
+- Compose now exposes the health port and passes `HEALTH_HOST`/`HEALTH_PORT` into container env.
+- Added unit tests for health-port parsing and `/health`/404 behavior.

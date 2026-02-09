@@ -27,7 +27,8 @@ On startup, the bot:
 1. Loads `.env` values (including `DISCORD_TOKEN` and `OPENAI_API_KEY`).
 2. Validates and normalizes archive paths from `config.yaml`.
 3. Rebuilds the SQLite index if it is missing.
-4. Connects to Discord and starts message handling and scheduled digest loops.
+4. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`).
+5. Connects to Discord and starts message handling and scheduled digest loops.
 
 ## Quick Start (Compose)
 
@@ -36,6 +37,7 @@ On startup, the bot:
 3. Ensure `.env` contains:
    - `DISCORD_TOKEN=...`
    - `OPENAI_API_KEY=...`
+   - Optional: `HEALTH_PORT=8080` (or your preferred port)
 4. Start:
 
 ```sh
@@ -47,6 +49,27 @@ docker compose up -d --build
 ```sh
 docker compose logs -f squire-core
 ```
+
+6. Verify health endpoint:
+
+```sh
+curl http://<host>:<health-port>/health
+```
+
+This should return HTTP `200` with `{"status":"ok"}`.
+
+## Health Monitoring (Uptime Kuma)
+
+Squire is monitorable with a plain HTTP monitor, without mounting `/var/run/docker.sock`.
+
+- Monitor Type: HTTP(s)
+- URL: `http://<host-or-container-name>:<port>/health`
+- Expected status code: `200`
+
+Common targets:
+
+- Kuma in same Docker network: `http://squire-core:8080/health`
+- Kuma outside Docker network: `http://pi4:8080/health`
 
 ## Homelab Repo Integration
 
@@ -71,6 +94,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      HEALTH_HOST: "0.0.0.0"
+      HEALTH_PORT: "${HEALTH_PORT:-8080}"
+    ports:
+      - "${HEALTH_PORT:-8080}:${HEALTH_PORT:-8080}"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./config:/app/config:ro

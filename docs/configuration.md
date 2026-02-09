@@ -2,7 +2,13 @@
 
 ## Environment Variables
 
-Required or optional environment variables include `DISCORD_TOKEN`, `OPENAI_API_KEY`, and `GOOGLE_CALENDAR_CREDENTIALS` (optional).
+Required or optional environment variables include:
+
+- `DISCORD_TOKEN` (required)
+- `OPENAI_API_KEY` (required)
+- `GOOGLE_CALENDAR_CREDENTIALS` (optional)
+- `HEALTH_HOST` (optional, default `0.0.0.0`)
+- `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
 
 ## config.yaml
 
