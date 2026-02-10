@@ -3,8 +3,7 @@
 ## Target
 
 Squire is designed to be self-hosted and run continuously on a small server or personal machine using Docker Compose.
-The repository now includes a `Dockerfile` and a baseline `docker-compose.yml` suitable for Raspberry Pi 4
-(arm64) and x86 hosts.
+The repository now includes a `Dockerfile` and a baseline `docker-compose.yml` suitable for common arm64 and x86 hosts.
 
 ## Services
 
@@ -58,22 +57,25 @@ curl http://<host>:<health-port>/health
 
 This should return HTTP `200` with `{"status":"ok"}`.
 
-## Health Monitoring (Uptime Kuma)
+## Health Monitoring
 
-Squire is monitorable with a plain HTTP monitor, without mounting `/var/run/docker.sock`.
+Squire can be monitored with any HTTP-capable monitoring tool.
 
-- Monitor Type: HTTP(s)
-- URL: `http://<host-or-container-name>:<port>/health`
+Recommended check details:
+
+- URL: `http://<target-host>:<health-port>/health`
 - Expected status code: `200`
+- Response body: `{"status":"ok"}`
 
-Common targets:
+Common target examples:
 
-- Kuma in same Docker network: `http://squire-core:8080/health`
-- Kuma outside Docker network: `http://pi4:8080/health`
+- Repo default (`docker-compose.yml`): `http://squire-core:8080/health`
+- Same Docker network: `http://<container-name>:<health-port>/health`
+- From another machine/network: `http://<host-ip-or-dns>:<health-port>/health`
 
-## Homelab Repo Integration
+## External Compose Repo Integration
 
-If your homelab Compose files live in another repository, copy the `squire-core` service definition and set:
+If your Docker Compose files live in another repository, copy the `squire-core` service definition and set:
 
 - `build.context` to the checked-out Squire repo path on the host, or
 - use a prebuilt image tag if you publish one.
@@ -105,7 +107,7 @@ services:
       - ./archive:/data/archive
 ```
 
-Prefer pinned tags (`vX.Y.Z`) for homelab stability. Use `latest` only if you explicitly want automatic upgrades.
+Prefer pinned tags (`vX.Y.Z`) for deployment stability. Use `latest` only if you explicitly want automatic upgrades.
 
 ## Initialization Helper
 

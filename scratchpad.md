@@ -150,3 +150,8 @@ Session notes (2026-02-09, uptime monitoring):
 - Docker health checks now probe `http://127.0.0.1:${HEALTH_PORT}/health` instead of env-var presence checks.
 - Compose now exposes the health port and passes `HEALTH_HOST`/`HEALTH_PORT` into container env.
 - Added unit tests for health-port parsing and `/health`/404 behavior.
+
+Session notes (2026-02-10, docs genericity cleanup):
+- Removed setup-specific monitoring/deployment references from public docs (for example `pi4`, Raspberry Pi, and Uptime Kuma-specific wording).
+- Standardized health monitoring guidance around generic HTTP checks for `GET /health` with placeholder host/container values.
+- Replaced region-specific timezone example (`America/Los_Angeles`) with a neutral IANA example (`Etc/UTC`) in docs/templates.
