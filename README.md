@@ -42,7 +42,7 @@ Optional prefixes when capturing:
 
 ## Run with Docker (Recommended)
 
-### Prerequisites
+### Docker Prerequisites
 
 - Docker and Docker Compose
 - A Discord bot token
@@ -113,7 +113,7 @@ Common target examples:
 
 ## Run from Source
 
-### Prerequisites
+### Source Prerequisites
 
 - Python 3.11+
 - A Discord bot token
