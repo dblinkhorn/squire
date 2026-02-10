@@ -102,18 +102,14 @@ Quick check:
 curl http://<host>:<health-port>/health
 ```
 
-### Uptime Kuma setup
+You can point any HTTP-capable monitoring tool at this endpoint.
+Typical checks should expect status `200` and treat any non-`200` response (or connection failure) as unhealthy.
 
-Use an HTTP(s) monitor:
+Common target examples:
 
-- Monitor Type: HTTP(s)
-- URL: `http://<host-or-container-name>:<port>/health`
-- Expected status code: `200`
-
-Examples:
-
-- Same Docker network as Squire: `http://squire-core:8080/health`
-- External to Docker network: `http://pi4:8080/health`
+- Repo default (`docker-compose.yml`): `http://squire-core:8080/health`
+- Same Docker network: `http://<container-name>:<health-port>/health`
+- From another machine/network: `http://<host-ip-or-dns>:<health-port>/health`
 
 ## Run from Source
 
