@@ -6,6 +6,7 @@ import logging
 import os
 import shlex
 import shutil
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -153,6 +154,36 @@ class _ArchiveClearConfirmation:
 
 
 _ARCHIVE_CLEAR_CONFIRMATIONS: dict[tuple[int, int], _ArchiveClearConfirmation] = {}
+
+
+class _MaxLevelFilter(logging.Filter):
+    def __init__(self, max_level: int) -> None:
+        super().__init__()
+        self._max_level = max_level
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno < self._max_level
+
+
+def _configure_logging() -> None:
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+
+    stdout_handler = logging.StreamHandler(stream=sys.stdout)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.addFilter(_MaxLevelFilter(logging.ERROR))
+    stdout_handler.setFormatter(formatter)
+
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.setLevel(logging.ERROR)
+    stderr_handler.setFormatter(formatter)
+
+    root.addHandler(stdout_handler)
+    root.addHandler(stderr_handler)
 
 
 class _HealthRequestHandler(BaseHTTPRequestHandler):
@@ -1686,7 +1717,7 @@ class SquireBot(discord.Client):
 
 def main() -> None:
     load_dotenv()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _configure_logging()
     config_path = Path("config.yaml")
     config = load_config(config_path)
     try:
