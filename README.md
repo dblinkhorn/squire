@@ -13,7 +13,7 @@ You send quick notes in a DM, and Squire turns them into structured notes you ca
 - Lets you search and inspect notes with simple commands
 - Stores your data on your own machine
 
-## How It Works (Simple View)
+## How It Works
 
 You send a message to your Squire Discord bot, and Squire saves the original message first.
 It then uses AI to extract useful fields (title, status, due date, and similar details), writes the result as readable Markdown files in your archive folder, and updates a local SQLite index so search commands stay fast.

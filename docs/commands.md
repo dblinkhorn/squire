@@ -18,6 +18,8 @@ Prefixes:
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest `!recent` or `!find`
 result set. Manual pull commands (`!recent`, `!find`, `!show`) include IDs to support intentional follow-up edits.
 Scheduled/on-demand digest commands (`!status`, `!weekly`) remain list-first and avoid IDs by default.
+Scheduled/on-demand digest commands are currently read-only; explicit `done`/`edit` action buttons are deferred and
+text commands remain the mutation path.
 `!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
 [field=value…]` modifies frontmatter fields from a strict per-type allowlist with value validation (for example enum-only status values and ISO date/time checks). For values with spaces, quote them (for example `next_action="Call dentist tomorrow at 4pm"`). `!confirm <pending_id>` applies a pending action,
 and `!cancel <pending_id>` dismisses it. `!clear-archive` starts a destructive archive reset flow and requires a separate `DELETE` confirmation message within a short TTL before data is removed.

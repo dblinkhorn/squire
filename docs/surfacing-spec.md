@@ -38,7 +38,10 @@ Rules:
 - no suggested next action section
 - no object IDs in output
 - each line shows concise title + due/status context
-- if section is empty, show `None`
+- include digest-level summary counts (overdue/today/soon/projects/people)
+- use lightweight, consistent section emoji prefixes for scanability
+- use human-readable dates with near-term relative labels (`today`, `tomorrow`, `yesterday`, `in N days`, `N days ago`)
+- if section is empty, show `All clear`
 
 ### Weekly Review
 
@@ -55,6 +58,9 @@ Sections:
 Rules:
 - no recommendations; list-only output
 - no object IDs in output
+- include a weekly summary count line
+- use the same section emoji and human-readable date style as daily digest
+- if section is empty, show `All clear`
 
 ## Pull Surfacing
 
@@ -82,6 +88,12 @@ For list views (`!status`, `!recent`, `!find`):
 - each row is plain text with compact metadata
 - `!recent` and `!find` include canonical IDs
 - `!status` follows digest no-ID behavior by default
+
+Daily/weekly readability format:
+- header includes a digest/review icon and human-readable date
+- summary count line appears under the header
+- section rows use bullet markers
+- dates prioritize readability while retaining precision
 
 For detail view (`!show <number>`):
 - title
@@ -146,3 +158,4 @@ Notes:
 
 - richer filtering (`!due`, tags, types)
 - optional LLM summary mode behind explicit config flag
+- explicit digest actions for `done` and `edit` via Discord components (with text-command fallback)
