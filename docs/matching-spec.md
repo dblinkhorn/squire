@@ -40,9 +40,26 @@ Use multiple signals to build a better shortlist before decisioning:
    - conversation affinity boost (recently touched object IDs in current DM/thread)
 3. Optional semantic retrieval (phase 2):
    - local embedding index over canonical objects (derived artifact, rebuildable)
-   - fuse lexical and semantic ranks with weighted reciprocal rank fusion.
+   - fuse lexical and semantic signals with deterministic weighted scoring.
 
-Return top `candidate_limit` after de-duplication and scoring.
+Deterministic scoring model:
+
+- Retrieve an expanded pool per query using `candidate_pool = min(max_candidate_pool, candidate_limit * candidate_multiplier)`.
+- Lexical normalization uses:
+  - `lexical_score = 1 / (1 + max(0, bm25_rank))`
+- Normalize remaining component signals to 0..1 and compute:
+  - `final_score = lexical_weight*lexical + recency_weight*recency + affinity_weight*affinity + semantic_weight*semantic`
+- Normalize configured weights to sum to `1.0` over active signals at runtime.
+- De-duplicate by object ID, keep highest-scoring row, then return top `candidate_limit`.
+
+Notes:
+- In phase 1, `semantic_weight` remains `0.0`, so behavior is lexical + deterministic boosts only.
+- This design intentionally keeps retrieval deterministic and inspectable for easier threshold tuning.
+- Affinity defaults for phase 1:
+  - track recently touched IDs per DM/thread
+  - keep the last `20` IDs
+  - apply affinity decay over `7 days`
+  - cap affinity contribution to a small additive boost (for example `<= 0.15`) so affinity helps tie-breaks but cannot dominate lexical relevance
 
 ### 2) Deterministic Confidence Gate Before Auto-Apply
 
@@ -59,12 +76,65 @@ If any condition fails, create a pending action (confirmation required).
 
 Write a derived matching trace per event (JSON) with:
 
-- retrieval queries used
-- shortlisted candidates and component scores
-- final fused ranking
-- gating outcome (auto_apply/needs_confirmation/create)
+- `schema_version`
+- `raw_event_id`
+- `object_type`
+- `timestamp`
+- `queries` (retrieval queries used)
+- `retrieval_mode` (`hybrid`, `lexical_only`, `semantic_only`, `none`)
+- `fallback_reason` (optional; populated when degraded)
+- `candidate_pool`:
+  - `before_dedupe`
+  - `after_dedupe`
+  - `returned_k`
+- `weights` (normalized values used for this run):
+  - `lexical`
+  - `recency`
+  - `affinity`
+  - `semantic`
+- `candidates` (shortlisted rows):
+  - `id`
+  - `title`
+  - `component_scores` (`lexical`, `recency`, `affinity`, `semantic`)
+  - `final_score`
+- `ranking`:
+  - ordered IDs/scores
+  - `top_score`
+  - `second_score`
+  - `margin`
+- `gate`:
+  - `decision_confidence`
+  - `auto_min_score`
+  - `auto_min_margin`
+  - `outcome` (`auto_apply`, `needs_confirmation`, `create`)
 
 This keeps matching behavior debuggable and auditable.
+
+### 4) Retrieval Resilience and Index Freshness
+
+Matching should degrade gracefully and never hard-fail ingestion because one retrieval path is unavailable.
+
+Fallback behavior:
+
+- If semantic retrieval is unavailable, continue with lexical + structured boosts.
+- If lexical retrieval is unavailable, continue with semantic + structured boosts.
+- If both retrieval paths are unavailable, never auto-apply:
+  - freeform capture path: fallback to `create` (non-blocking capture)
+  - explicit mutation command path (`!append`, `!fix`, `!done`): fail with actionable error; do not create implicitly
+- Always record degraded mode in the matching trace artifact.
+
+Semantic index freshness/versioning:
+
+- Persist semantic index metadata including:
+  - `embedding_provider`
+  - `embedding_model`
+  - `chunk_size`
+  - `chunk_overlap`
+  - `index_schema_version`
+- Trigger full semantic reindex when any metadata value changes.
+- Trigger incremental/background sync on canonical object writes.
+- On startup, run a background sync check and avoid blocking normal command handling.
+- Queries should use the last successful index snapshot while background sync runs.
 
 ## Timezone & Datetime Handling
 
@@ -88,6 +158,11 @@ matching:
   recency_weight: 0.15
   affinity_weight: 0.25
   semantic_weight: 0.0
+  candidate_multiplier: 4
+  max_candidate_pool: 20
+  affinity_recent_ids_per_thread: 20
+  affinity_ttl_days: 7
+  affinity_max_boost: 0.15
   auto_min_score: 0.55
   auto_min_margin: 0.20
   candidate_limit: 5
@@ -95,13 +170,15 @@ matching:
 
 Notes:
 - `semantic_weight` stays `0.0` until semantic index is implemented.
-- `candidate_limit` here applies to retrieval; decision layer may still cap final list separately.
+- `candidate_limit` controls post-fusion shortlist size; `candidate_multiplier` and `max_candidate_pool` control pre-fusion recall depth.
+- Weight values are normalized at runtime across active signals.
 
 ## Data/Schema Changes
 
 - No canonical schema changes required.
 - Add derived schema for matching trace artifact (for example `config/schemas/matching_trace_v1.json`).
 - Extend index (or helper cache) to expose fields needed for structured boosts (for example `next_action`, `updated_at` already present; add lightweight affinity cache keyed by channel/thread).
+- Add semantic index metadata storage (provider/model/chunking/schema version) to drive safe rebuild triggers.
 
 ## Evaluation Plan
 
@@ -130,9 +207,15 @@ Track:
 ## Rollout Plan
 
 1. Phase 1 (deterministic improvements):
-   - structured boosts, affinity boost, tighter auto-apply gate, matching trace artifact.
+   - explicit weighted fusion over lexical + deterministic boosts
+   - candidate pool expansion (`candidate_multiplier`) and de-dup top-K
+   - tighter auto-apply gate
+   - richer matching trace artifact (component scores + margins + mode/fallback)
 2. Phase 2 (optional semantic retrieval):
-   - local embeddings index, rank fusion, threshold retune.
+   - local embeddings index
+   - semantic signal added to fusion (`semantic_weight > 0`)
+   - index freshness/versioning + background sync/rebuild flow
+   - threshold retune
 3. Phase 3:
    - feedback-driven tuning using confirm/cancel/fix outcomes.
 
