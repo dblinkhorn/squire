@@ -27,3 +27,9 @@
   emoji-prefixed headers, summary count lines, `All clear` empty-state rows, and human-readable dates with near-term relative labels.
 - Kept surfacing behavior deterministic and list-first; no ranking/selection logic changes.
 - Deferred explicit done/edit UI actions to a later phase; existing text commands remain the mutation path.
+
+## Matching Decisions (2026-02-14)
+- Matching spec now locks lexical normalization to `1 / (1 + max(0, bm25_rank))`.
+- Phase 1 affinity defaults: last 20 touched IDs per DM/thread, 7-day decay TTL, capped additive boost (`<= 0.15`).
+- Matching trace artifact shape is explicitly documented (`schema_version`, queries, mode/fallback, pool stats, weights, per-candidate component scores, ranking margins, gate outcome).
+- Degraded retrieval behavior: never auto-apply when retrieval is unavailable; freeform capture falls back to create, explicit mutation commands fail with actionable error.
