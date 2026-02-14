@@ -21,3 +21,9 @@
 - Tracked working files: `.agent/plan.md` and `.agent/context.md`.
 - Local-only session notes: `.agent/scratchpad.md`.
 - Deprecated workflow artifacts: `.sop/`, `.ralph/`, `PROMPT.md`, `ralph.yml`.
+
+## Recent Changes (2026-02-10)
+- Implemented surfacing readability Phase 1 in digest/review rendering:
+  emoji-prefixed headers, summary count lines, `All clear` empty-state rows, and human-readable dates with near-term relative labels.
+- Kept surfacing behavior deterministic and list-first; no ranking/selection logic changes.
+- Deferred explicit done/edit UI actions to a later phase; existing text commands remain the mutation path.

@@ -22,8 +22,17 @@ class DailyDigest:
     sections: list[DigestSection]
 
     def render(self) -> str:
-        header = f"Daily digest - {self.generated_at:%Y-%m-%d} ({self.generated_at:%A})"
-        return _render_sectioned_message(header, self.sections)
+        header_date = _format_human_date(self.generated_at.date(), self.generated_at.date(), include_relative=False)
+        header = f"📌 Daily digest · {header_date}"
+        summary = (
+            "⚖️ "
+            f"Overdue {_section_line_count(self.sections, 'Admin overdue')} | "
+            f"Today {_section_line_count(self.sections, 'Admin due today')} | "
+            f"Soon {_section_line_count(self.sections, 'Admin due soon')} | "
+            f"Projects {_section_line_count(self.sections, 'Projects needing attention')} | "
+            f"People {_section_line_count(self.sections, 'People to follow up')}"
+        )
+        return _render_sectioned_message(header, self.sections, summary=summary)
 
 
 @dataclass(frozen=True)
@@ -32,8 +41,18 @@ class WeeklyReview:
     sections: list[DigestSection]
 
     def render(self) -> str:
-        header = f"Weekly review - {self.generated_at:%Y-%m-%d} ({self.generated_at:%A})"
-        return _render_sectioned_message(header, self.sections)
+        header_date = _format_human_date(self.generated_at.date(), self.generated_at.date(), include_relative=False)
+        header = f"🗓️ Weekly review · {header_date}"
+        summary_parts = [
+            f"Changed {_section_line_count(self.sections, 'Recently changed notes')}",
+            f"Unscheduled {_section_line_count(self.sections, 'Open admin without due dates')}",
+            f"Projects {_section_line_count(self.sections, 'Blocked or stale projects')}",
+            f"People {_section_line_count(self.sections, 'People overdue for contact')}",
+        ]
+        if any(section.title == "Ideas updated recently" for section in self.sections):
+            summary_parts.append(f"Ideas {_section_line_count(self.sections, 'Ideas updated recently')}")
+        summary = "⚖️ " + " | ".join(summary_parts)
+        return _render_sectioned_message(header, self.sections, summary=summary)
 
 
 @dataclass(frozen=True)
@@ -110,6 +129,19 @@ _WEEKLY_RECENT_LIMIT = 10
 _WEEKLY_UNSCHEDULED_LIMIT = 10
 _WEEKLY_PEOPLE_OVERDUE_LIMIT = 10
 _WEEKLY_IDEAS_LIMIT = 5
+_RELATIVE_DAY_WINDOW = 6
+_SECTION_EMOJI = {
+    "Admin overdue": "🔴",
+    "Admin due today": "🟠",
+    "Admin due soon": "🟡",
+    "Projects needing attention": "🧱",
+    "People to follow up": "🤝",
+    "Recently changed notes": "📝",
+    "Open admin without due dates": "📂",
+    "Blocked or stale projects": "🧱",
+    "People overdue for contact": "🤝",
+    "Ideas updated recently": "💡",
+}
 
 
 def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
@@ -201,16 +233,18 @@ def _min_datetime(tz: tzinfo) -> datetime:
     return datetime.min.replace(tzinfo=tz)
 
 
-def _render_sectioned_message(header: str, sections: list[DigestSection]) -> str:
+def _render_sectioned_message(header: str, sections: list[DigestSection], *, summary: str | None = None) -> str:
     lines = [header]
+    if summary:
+        lines.append(summary)
     for section in sections:
         lines.append("")
-        lines.append(section.title)
+        lines.append(_format_section_title(section.title))
         if section.lines:
             for line in section.lines:
-                lines.append(f"- {line}")
+                lines.append(f"• {line}")
         else:
-            lines.append("- None")
+            lines.append("• All clear")
     return "\n".join(lines)
 
 
@@ -243,6 +277,65 @@ def _format_title(title: str, object_id: str, include_ids: bool) -> str:
     if include_ids:
         return f"{title} ({object_id})"
     return title
+
+
+def _section_line_count(sections: list[DigestSection], title: str) -> int:
+    for section in sections:
+        if section.title == title:
+            return len(section.lines)
+    return 0
+
+
+def _format_section_title(title: str) -> str:
+    emoji = _SECTION_EMOJI.get(title)
+    if emoji:
+        return f"{emoji} {title}"
+    return title
+
+
+def _relative_date_label(target: date, reference: date) -> str | None:
+    delta = (target - reference).days
+    if delta == 0:
+        return "today"
+    if delta == 1:
+        return "tomorrow"
+    if delta == -1:
+        return "yesterday"
+    if 1 < delta <= _RELATIVE_DAY_WINDOW:
+        return f"in {delta} days"
+    if -_RELATIVE_DAY_WINDOW <= delta < -1:
+        return f"{abs(delta)} days ago"
+    return None
+
+
+def _format_human_date(target: date, reference: date, *, include_relative: bool = True) -> str:
+    base = target.strftime("%a %b ") + str(target.day)
+    if target.year != reference.year:
+        base = f"{base}, {target.year}"
+    if not include_relative:
+        return base
+    relative = _relative_date_label(target, reference)
+    if relative:
+        return f"{base} ({relative})"
+    return base
+
+
+def _format_human_time(target: datetime) -> str:
+    hour = target.hour % 12
+    if hour == 0:
+        hour = 12
+    suffix = "AM" if target.hour < 12 else "PM"
+    return f"{hour}:{target.minute:02d} {suffix}"
+
+
+def _format_human_datetime(target: datetime, reference: date, *, include_relative: bool = True) -> str:
+    rendered = f"{_format_human_date(target.date(), reference, include_relative=False)} at {_format_human_time(target)}"
+    if not include_relative:
+        return rendered
+    relative = _relative_date_label(target.date(), reference)
+    if relative:
+        return f"{rendered} ({relative})"
+    return rendered
 
 
 def _load_items(objects_root: str | Path) -> list[CanonicalItem]:
@@ -376,30 +469,37 @@ def _due_bucket(entry: AdminEntry, now: datetime, due_soon_days: int) -> str | N
     return None
 
 
-def _format_due(entry: AdminEntry) -> str:
+def _format_due(entry: AdminEntry, *, reference_date: date) -> str:
     if entry.due_at:
-        return entry.due_at.strftime("%Y-%m-%d %H:%M")
+        return _format_human_datetime(entry.due_at, reference_date)
     if entry.due_date:
-        return entry.due_date.isoformat()
-    return "unscheduled"
+        return _format_human_date(entry.due_date, reference_date)
+    return "No due date"
 
 
-def _format_admin_due_lines(entries: list[AdminEntry], include_ids: bool) -> list[str]:
+def _format_admin_due_lines(entries: list[AdminEntry], include_ids: bool, *, reference_date: date) -> list[str]:
     lines: list[str] = []
     for entry in entries:
         title = _format_title(entry.title, entry.object_id, include_ids)
-        lines.append(f"{title} - due {_format_due(entry)}")
+        lines.append(f"{title} - due {_format_due(entry, reference_date=reference_date)}")
     return lines
 
 
-def _format_people_lines(entries: list[PeopleEntry], cutoff: date, tz: tzinfo, include_ids: bool) -> list[str]:
+def _format_people_lines(
+    entries: list[PeopleEntry],
+    cutoff: date,
+    tz: tzinfo,
+    include_ids: bool,
+    *,
+    reference_date: date,
+) -> list[str]:
     due_entries = [entry for entry in entries if entry.next_contact and entry.next_contact <= cutoff]
     min_dt = _min_datetime(tz)
     due_entries.sort(key=lambda entry: (entry.next_contact, entry.updated_at or min_dt))
     lines: list[str] = []
     for entry in due_entries:
         title = _format_title(entry.name, entry.object_id, include_ids)
-        lines.append(f"{title} - next contact {entry.next_contact.isoformat()}")
+        lines.append(f"{title} - next contact {_format_human_date(entry.next_contact, reference_date)}")
     return lines
 
 
@@ -443,7 +543,7 @@ def _build_project_attention_lines(
         if len(lines) >= limit:
             break
         title = _format_title(item.title, item.object_id, include_ids)
-        updated = item.updated_at.date().isoformat() if item.updated_at else "unknown"
+        updated = _format_human_date(item.updated_at.date(), now.date(), include_relative=False) if item.updated_at else "unknown"
         _add(f"{title} - stale (last updated {updated})", item.object_id)
 
     return lines
@@ -470,7 +570,9 @@ def _build_recently_changed_lines(
     for item in candidates[:limit]:
         title = _format_title(item.title, item.object_id, include_ids)
         updated = _object_updated_at(item, tz)
-        lines.append(f"{title} - {_render_type_label(item.object_type)}, updated {updated:%Y-%m-%d}")
+        lines.append(
+            f"{title} - {_render_type_label(item.object_type)}, updated {_format_human_date(updated.date(), now.date())}"
+        )
     return lines
 
 
@@ -511,7 +613,7 @@ def _build_overdue_people_lines(
     lines: list[str] = []
     for entry in overdue[:limit]:
         title = _format_title(entry.name, entry.object_id, include_ids)
-        lines.append(f"{title} - next contact {entry.next_contact.isoformat()}")
+        lines.append(f"{title} - next contact {_format_human_date(entry.next_contact, today)}")
     return lines
 
 
@@ -538,7 +640,7 @@ def _build_recent_idea_lines(
     for item in ideas[:limit]:
         title = _format_title(item.title, item.object_id, include_ids)
         updated = _object_updated_at(item, tz)
-        lines.append(f"{title} - updated {updated:%Y-%m-%d}")
+        lines.append(f"{title} - updated {_format_human_date(updated.date(), now.date())}")
     return lines
 
 
@@ -563,7 +665,7 @@ def _render_type_label(object_type: str) -> str:
     return mapping.get(object_type, object_type)
 
 
-def _render_list_row(index: int, item: CanonicalItem, *, include_ids: bool, tz: tzinfo) -> str:
+def _render_list_row(index: int, item: CanonicalItem, *, include_ids: bool, tz: tzinfo, reference_date: date) -> str:
     title = _format_title(item.title, item.object_id, include_ids)
     parts: list[str] = [_render_type_label(item.object_type)]
 
@@ -571,16 +673,23 @@ def _render_list_row(index: int, item: CanonicalItem, *, include_ids: bool, tz: 
     if isinstance(status, str) and status.strip():
         parts.append(status.strip())
 
-    due_at = item.frontmatter.get("due_at")
-    due_date = item.frontmatter.get("due_date")
-    if isinstance(due_at, str) and due_at.strip():
-        parts.append(f"due {due_at.strip()}")
-    elif isinstance(due_date, str) and due_date.strip():
-        parts.append(f"due {due_date.strip()}")
+    due_at = _coerce_datetime(item.frontmatter.get("due_at"), tz)
+    due_date = _coerce_date(item.frontmatter.get("due_date"))
+    if due_at:
+        parts.append(f"due {_format_human_datetime(due_at, reference_date)}")
+    elif due_date:
+        parts.append(f"due {_format_human_date(due_date, reference_date)}")
+    else:
+        due_at_raw = item.frontmatter.get("due_at")
+        due_date_raw = item.frontmatter.get("due_date")
+        if isinstance(due_at_raw, str) and due_at_raw.strip():
+            parts.append(f"due {due_at_raw.strip()}")
+        elif isinstance(due_date_raw, str) and due_date_raw.strip():
+            parts.append(f"due {due_date_raw.strip()}")
 
     updated = _object_updated_at(item, tz)
     if updated > _min_datetime(tz):
-        parts.append(f"updated {updated:%Y-%m-%d}")
+        parts.append(f"updated {_format_human_date(updated.date(), reference_date, include_relative=False)}")
 
     return f"{index}. {title} - {', '.join(parts)}"
 
@@ -592,8 +701,9 @@ def _render_find_row(
     *,
     include_ids: bool,
     tz: tzinfo,
+    reference_date: date,
 ) -> str:
-    base = _render_list_row(index, item, include_ids=include_ids, tz=tz)
+    base = _render_list_row(index, item, include_ids=include_ids, tz=tz, reference_date=reference_date)
     cleaned_snippet = " ".join(snippet.split())
     if not cleaned_snippet:
         return base
@@ -652,9 +762,21 @@ def build_daily_digest(
             ),
         )
 
-    overdue_lines = _format_admin_due_lines(_sort_due(overdue), surfacing.show_ids_daily_weekly)
-    today_lines = _format_admin_due_lines(_sort_due(today), surfacing.show_ids_daily_weekly)
-    soon_lines = _format_admin_due_lines(_sort_due(soon), surfacing.show_ids_daily_weekly)
+    overdue_lines = _format_admin_due_lines(
+        _sort_due(overdue),
+        surfacing.show_ids_daily_weekly,
+        reference_date=now.date(),
+    )
+    today_lines = _format_admin_due_lines(
+        _sort_due(today),
+        surfacing.show_ids_daily_weekly,
+        reference_date=now.date(),
+    )
+    soon_lines = _format_admin_due_lines(
+        _sort_due(soon),
+        surfacing.show_ids_daily_weekly,
+        reference_date=now.date(),
+    )
     project_lines = _build_project_attention_lines(
         project_items,
         now=now,
@@ -664,7 +786,13 @@ def build_daily_digest(
     )
 
     people_cutoff = now.date() + timedelta(days=surfacing.people_next_contact_days)
-    people_lines = _format_people_lines(people_items, people_cutoff, tz, surfacing.show_ids_daily_weekly)
+    people_lines = _format_people_lines(
+        people_items,
+        people_cutoff,
+        tz,
+        surfacing.show_ids_daily_weekly,
+        reference_date=now.date(),
+    )
 
     sections = [
         DigestSection(title="Admin overdue", lines=overdue_lines),
@@ -757,9 +885,10 @@ def build_recent_list(
     items = [item for item in _load_items(objects_root) if not _is_archived(item.frontmatter.get("archived"))]
     items.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
     selected = items[:effective_limit]
+    reference_date = datetime.now(tz).date()
 
     lines = [
-        _render_list_row(index + 1, item, include_ids=True, tz=tz)
+        _render_list_row(index + 1, item, include_ids=True, tz=tz, reference_date=reference_date)
         for index, item in enumerate(selected)
     ]
     object_ids = [item.object_id for item in selected]
@@ -791,6 +920,7 @@ def build_find_list(
 
     rows: list[str] = []
     object_ids: list[str] = []
+    reference_date = datetime.now(tz).date()
     for candidate in candidates:
         path = find_object_path(objects_root, candidate.object_id)
         if not path:
@@ -820,6 +950,7 @@ def build_find_list(
                 candidate.snippet,
                 include_ids=True,
                 tz=tz,
+                reference_date=reference_date,
             )
         )
         if len(rows) >= effective_limit:
