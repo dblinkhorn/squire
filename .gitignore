@@ -26,6 +26,7 @@ config.yaml
 .agent/*
 !.agent/plan.md
 !.agent/context.md
+!.agent/future-plans.md
 
 # Legacy orchestration artifacts
 .ralph/

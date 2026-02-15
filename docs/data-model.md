@@ -2,7 +2,9 @@
 
 ## Canonical Definition
 
-Canonical objects are the current truthy records used for querying, surfacing, and maintenance. They are human-readable markdown with YAML frontmatter and an append-only body. Canonical objects are the only mutable artifacts; raw and derived artifacts are immutable and versioned.
+Canonical objects are the current source-of-truth records used for search, surfacing, and maintenance. They are
+human-readable markdown with YAML frontmatter and a durable note body. Canonical objects are the only mutable artifacts;
+raw and derived artifacts are immutable and versioned.
 
 ## Raw Event (immutable)
 
@@ -48,4 +50,12 @@ Admin items are tasks and commitments that need completion (including calendarab
 
 ## SQLite Index (derived)
 
-The SQLite index is derived and rebuildable. Core tables include objects, FTS over title plus body, links, raw_events, and derivations.
+The SQLite index is derived and rebuildable.
+
+Current tables:
+- `objects`: canonical object rows used for filtering/ranking metadata.
+- `objects_fts`: FTS5 virtual table over title/body for lexical search.
+
+When semantic matching is enabled, additional derived semantic tables are maintained in the same SQLite database:
+- `semantic_objects`
+- `semantic_meta`

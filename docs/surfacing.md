@@ -18,10 +18,13 @@ Pull surfacing is driven by contextual queries via commands and is designed for 
 
 ## Design Rules
 
-Outputs should be small and predictable. Rules come first and LLMs come second. The system never invents data and always keeps outputs actionable.
+Outputs should be small and predictable. The system never invents data and always keeps outputs actionable.
 
-LLM-assisted surfacing uses structured inputs and fixed response formats to keep outputs consistent and auditable.
-By default, surfaced list output omits object IDs and uses numbered result lists.
+Current surfacing output is deterministic and local-data driven (no LLM formatting pass in the surfacing layer).
+
+ID behavior:
+- scheduled digests/reviews omit IDs by default (configurable via `surfacing.output.show_ids_daily_weekly`)
+- manual pull lists (`!recent`, `!find`, `!show`) include IDs
 
 ## Configuration Defaults
 

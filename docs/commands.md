@@ -37,21 +37,15 @@ The following commands are currently implemented:
 - `!cancel <pending_id>`
 - `!clear-archive` (requires follow-up `DELETE` confirmation)
 
-Tags are optional user-defined categories. Users can include inline hashtags (for example, `#work`) or update tags later with `!fix`. The system can support queries like `!find tag:work` and a summary command (for example, `!tags`) to list tags and counts.
-
-Squire can also interpret natural-language queries via the LLM, translate them into structured query payloads, and then execute them locally against the SQLite index. Invalid or ambiguous queries trigger clarification instead of execution.
-
-## Nice-to-Have (v1.1+)
-
-Planned follow-ons include `!due [days]`, `!archive`, `!help`, and `!rebuild-index` for proposed calendar actions.
-Future maintenance UX ideas include Discord component shortcuts on surfaced lists (for example a `Mark Items Done` button
-that opens a multi-select menu for bulk completion with confirm/undo safeguards).
+Tags are optional user-defined categories. Users can include inline hashtags (for example, `#work`) or update tags
+later with `!fix`.
 
 Commands never generate new canonical objects unless explicitly stated.
 
-## Update & Append Strategy (Planned)
+## Update & Append Strategy
 
-Squire aims to keep capture friction low while avoiding accidental mutations. The default behavior is create-on-capture with selective updates/append when confidence is high or the user confirms.
+Squire keeps capture friction low while avoiding accidental mutations. The default behavior is create-on-capture with
+selective update/append when confidence is high or the user confirms.
 
 Core principles:
 - Default to create unless the target is a uniquely identifiable existing record.
@@ -65,7 +59,7 @@ Retrieval + decision flow:
 4) Apply automatically only when confidence is high and the match is unique; otherwise ask the user.
 
 Discord interaction patterns:
-- If a single strong match is found, reply with a confirmation button (e.g., “Append to Alex Chen?”).
+- If a single strong match is found and gates pass, auto-apply and include a correction shortcut.
 - If multiple candidates exist, present a dropdown to choose the target.
 - For multi-entity notes (e.g., “Met A and B”), propose a multi-update and confirm in one step.
 - If the user is slow to respond, the system should store a pending action and allow `!confirm <id>` or `!cancel <id>` later.

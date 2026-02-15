@@ -13,6 +13,14 @@ The system runs as a single deployable service (squire-core) with modular intern
 Raw input is immutable, derived interpretations are versioned, canonical state is repairable, and the index can be rebuilt at any time. Canonical objects are the only mutable artifacts and are treated as the source of truth for surfacing and queries.
 Canonical objects record source_event_ids so any item can be traced back to the raw events that created or modified it.
 
-## Update/Append Pipeline (Planned)
+## Update/Append Pipeline
 
-For inferred updates, the system will retrieve candidate objects, let the LLM propose an update or append, then create a pending action that requires user confirmation before applying changes.
+For inferred updates, the system retrieves candidate objects from the local index, asks the decision prompt to propose
+create/update/append operations, then applies deterministic gates before mutation:
+
+- auto-apply only when confidence and matching gates pass for a single target
+- create a pending action for confirmation when confidence is moderate or ambiguity remains
+- fall back to create in decision routing when update/append confidence is low
+
+Pending actions can be confirmed/cancelled via Discord UI controls or text commands. Decision and matching trace
+artifacts are persisted for auditability.

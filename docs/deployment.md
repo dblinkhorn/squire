@@ -26,8 +26,9 @@ On startup, the bot:
 1. Loads `.env` values (including `DISCORD_TOKEN` and `OPENAI_API_KEY`).
 2. Validates and normalizes archive paths from `config.yaml`.
 3. Rebuilds the SQLite index if it is missing.
-4. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`).
-5. Connects to Discord and starts message handling and scheduled digest loops.
+4. If semantic matching is enabled, runs semantic index sync against the same SQLite database.
+5. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
+6. Connects to Discord and starts message handling and scheduled digest loops.
 
 ## Quick Start (Compose)
 
@@ -117,7 +118,3 @@ directories. For Docker deployments, you can run initialization directly on the 
 ```sh
 python -m squire_core.cli_init --archive-root /absolute/path/to/archive --no-git
 ```
-
-## Archive Backup (Planned)
-
-GitHub backup for the archive repo is planned but not implemented yet. The intent is to optionally create a private GitHub repo and push the local archive as a remote backup.

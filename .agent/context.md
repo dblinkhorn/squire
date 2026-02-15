@@ -13,7 +13,7 @@
 
 ## Active Roadmap Pointers
 - Current top implementation priority: matching reliability improvements in `docs/matching-spec.md`.
-- Working roadmap: `docs/implementation-plan.md`.
+- High-level future ideas: `.agent/future-plans.md`.
 - Command/config contracts: `docs/commands.md` and `docs/configuration.md`.
 
 ## AI Workflow Conventions
@@ -79,3 +79,23 @@
 - Resolved v1 decisions: literal row numbering, include all surfaced types, and return confirmation-only (no auto re-render).
 - Resolved UX decision: add concise command tips to `!recent`, `!find`, `!status`, and `!weekly` outputs; include `!recent N` max-50 reminder.
 - Added future maintenance UX direction: Discord component-based bulk done flow (`Mark Items Done` button + multi-select + confirm, with optional undo) in `docs/numbered-mutations-spec.md` and summarized in `docs/commands.md`.
+
+## Configuration Audit (2026-02-15)
+- Synced config docs to runtime behavior:
+  - removed unimplemented `GOOGLE_CALENDAR_CREDENTIALS` and `querying.*` references from config docs/template.
+  - added missing implemented keys: `llm.interpreter_model`, `confidence.create_threshold`, and `surfacing.ideas.weekly_review`.
+- `config.yaml.example` now omits the unused `querying` block to match current runtime parsing.
+
+## Docs Accuracy Audit (2026-02-15)
+- Updated runtime-facing docs to remove shipped-vs-planned drift:
+  - `docs/architecture.md`: update/append pipeline now documented as implemented.
+  - `docs/commands.md`: removed unimplemented NL-query/tag command claims; updated update/append section label.
+  - `docs/data-model.md`: SQLite table descriptions now match actual index + semantic tables.
+  - `docs/modules.md`: removed unsupported claims (single-user gate, provider registry, git-commit semantics).
+  - `docs/querying.md`: rewritten to reflect lexical `!find`/`!show` current behavior; LLM querying marked planned.
+  - `docs/surfacing.md`: removed LLM-assisted surfacing wording from current behavior.
+  - `docs/calendar.md` and `docs/extensibility.md`: explicitly marked planned/future.
+  - `docs/deployment.md`: startup sequence now includes semantic index sync behavior.
+- Policy update:
+  - runtime/reference docs should describe implemented behavior only.
+  - planned/future work should live in working docs (`.agent/context.md`, `.agent/plan.md`, `.agent/future-plans.md`) and detailed specs.
