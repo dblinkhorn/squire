@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from squire_core.decision_models import DecisionCandidate
+
+
+@dataclass(frozen=True)
+class LexicalCandidate:
+    object_id: str
+    title: str
+    snippet: str
+    score: float
+    updated_at: str | None
+    status: str | None
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -139,11 +150,40 @@ def find_candidates(
     limit: int = 3,
     score_threshold: float = 0.2,
 ) -> list[DecisionCandidate]:
+    lexical = search_lexical_candidates(
+        db_path,
+        query,
+        object_type=object_type,
+        limit=limit,
+        score_threshold=score_threshold,
+    )
+    return [
+        DecisionCandidate(
+            object_id=item.object_id,
+            title=item.title,
+            snippet=item.snippet,
+            score=item.score,
+        )
+        for item in lexical
+    ]
+
+
+def search_lexical_candidates(
+    db_path: str | Path,
+    query: str,
+    *,
+    object_type: str | None = None,
+    limit: int = 3,
+    score_threshold: float = 0.2,
+    pool_limit: int | None = None,
+) -> list[LexicalCandidate]:
     normalized = _normalize_query(query)
     if not normalized or limit <= 0:
         return []
 
     fetch_limit = max(limit * 5, limit)
+    if isinstance(pool_limit, int) and pool_limit > 0:
+        fetch_limit = max(pool_limit, limit)
     db_path = Path(db_path)
     if not db_path.exists():
         return []
@@ -163,6 +203,8 @@ def find_candidates(
                 objects.id,
                 objects.title,
                 objects.body,
+                objects.updated_at,
+                objects.status,
                 bm25(objects_fts) AS rank,
                 snippet(objects_fts, 2, '', '', '...', 12) AS snippet
             FROM objects_fts
@@ -178,8 +220,8 @@ def find_candidates(
     finally:
         conn.close()
 
-    candidates: list[DecisionCandidate] = []
-    for object_id, title, body, rank, snippet in rows:
+    candidates: list[LexicalCandidate] = []
+    for object_id, title, body, updated_at, status, rank, snippet in rows:
         if object_id is None or title is None:
             continue
         rank_value = float(rank) if rank is not None else 0.0
@@ -189,11 +231,13 @@ def find_candidates(
         if score < score_threshold:
             continue
         candidates.append(
-            DecisionCandidate(
+            LexicalCandidate(
                 object_id=str(object_id),
                 title=str(title),
                 snippet=_fallback_snippet(snippet, body, str(title)),
                 score=score,
+                updated_at=str(updated_at) if isinstance(updated_at, str) else None,
+                status=str(status) if isinstance(status, str) else None,
             )
         )
         if len(candidates) >= limit:

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "matching_trace_v1.json",
+  "title": "Matching Trace v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "raw_event_id",
+    "object_type",
+    "timestamp",
+    "queries",
+    "retrieval_mode",
+    "candidate_pool",
+    "weights",
+    "candidates",
+    "ranking",
+    "gate"
+  ],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "raw_event_id": { "type": "string" },
+    "object_type": {
+      "type": "string",
+      "enum": ["people", "projects", "ideas", "admin"]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "queries": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "retrieval_mode": {
+      "type": "string",
+      "enum": ["hybrid", "lexical_only", "semantic_only", "none"]
+    },
+    "fallback_reason": { "type": ["string", "null"] },
+    "candidate_pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before_dedupe", "after_dedupe", "returned_k"],
+      "properties": {
+        "before_dedupe": { "type": "integer", "minimum": 0 },
+        "after_dedupe": { "type": "integer", "minimum": 0 },
+        "returned_k": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lexical", "recency", "affinity", "semantic"],
+      "properties": {
+        "lexical": { "type": "number", "minimum": 0, "maximum": 1 },
+        "recency": { "type": "number", "minimum": 0, "maximum": 1 },
+        "affinity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "semantic": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "component_scores", "final_score"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "component_scores": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["lexical", "recency", "affinity", "semantic"],
+            "properties": {
+              "lexical": { "type": "number", "minimum": 0, "maximum": 1 },
+              "recency": { "type": "number", "minimum": 0, "maximum": 1 },
+              "affinity": { "type": "number", "minimum": 0, "maximum": 1 },
+              "semantic": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          },
+          "final_score": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "ranking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordered", "top_score", "second_score", "margin"],
+      "properties": {
+        "ordered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "score"],
+            "properties": {
+              "id": { "type": "string" },
+              "score": { "type": "number", "minimum": 0, "maximum": 1 }
+            }
+          }
+        },
+        "top_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "second_score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "margin": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_confidence", "auto_min_score", "auto_min_margin", "outcome"],
+      "properties": {
+        "decision_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "auto_min_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "auto_min_margin": { "type": "number", "minimum": 0, "maximum": 1 },
+        "outcome": {
+          "type": "string",
+          "enum": ["auto_apply", "needs_confirmation", "create"]
+        }
+      }
+    }
+  }
+}

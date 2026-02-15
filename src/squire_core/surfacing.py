@@ -23,16 +23,8 @@ class DailyDigest:
 
     def render(self) -> str:
         header_date = _format_human_date(self.generated_at.date(), self.generated_at.date(), include_relative=False)
-        header = f"📌 Daily digest · {header_date}"
-        summary = (
-            "⚖️ "
-            f"Overdue {_section_line_count(self.sections, 'Admin overdue')} | "
-            f"Today {_section_line_count(self.sections, 'Admin due today')} | "
-            f"Soon {_section_line_count(self.sections, 'Admin due soon')} | "
-            f"Projects {_section_line_count(self.sections, 'Projects needing attention')} | "
-            f"People {_section_line_count(self.sections, 'People to follow up')}"
-        )
-        return _render_sectioned_message(header, self.sections, summary=summary)
+        header = f"📌 **Daily digest** · {header_date}"
+        return _render_sectioned_message(header, self.sections)
 
 
 @dataclass(frozen=True)
@@ -42,17 +34,8 @@ class WeeklyReview:
 
     def render(self) -> str:
         header_date = _format_human_date(self.generated_at.date(), self.generated_at.date(), include_relative=False)
-        header = f"🗓️ Weekly review · {header_date}"
-        summary_parts = [
-            f"Changed {_section_line_count(self.sections, 'Recently changed notes')}",
-            f"Unscheduled {_section_line_count(self.sections, 'Open admin without due dates')}",
-            f"Projects {_section_line_count(self.sections, 'Blocked or stale projects')}",
-            f"People {_section_line_count(self.sections, 'People overdue for contact')}",
-        ]
-        if any(section.title == "Ideas updated recently" for section in self.sections):
-            summary_parts.append(f"Ideas {_section_line_count(self.sections, 'Ideas updated recently')}")
-        summary = "⚖️ " + " | ".join(summary_parts)
-        return _render_sectioned_message(header, self.sections, summary=summary)
+        header = f"🗓️ **Weekly review** · {header_date}"
+        return _render_sectioned_message(header, self.sections)
 
 
 @dataclass(frozen=True)
@@ -240,6 +223,7 @@ def _render_sectioned_message(header: str, sections: list[DigestSection], *, sum
     for section in sections:
         lines.append("")
         lines.append(_format_section_title(section.title))
+        lines.append(_section_divider(section.title))
         if section.lines:
             for line in section.lines:
                 lines.append(f"• {line}")
@@ -279,18 +263,16 @@ def _format_title(title: str, object_id: str, include_ids: bool) -> str:
     return title
 
 
-def _section_line_count(sections: list[DigestSection], title: str) -> int:
-    for section in sections:
-        if section.title == title:
-            return len(section.lines)
-    return 0
-
-
 def _format_section_title(title: str) -> str:
     emoji = _SECTION_EMOJI.get(title)
     if emoji:
-        return f"{emoji} {title}"
-    return title
+        return f"{emoji} **{title}**"
+    return f"**{title}**"
+
+
+def _section_divider(title: str) -> str:
+    width = max(12, min(28, len(title) + 2))
+    return "─" * width
 
 
 def _relative_date_label(target: date, reference: date) -> str | None:

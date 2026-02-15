@@ -12,20 +12,26 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Awaitable, Callable, cast
 
 import discord
 from dotenv import load_dotenv
 
-from squire_core.config_utils import load_config, load_decision_config, normalize_archive_config
-from squire_core.decision_models import DecisionCandidate
-from squire_core.decision_flow import apply_decision_to_derived, evaluate_decision
+from squire_core.config_utils import (
+    MatchingConfig,
+    load_config,
+    load_decision_config,
+    load_matching_config,
+    normalize_archive_config,
+)
+from squire_core.decision_flow import DecisionRouting, apply_decision_to_derived, evaluate_decision
 from squire_core.derived_event_store import write_derived_event
 from squire_core.id_utils import generate_prefixed_id
-from squire_core.indexer import find_candidates, rebuild_index
+from squire_core.indexer import rebuild_index
 from squire_core.interpreter import InterpretationValidationError, interpret_text
 from squire_core.llm.openai_provider import OpenAIProvider
 from squire_core.llm.prompts import load_prompt
+from squire_core.matching import build_matching_candidates, sync_semantic_index
 from squire_core.operation_apply import apply_operations
 from squire_core.pending_actions import (
     PendingAction,
@@ -34,6 +40,7 @@ from squire_core.pending_actions import (
     write_pending_action,
 )
 from squire_core.raw_event import RawEvent, Source, write_raw_event
+from squire_core.schema_loader import load_json_schema, validate_json
 from squire_core.canonical_store import find_object_path, load_frontmatter
 from squire_core.surfacing import (
     build_daily_digest,
@@ -63,6 +70,9 @@ _SELECT_DESCRIPTION_LIMIT = 100
 _ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS = 120
 _DEFAULT_HEALTH_HOST = "0.0.0.0"
 _DEFAULT_HEALTH_PORT = 8080
+_PENDING_CONTROLS_INSTRUCTION = (
+    "Use the buttons below to confirm which note should be updated, choose to create a new note, or cancel (do nothing):"
+)
 _WEEKDAY_MAP = {
     "MON": 0,
     "MONDAY": 0,
@@ -146,6 +156,15 @@ class _ResultCursor:
 
 
 _RESULT_CURSORS: dict[tuple[int, int], _ResultCursor] = {}
+
+
+@dataclass(frozen=True)
+class _AffinityTouch:
+    object_id: str
+    touched_at: datetime
+
+
+_MATCHING_AFFINITY: dict[tuple[int, int], list[_AffinityTouch]] = {}
 
 
 @dataclass(frozen=True)
@@ -461,6 +480,56 @@ def _prune_result_cursors(now: datetime | None = None) -> None:
         _RESULT_CURSORS.pop(key, None)
 
 
+def _record_affinity_touches(
+    key: tuple[int, int],
+    object_ids: list[str],
+    *,
+    matching: MatchingConfig,
+    now: datetime | None = None,
+) -> None:
+    current = now or datetime.now(timezone.utc)
+    ttl = timedelta(days=max(1, matching.affinity_ttl_days))
+    cutoff = current - ttl
+    touches = [touch for touch in _MATCHING_AFFINITY.get(key, []) if touch.touched_at >= cutoff]
+    for object_id in object_ids:
+        if not isinstance(object_id, str):
+            continue
+        value = object_id.strip()
+        if not value:
+            continue
+        touches.append(_AffinityTouch(object_id=value, touched_at=current))
+    if not touches:
+        _MATCHING_AFFINITY.pop(key, None)
+        return
+    touches = touches[-matching.affinity_recent_ids_per_thread :]
+    _MATCHING_AFFINITY[key] = touches
+
+
+def _load_affinity_scores(
+    key: tuple[int, int],
+    *,
+    matching: MatchingConfig,
+    now: datetime | None = None,
+) -> dict[str, float]:
+    current = now or datetime.now(timezone.utc)
+    ttl = timedelta(days=max(1, matching.affinity_ttl_days))
+    cutoff = current - ttl
+    touches = [touch for touch in _MATCHING_AFFINITY.get(key, []) if touch.touched_at >= cutoff]
+    if not touches:
+        _MATCHING_AFFINITY.pop(key, None)
+        return {}
+    _MATCHING_AFFINITY[key] = touches[-matching.affinity_recent_ids_per_thread :]
+    scores: dict[str, float] = {}
+    for touch in _MATCHING_AFFINITY[key]:
+        age = max(0.0, (current - touch.touched_at).total_seconds())
+        ttl_seconds = max(1.0, ttl.total_seconds())
+        decayed = max(0.0, 1.0 - (age / ttl_seconds))
+        existing = scores.get(touch.object_id, 0.0)
+        if decayed > existing:
+            scores[touch.object_id] = decayed
+    return scores
+
+
 def _store_result_cursor(message: discord.Message, config: dict[str, Any], object_ids: list[str]) -> None:
     surfacing = load_surfacing_config(config)
     ttl_minutes = max(1, surfacing.pull_cursor_ttl_minutes)
@@ -490,23 +559,47 @@ def _truncate_text(value: str | None, limit: int) -> str:
     return value[: limit - 3].rstrip() + "..."
 
 
-def _refresh_index(objects_root: str | Path, index_db: str | Path) -> None:
+def _refresh_index(
+    objects_root: str | Path,
+    index_db: str | Path,
+    *,
+    matching: MatchingConfig | None = None,
+) -> None:
     try:
         rebuild_index(objects_root, index_db)
         logging.info("index_rebuilt path=%s", index_db)
     except Exception as exc:
         logging.exception("index_rebuild_failed error=%s", exc)
+        return
 
-
-def _merge_candidates(candidates: list[DecisionCandidate], limit: int) -> list[DecisionCandidate]:
-    merged: dict[str, DecisionCandidate] = {}
-    for candidate in candidates:
-        existing = merged.get(candidate.object_id)
-        if existing is None or candidate.score > existing.score:
-            merged[candidate.object_id] = candidate
-    if not merged:
-        return []
-    return sorted(merged.values(), key=lambda item: item.score, reverse=True)[:limit]
+    if not matching or matching.semantic_weight <= 0:
+        return
+    if matching.semantic_provider != "openai":
+        logging.warning("semantic_sync_skipped reason=unsupported_provider provider=%s", matching.semantic_provider)
+        return
+    try:
+        provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+    except Exception as exc:
+        logging.warning("semantic_sync_skipped reason=provider_init_failed error=%s", exc)
+        return
+    try:
+        stats = sync_semantic_index(
+            objects_root=objects_root,
+            db_path=index_db,
+            matching_config=matching,
+            embedding_provider=provider,
+        )
+        logging.info(
+            "semantic_sync_ok path=%s indexed=%s unchanged=%s removed=%s metadata_reset=%s duration_ms=%s",
+            index_db,
+            stats.indexed_count,
+            stats.unchanged_count,
+            stats.removed_count,
+            stats.metadata_reset,
+            stats.duration_ms,
+        )
+    except Exception as exc:
+        logging.exception("semantic_sync_failed error=%s", exc)
 
 
 def _candidate_queries_from_llm(
@@ -575,6 +668,10 @@ class PendingActionView(discord.ui.View):
         author_id: int,
         candidates: list[dict[str, Any]],
         default_target_id: str | None,
+        matching: MatchingConfig | None,
+        affinity_key: tuple[int, int],
+        confirm_action: str | None = None,
+        selected_target_id: str | None = None,
     ) -> None:
         super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
         self.pending_id = pending_id
@@ -583,12 +680,24 @@ class PendingActionView(discord.ui.View):
         self.index_db = index_db
         self.schema_path = schema_path
         self.author_id = author_id
-        self.selected_target_id = default_target_id
+        self.selected_target_id = selected_target_id if selected_target_id else default_target_id
         self._default_target_id = default_target_id
+        self._matching = matching
+        self._affinity_key = affinity_key
+        self._candidates = [candidate for candidate in candidates if isinstance(candidate, dict)]
+        self._confirm_action = confirm_action
 
-        if default_target_id and len(candidates) > 1:
+        if confirm_action:
+            self._render_confirmation()
+        else:
+            self._render_primary()
+
+    def _render_primary(self) -> None:
+        self.clear_items()
+        if self._default_target_id and len(self._candidates) > 1:
             options = []
-            for candidate in candidates[:_SELECT_OPTION_LIMIT]:
+            selected = self.selected_target_id or self._default_target_id
+            for candidate in self._candidates[:_SELECT_OPTION_LIMIT]:
                 candidate_id = candidate.get("id")
                 if not isinstance(candidate_id, str):
                     continue
@@ -600,15 +709,98 @@ class PendingActionView(discord.ui.View):
                         label=label,
                         value=candidate_id,
                         description=snippet if snippet else None,
-                        default=candidate_id == default_target_id,
+                        default=candidate_id == selected,
                     )
                 )
             if options:
                 self.add_item(_CandidateSelect(self, options))
+        self._add_button("Confirm", discord.ButtonStyle.green, self._begin_confirm_update, row=1)
+        self._add_button("Create New", discord.ButtonStyle.primary, self._begin_confirm_create_new, row=1)
+        self._add_button("Cancel", discord.ButtonStyle.gray, self._begin_confirm_cancel, row=1)
+
+    def _render_confirmation(self) -> None:
+        self.clear_items()
+        action = self._confirm_action or ""
+        if action == "confirm":
+            label = "Yes, apply update"
+            style = discord.ButtonStyle.green
+        elif action == "create_new":
+            label = "Yes, create new"
+            style = discord.ButtonStyle.primary
+        else:
+            label = "Yes, cancel (do nothing)"
+            style = discord.ButtonStyle.gray
+        self._add_button(label, style, self._confirm_selected_action, row=1)
+        self._add_button("No, go back", discord.ButtonStyle.secondary, self._restore_primary_actions, row=1)
+
+    def _add_button(
+        self,
+        label: str,
+        style: discord.ButtonStyle,
+        handler: Callable[[discord.Interaction], Awaitable[None]],
+        *,
+        row: int | None = None,
+    ) -> None:
+        button = discord.ui.Button(label=label, style=style, row=row)
+
+        async def _callback(interaction: discord.Interaction) -> None:
+            await handler(interaction)
+
+        button.callback = _callback  # type: ignore[assignment]
+        self.add_item(button)
+
+    def _spawn_view(self, *, confirm_action: str | None) -> "PendingActionView":
+        return PendingActionView(
+            pending_id=self.pending_id,
+            pending_root=self.pending_root,
+            objects_root=self.objects_root,
+            index_db=self.index_db,
+            schema_path=self.schema_path,
+            author_id=self.author_id,
+            candidates=self._candidates,
+            default_target_id=self._default_target_id,
+            matching=self._matching,
+            affinity_key=self._affinity_key,
+            confirm_action=confirm_action,
+            selected_target_id=self.selected_target_id,
+        )
 
     def is_author(self, interaction: discord.Interaction) -> bool:
         user = interaction.user
         return bool(user and user.id == self.author_id)
+
+    async def _begin_confirm_update(self, interaction: discord.Interaction) -> None:
+        await self._show_confirmation(interaction, "confirm")
+
+    async def _begin_confirm_create_new(self, interaction: discord.Interaction) -> None:
+        await self._show_confirmation(interaction, "create_new")
+
+    async def _begin_confirm_cancel(self, interaction: discord.Interaction) -> None:
+        await self._show_confirmation(interaction, "cancel")
+
+    async def _show_confirmation(self, interaction: discord.Interaction, action: str) -> None:
+        if not self.is_author(interaction):
+            await interaction.response.send_message("This action is not for you.")
+            return
+        confirm_view = self._spawn_view(confirm_action=action)
+        await interaction.response.edit_message(view=confirm_view)
+
+    async def _restore_primary_actions(self, interaction: discord.Interaction) -> None:
+        if not self.is_author(interaction):
+            await interaction.response.send_message("This action is not for you.")
+            return
+        original_view = self._spawn_view(confirm_action=None)
+        await interaction.response.edit_message(view=original_view)
+
+    async def _confirm_selected_action(self, interaction: discord.Interaction) -> None:
+        action = self._confirm_action
+        if action == "confirm":
+            await self._apply_pending(interaction)
+            return
+        if action == "create_new":
+            await self._create_new_pending(interaction)
+            return
+        await self._cancel_pending(interaction)
 
     async def _apply_pending(self, interaction: discord.Interaction) -> None:
         if not self.is_author(interaction):
@@ -619,7 +811,7 @@ class PendingActionView(discord.ui.View):
             await interaction.response.send_message("That pending action no longer exists.")
             return
         if pending.status != "pending":
-            await interaction.response.send_message(f"Pending action {self.pending_id} is {pending.status}.")
+            await interaction.response.send_message(f"This pending action is already {pending.status}.")
             return
         derived = pending.derived
         ops = derived.get("proposed_operations") or []
@@ -648,12 +840,54 @@ class PendingActionView(discord.ui.View):
             _write_pending_with_status(self.pending_root, pending, "failed", derived=derived)
             await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
             return
-        _refresh_index(self.objects_root, self.index_db)
+        _refresh_index(self.objects_root, self.index_db, matching=self._matching)
+        if self._matching:
+            touched_ids = _extract_target_ids_from_derived(derived)
+            _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
         _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived)
-        await interaction.response.send_message(
-            f"Applied pending action {self.pending_id}. ({len(result.written_paths)} item(s) updated.)"
-        )
-        await _disable_view(interaction)
+        title = _first_title_from_paths(result.written_paths) or _candidate_title(self._candidates, self.selected_target_id)
+        if title:
+            await interaction.response.send_message(f'✅ Applied update to "{title}".')
+        else:
+            await interaction.response.send_message(f"✅ Applied update. ({len(result.written_paths)} item(s) updated.)")
+        await _disable_view(interaction, clear_pending_instructions=True)
+
+    async def _create_new_pending(self, interaction: discord.Interaction) -> None:
+        if not self.is_author(interaction):
+            await interaction.response.send_message("This action is not for you.")
+            return
+        pending = load_pending_action(self.pending_root, self.pending_id)
+        if not pending:
+            await interaction.response.send_message("That pending action no longer exists.")
+            return
+        if pending.status != "pending":
+            await interaction.response.send_message(f"This pending action is already {pending.status}.")
+            return
+        derived = _force_create_derived(pending.derived)
+        try:
+            result = apply_operations(
+                derived,
+                objects_root=self.objects_root,
+                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                derived_schema_path=self.schema_path,
+                last_decision_id=pending.last_decision_id,
+            )
+        except Exception:
+            logging.exception("pending_create_new_failed id=%s", self.pending_id)
+            _write_pending_with_status(self.pending_root, pending, "failed", derived=derived)
+            await interaction.response.send_message("Failed to create a new item. Check logs for details.")
+            return
+        _refresh_index(self.objects_root, self.index_db, matching=self._matching)
+        if self._matching:
+            touched_ids = _extract_ids_from_written_paths(result.written_paths)
+            _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
+        _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived)
+        title = _first_title_from_paths(result.written_paths)
+        if title:
+            await interaction.response.send_message(f'Created a new note "{title}".')
+        else:
+            await interaction.response.send_message(f"Created a new note. ({len(result.written_paths)} item(s) updated.)")
+        await _disable_view(interaction, clear_pending_instructions=True)
 
     async def _cancel_pending(self, interaction: discord.Interaction) -> None:
         if not self.is_author(interaction):
@@ -664,27 +898,11 @@ class PendingActionView(discord.ui.View):
             await interaction.response.send_message("That pending action no longer exists.")
             return
         if pending.status != "pending":
-            await interaction.response.send_message(f"Pending action {self.pending_id} is {pending.status}.")
+            await interaction.response.send_message(f"This pending action is already {pending.status}.")
             return
         _write_pending_with_status(self.pending_root, pending, "cancelled")
-        await interaction.response.send_message(f"Cancelled pending action {self.pending_id}.")
-        await _disable_view(interaction)
-
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self._apply_pending(interaction)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.gray)
-    async def cancel_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        await self._cancel_pending(interaction)
+        await interaction.response.send_message("Cancelled. No changes made.")
+        await _disable_view(interaction, clear_pending_instructions=True)
 
 
 class AutoApplyFeedbackView(discord.ui.View):
@@ -791,8 +1009,10 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         except OSError as exc:
             logging.warning("candidate_query_prompt_load_failed path=%s error=%s", candidate_query_prompt_path, exc)
     decision_config = load_decision_config(config) if decision_prompt else None
+    matching_config = load_matching_config(config)
     decision_payload: dict[str, Any] | None = None
     decision_artifact_id: str | None = None
+    matching_trace: dict[str, Any] | None = None
 
     tz_name = config.get("timezone")
     tz = resolve_timezone(tz_name)
@@ -888,74 +1108,122 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             )
             if llm_queries:
                 queries = llm_queries
-        gathered: list[DecisionCandidate] = []
-        for query in queries:
-            gathered.extend(
-                find_candidates(
-                    index_db,
-                    query,
-                    object_type=object_type,
-                    limit=decision_config.candidate_limit,
-                    score_threshold=decision_config.candidate_score_threshold,
-                )
-            )
-        candidates = _merge_candidates(gathered, decision_config.candidate_limit)
-        decision_input = _build_decision_input(
-            raw_event_id=raw_id,
+        semantic_provider = provider if matching_config.semantic_weight > 0 and matching_config.semantic_provider == "openai" else None
+        affinity_key = _cursor_key(message)
+        affinity_scores = _load_affinity_scores(affinity_key, matching=matching_config)
+        retrieval = build_matching_candidates(
+            db_path=index_db,
+            queries=queries,
             object_type=object_type,
-            message=content,
-            candidates=candidates,
+            matching_config=matching_config,
+            score_threshold=decision_config.candidate_score_threshold,
+            affinity_scores=affinity_scores,
+            embedding_provider=semantic_provider,
         )
-        decision_schema = Path("config/schemas/decision_v1.json")
-        try:
-            decision = interpret_text(
-                provider=provider,
-                text=decision_input,
-                model=model,
-                system_prompt=decision_prompt,
-                schema_path=decision_schema,
-            )
-        except InterpretationValidationError as exc:
-            write_derived_event(
-                derived=exc.payload,
-                raw_text=exc.raw_text,
-                derived_root=derived_root,
+        candidates = retrieval.candidates[: decision_config.candidate_limit]
+        ranking_rows = [
+            {"id": candidate.object_id, "score": candidate.score}
+            for candidate in candidates
+        ]
+        matching_trace = {
+            "schema_version": 1,
+            "raw_event_id": raw_id,
+            "object_type": object_type,
+            "timestamp": _now_iso(),
+            "queries": queries,
+            "retrieval_mode": retrieval.retrieval_mode,
+            "fallback_reason": retrieval.fallback_reason,
+            "candidate_pool": {
+                "before_dedupe": retrieval.candidate_pool_before_dedupe,
+                "after_dedupe": retrieval.candidate_pool_after_dedupe,
+                "returned_k": len(candidates),
+            },
+            "weights": retrieval.weights,
+            "candidates": retrieval.trace_candidates[: decision_config.candidate_limit],
+            "ranking": {
+                "ordered": ranking_rows,
+                "top_score": retrieval.top_score,
+                "second_score": retrieval.second_score,
+                "margin": retrieval.margin,
+            },
+            "gate": {
+                "decision_confidence": 0.0,
+                "auto_min_score": decision_config.auto_min_score,
+                "auto_min_margin": decision_config.auto_min_margin,
+                "outcome": "create",
+            },
+        }
+        logging.info(
+            "matching_retrieval_ok id=%s mode=%s fallback=%s queries=%s before=%s after=%s returned=%s top=%.3f margin=%s",
+            raw_id,
+            retrieval.retrieval_mode,
+            retrieval.fallback_reason or "",
+            len(queries),
+            retrieval.candidate_pool_before_dedupe,
+            retrieval.candidate_pool_after_dedupe,
+            len(candidates),
+            retrieval.top_score,
+            f"{retrieval.margin:.3f}" if retrieval.margin is not None else "none",
+        )
+        if retrieval.retrieval_mode != "none":
+            decision_input = _build_decision_input(
                 raw_event_id=raw_id,
-                label="decision_invalid",
-                error=exc,
+                object_type=object_type,
+                message=content,
+                candidates=candidates,
             )
-            logging.warning("decision_invalid id=%s error=%s", raw_id, exc)
-        except Exception as exc:
-            write_derived_event(
-                derived=None,
-                raw_text="",
-                derived_root=derived_root,
-                raw_event_id=raw_id,
-                label="decision_invalid",
-                error=exc,
-            )
-            logging.exception("decision_failed id=%s", raw_id)
+            decision_schema = Path("config/schemas/decision_v1.json")
+            try:
+                decision = interpret_text(
+                    provider=provider,
+                    text=decision_input,
+                    model=model,
+                    system_prompt=decision_prompt,
+                    schema_path=decision_schema,
+                )
+            except InterpretationValidationError as exc:
+                write_derived_event(
+                    derived=exc.payload,
+                    raw_text=exc.raw_text,
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="decision_invalid",
+                    error=exc,
+                )
+                logging.warning("decision_invalid id=%s error=%s", raw_id, exc)
+            except Exception as exc:
+                write_derived_event(
+                    derived=None,
+                    raw_text="",
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="decision_invalid",
+                    error=exc,
+                )
+                logging.exception("decision_failed id=%s", raw_id)
+            else:
+                decision_result = write_derived_event(
+                    derived=decision.derived,
+                    raw_text=decision.raw_text,
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="decision",
+                )
+                decision_payload = decision.derived
+                if decision_result.derived_path:
+                    try:
+                        decision_artifact_id = str(decision_result.derived_path.relative_to(Path(derived_root)))
+                    except ValueError:
+                        decision_artifact_id = str(decision_result.derived_path)
+                logging.info(
+                    "decision_ok id=%s object_type=%s confidence=%.2f candidates=%s",
+                    raw_id,
+                    object_type,
+                    decision.derived.get("confidence", 0),
+                    len(candidates),
+                )
         else:
-            decision_result = write_derived_event(
-                derived=decision.derived,
-                raw_text=decision.raw_text,
-                derived_root=derived_root,
-                raw_event_id=raw_id,
-                label="decision",
-            )
-            decision_payload = decision.derived
-            if decision_result.derived_path:
-                try:
-                    decision_artifact_id = str(decision_result.derived_path.relative_to(Path(derived_root)))
-                except ValueError:
-                    decision_artifact_id = str(decision_result.derived_path)
-            logging.info(
-                "decision_ok id=%s object_type=%s confidence=%.2f candidates=%s",
-                raw_id,
-                object_type,
-                decision.derived.get("confidence", 0),
-                len(candidates),
-            )
+            logging.warning("matching_decision_skipped id=%s reason=retrieval_unavailable", raw_id)
     elif decision_prompt:
         logging.warning("decision_config_missing id=%s decision_prompt_path=%s", raw_id, decision_prompt_path)
 
@@ -1011,56 +1279,90 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
 
     effective_derived = interpretation.derived
     decision_routing = None
+    trace_top_score = None
+    trace_second_score = None
+    if isinstance(matching_trace, dict):
+        ranking = matching_trace.get("ranking")
+        if isinstance(ranking, dict):
+            top_value = ranking.get("top_score")
+            second_value = ranking.get("second_score")
+            if isinstance(top_value, (int, float)):
+                trace_top_score = float(top_value)
+            if isinstance(second_value, (int, float)):
+                trace_second_score = float(second_value)
     if decision_payload and decision_config:
-        decision_routing = evaluate_decision(decision_payload, decision_config)
+        decision_routing = evaluate_decision(
+            decision_payload,
+            decision_config,
+            top_score=trace_top_score,
+            second_score=trace_second_score,
+        )
         effective_derived = apply_decision_to_derived(interpretation.derived, decision_routing)
-        if decision_routing.action == "needs_confirmation":
-            pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
-            pending_id = generate_prefixed_id("PA_")
-            now_iso = _now_iso()
-            pending = PendingAction(
-                schema_version=1,
-                pending_action_id=pending_id,
-                raw_event_id=raw_id,
-                object_type=object_type,
-                status="pending",
-                created_at=now_iso,
-                last_updated=now_iso,
-                derived=effective_derived,
-                decision=decision_payload,
-                decision_confidence=decision_routing.confidence,
-                last_decision_id=decision_artifact_id,
+    if matching_trace:
+        gate = matching_trace.get("gate")
+        if not isinstance(gate, dict):
+            gate = {}
+            matching_trace["gate"] = gate
+        gate["decision_confidence"] = decision_routing.confidence if decision_routing else 0.0
+        gate["auto_min_score"] = decision_config.auto_min_score if decision_config else matching_config.auto_min_score
+        gate["auto_min_margin"] = decision_config.auto_min_margin if decision_config else matching_config.auto_min_margin
+        gate["outcome"] = decision_routing.action if decision_routing else "create"
+        ranking = matching_trace.get("ranking")
+        if isinstance(ranking, dict):
+            ranking["top_score"] = decision_routing.top_score if decision_routing else ranking.get("top_score", 0.0)
+            ranking["second_score"] = decision_routing.second_score if decision_routing else ranking.get("second_score")
+            ranking["margin"] = decision_routing.margin if decision_routing else ranking.get("margin")
+        _write_matching_trace(derived_root=derived_root, raw_event_id=raw_id, trace_payload=matching_trace)
+
+    if decision_routing and decision_routing.action == "needs_confirmation":
+        pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
+        pending_id = generate_prefixed_id("PA_")
+        now_iso = _now_iso()
+        pending = PendingAction(
+            schema_version=1,
+            pending_action_id=pending_id,
+            raw_event_id=raw_id,
+            object_type=object_type,
+            status="pending",
+            created_at=now_iso,
+            last_updated=now_iso,
+            derived=effective_derived,
+            decision=decision_payload,
+            decision_confidence=decision_routing.confidence,
+            last_decision_id=decision_artifact_id,
+        )
+        write_pending_action(pending, pending_root)
+        candidates = decision_payload.get("candidates") if isinstance(decision_payload, dict) else []
+        candidate_list = [candidate for candidate in (candidates or []) if isinstance(candidate, dict)]
+        default_target_id = None
+        proposed_ops = effective_derived.get("proposed_operations") or []
+        if isinstance(proposed_ops, list) and proposed_ops:
+            target_id = proposed_ops[0].get("target_id")
+            if isinstance(target_id, str):
+                default_target_id = target_id
+        schema_path = _SCHEMA_MAP.get(object_type)
+        objects_root = config.get("paths", {}).get("objects_root", "objects")
+        view = None
+        if schema_path:
+            view = PendingActionView(
+                pending_id=pending_id,
+                pending_root=pending_root,
+                objects_root=objects_root,
+                index_db=config.get("paths", {}).get("index_db", "index/sb.sqlite"),
+                schema_path=schema_path,
+                author_id=message.author.id,
+                candidates=candidate_list,
+                default_target_id=default_target_id,
+                matching=matching_config,
+                affinity_key=_cursor_key(message),
             )
-            write_pending_action(pending, pending_root)
-            candidates = decision_payload.get("candidates") if isinstance(decision_payload, dict) else []
-            candidate_list = [candidate for candidate in (candidates or []) if isinstance(candidate, dict)]
-            default_target_id = None
-            proposed_ops = effective_derived.get("proposed_operations") or []
-            if isinstance(proposed_ops, list) and proposed_ops:
-                target_id = proposed_ops[0].get("target_id")
-                if isinstance(target_id, str):
-                    default_target_id = target_id
-            schema_path = _SCHEMA_MAP.get(object_type)
-            objects_root = config.get("paths", {}).get("objects_root", "objects")
-            view = None
-            if schema_path:
-                view = PendingActionView(
-                    pending_id=pending_id,
-                    pending_root=pending_root,
-                    objects_root=objects_root,
-                    index_db=config.get("paths", {}).get("index_db", "index/sb.sqlite"),
-                    schema_path=schema_path,
-                    author_id=message.author.id,
-                    candidates=candidate_list,
-                    default_target_id=default_target_id,
-                )
-            await _swap_reaction(message, "⏳", "❓")
-            await _send_response(
-                message,
-                _format_pending_message(pending_id, decision_payload),
-                view=view,
-            )
-            return
+        await _swap_reaction(message, "⏳", "❓")
+        await _send_response(
+            message,
+            _format_pending_message(pending_id, decision_payload),
+            view=view,
+        )
+        return
 
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     try:
@@ -1082,7 +1384,14 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         object_type,
         ",".join(str(path) for path in result.written_paths),
     )
-    _refresh_index(objects_root, config.get("paths", {}).get("index_db", "index/sb.sqlite"))
+    _refresh_index(
+        objects_root,
+        config.get("paths", {}).get("index_db", "index/sb.sqlite"),
+        matching=matching_config,
+    )
+    touched_ids = _extract_target_ids_from_derived(effective_derived)
+    touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
+    _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
 
     title = effective_derived.get("extracted_fields", {}).get("title") or content
     op = None
@@ -1136,6 +1445,87 @@ def _build_decision_input(
     return json.dumps(payload, ensure_ascii=True)
 
 
+def _extract_target_ids_from_derived(derived: dict[str, Any]) -> list[str]:
+    ops = derived.get("proposed_operations") or []
+    if not isinstance(ops, list):
+        return []
+    object_ids: list[str] = []
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        target_id = op.get("target_id")
+        if isinstance(target_id, str) and target_id.strip():
+            object_ids.append(target_id.strip())
+    return object_ids
+
+
+def _extract_ids_from_written_paths(paths: list[Path]) -> list[str]:
+    object_ids: list[str] = []
+    for path in paths:
+        try:
+            frontmatter = load_frontmatter(path)
+        except Exception:
+            continue
+        object_id = frontmatter.get("id")
+        if isinstance(object_id, str) and object_id.strip():
+            object_ids.append(object_id.strip())
+    return object_ids
+
+
+def _first_title_from_paths(paths: list[Path]) -> str | None:
+    for path in paths:
+        try:
+            frontmatter = load_frontmatter(path)
+        except Exception:
+            continue
+        title = frontmatter.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    return None
+
+
+def _candidate_title(candidates: list[dict[str, Any]], candidate_id: str | None) -> str | None:
+    if not isinstance(candidate_id, str) or not candidate_id.strip():
+        return None
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("id") != candidate_id:
+            continue
+        title = candidate.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    return None
+
+
+def _candidate_display_title(candidate: dict[str, Any]) -> str:
+    title = candidate.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    return "Untitled note"
+
+
+def _write_matching_trace(
+    *,
+    derived_root: str | Path,
+    raw_event_id: str,
+    trace_payload: dict[str, Any],
+) -> None:
+    try:
+        schema = load_json_schema(Path("config/schemas/matching_trace_v1.json"))
+        validate_json(schema, trace_payload)
+        write_derived_event(
+            derived=trace_payload,
+            raw_text="",
+            derived_root=derived_root,
+            raw_event_id=raw_event_id,
+            label="matching_trace",
+        )
+        logging.info("matching_trace_written id=%s mode=%s", raw_event_id, trace_payload.get("retrieval_mode"))
+    except Exception as exc:
+        logging.warning("matching_trace_write_failed id=%s error=%s", raw_event_id, exc)
+
+
 def _write_pending_with_status(
     root: str | Path,
     pending: PendingAction,
@@ -1160,10 +1550,31 @@ def _write_pending_with_status(
     return updated
 
 
-async def _disable_view(interaction: discord.Interaction) -> None:
+def _strip_pending_controls_from_message(content: str) -> str:
+    lines = content.split("\n")
+    cleaned = [
+        line
+        for line in lines
+        if line != _PENDING_CONTROLS_INSTRUCTION and line != "\u200b"
+    ]
+    while cleaned and not cleaned[-1].strip():
+        cleaned.pop()
+    return "\n".join(cleaned)
+
+
+async def _disable_view(
+    interaction: discord.Interaction,
+    *,
+    clear_pending_instructions: bool = False,
+) -> None:
     try:
         if interaction.message:
-            await interaction.message.edit(view=None)
+            edit_kwargs: dict[str, Any] = {"view": None}
+            if clear_pending_instructions:
+                message_content = getattr(interaction.message, "content", None)
+                if isinstance(message_content, str):
+                    edit_kwargs["content"] = _strip_pending_controls_from_message(message_content)
+            await interaction.message.edit(**edit_kwargs)
     except (discord.HTTPException, discord.Forbidden, AttributeError):
         return
 
@@ -1231,6 +1642,7 @@ async def _handle_command(
 ) -> bool:
     parts = content.split()
     command = parts[0].lower()
+    matching_config = load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
     if command == "!status":
@@ -1439,7 +1851,10 @@ async def _handle_command(
             await _swap_reaction(message, "⏳", "⚠️")
             await _send_response(message, "Failed to apply pending action. Check logs for details.")
             return True
-        _refresh_index(objects_root, index_db)
+        _refresh_index(objects_root, index_db, matching=matching_config)
+        touched_ids = _extract_target_ids_from_derived(pending.derived)
+        touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
+        _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
         update_pending_action_status(pending_root, pending_id, "confirmed")
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(
@@ -1476,7 +1891,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _format_pending_message(pending_id: str, decision_payload: dict[str, Any]) -> str:
+def _format_pending_message(_pending_id: str, decision_payload: dict[str, Any]) -> str:
     operations = decision_payload.get("proposed_operations") or []
     candidates = decision_payload.get("candidates") or []
     targets = []
@@ -1487,13 +1902,39 @@ def _format_pending_message(pending_id: str, decision_payload: dict[str, Any]) -
     candidate_lookup = {candidate.get("id"): candidate for candidate in candidates if isinstance(candidate, dict)}
     lines = ["I found a possible match and want to confirm before updating."]
     if targets:
+        lines.append("")
         lines.append("Proposed updates:")
         for target_id in targets:
             candidate = candidate_lookup.get(target_id, {})
-            title = candidate.get("title") or target_id
-            lines.append(f"- {title} ({target_id})")
-    lines.append(f"Reply `!confirm {pending_id}` to apply or `!cancel {pending_id}` to skip.")
+            lines.append(f"- {_candidate_display_title(candidate)}")
+    candidate_ids = [
+        candidate.get("id")
+        for candidate in candidates
+        if isinstance(candidate, dict) and isinstance(candidate.get("id"), str)
+    ]
+    alternates = [candidate_id for candidate_id in candidate_ids if isinstance(candidate_id, str) and candidate_id not in targets]
+    if alternates:
+        lines.append("")
+        lines.append("Other close matches:")
+        for candidate_id in alternates:
+            candidate = candidate_lookup.get(candidate_id, {})
+            lines.append(f"- {_candidate_display_title(candidate)}")
+    lines.append("")
+    lines.append(_PENDING_CONTROLS_INSTRUCTION)
+    lines.append("\u200b")
     return "\n".join(lines)
+
+
+def _force_create_derived(derived: dict[str, Any]) -> dict[str, Any]:
+    routing = DecisionRouting(
+        action="create",
+        confidence=0.0,
+        decision_ops=[],
+        top_score=0.0,
+        second_score=None,
+        margin=None,
+    )
+    return apply_decision_to_derived(derived, routing)
 
 
 async def _apply_command_operation(
@@ -1506,6 +1947,7 @@ async def _apply_command_operation(
     *,
     validate_fix: bool = False,
 ) -> bool:
+    matching_config = load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     target_path = find_object_path(objects_root, target_id)
     if not target_path:
@@ -1556,7 +1998,14 @@ async def _apply_command_operation(
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "Command failed. Check logs for details.")
         return True
-    _refresh_index(objects_root, config.get("paths", {}).get("index_db", "index/sb.sqlite"))
+    _refresh_index(
+        objects_root,
+        config.get("paths", {}).get("index_db", "index/sb.sqlite"),
+        matching=matching_config,
+    )
+    touched_ids = _extract_target_ids_from_derived(derived)
+    touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
+    _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
     await _swap_reaction(message, "⏳", "✅")
     title = frontmatter.get("title") or target_id
     await _send_response(
@@ -1585,6 +2034,7 @@ async def _handle_archive_clear_confirmation(message: discord.Message, config: d
         await _send_response(message, f"Failed to clear archive: {exc}")
         return True
     _RESULT_CURSORS.clear()
+    _MATCHING_AFFINITY.clear()
     await _safe_add_reaction(message, "✅")
     await _send_response(message, f"Archive cleared. Removed {removed} top-level entries from `{archive_root}`.")
     return True
@@ -1724,6 +2174,7 @@ def main() -> None:
         config = normalize_archive_config(config)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+    matching_config = load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
     index_path = Path(index_db)
@@ -1733,6 +2184,31 @@ def main() -> None:
             rebuild_index(objects_root, index_db)
         except Exception as exc:
             logging.exception("index_rebuild_failed error=%s", exc)
+    if matching_config.semantic_weight > 0:
+        if matching_config.semantic_provider != "openai":
+            logging.warning(
+                "semantic_startup_sync_skipped reason=unsupported_provider provider=%s",
+                matching_config.semantic_provider,
+            )
+        else:
+            try:
+                provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+                stats = sync_semantic_index(
+                    objects_root=objects_root,
+                    db_path=index_db,
+                    matching_config=matching_config,
+                    embedding_provider=provider,
+                )
+                logging.info(
+                    "semantic_startup_sync_ok indexed=%s unchanged=%s removed=%s metadata_reset=%s duration_ms=%s",
+                    stats.indexed_count,
+                    stats.unchanged_count,
+                    stats.removed_count,
+                    stats.metadata_reset,
+                    stats.duration_ms,
+                )
+            except Exception as exc:
+                logging.warning("semantic_startup_sync_failed error=%s", exc)
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise SystemExit("DISCORD_TOKEN is required")

@@ -51,6 +51,47 @@ class OpenAIProvider:
         parsed = json.loads(raw_text)
         return LLMResult(payload=parsed, raw_text=raw_text)
 
+    def embed(self, texts: list[str], model: str) -> list[list[float]]:
+        if not texts:
+            return []
+        body = {
+            "model": model,
+            "input": texts,
+        }
+
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/embeddings",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8")
+            raise RuntimeError(f"OpenAI embedding API error {exc.code}: {error_body}") from exc
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise RuntimeError("OpenAI embedding API returned invalid payload")
+        vectors: list[list[float]] = []
+        for item in sorted(data, key=lambda value: value.get("index", 0) if isinstance(value, dict) else 0):
+            if not isinstance(item, dict):
+                continue
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                raise RuntimeError("OpenAI embedding API returned invalid embedding")
+            vector = [float(value) for value in embedding if isinstance(value, (int, float))]
+            if not vector:
+                raise RuntimeError("OpenAI embedding API returned empty embedding")
+            vectors.append(vector)
+        if len(vectors) != len(texts):
+            raise RuntimeError("OpenAI embedding API returned unexpected number of embeddings")
+        return vectors
+
 
 def _extract_output_text(payload: dict[str, Any]) -> str:
     for item in payload.get("output", []):
