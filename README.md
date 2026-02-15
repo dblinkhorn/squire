@@ -11,12 +11,14 @@ You send quick notes in a DM, and Squire turns them into structured notes you ca
 - Organizes notes into four groups: tasks, projects, people, and ideas
 - Sends daily and weekly review messages
 - Lets you search and inspect notes with simple commands
+- Uses conservative matching and confirmation gates to reduce accidental edits
 - Stores your data on your own machine
 
 ## How It Works
 
 You send a message to your Squire Discord bot, and Squire saves the original message first.
 It then uses AI to extract useful fields (title, status, due date, and similar details), writes the result as readable Markdown files in your archive folder, and updates a local SQLite index so search commands stay fast.
+For update/append decisions, Squire ranks likely matches with hybrid lexical + semantic retrieval and applies deterministic safety gates before mutating existing notes.
 
 ## Discord Commands
 
@@ -32,6 +34,9 @@ Core commands:
 - `!fix <id> field=value ...` - edit note fields
 - `!confirm <pending_id>` / `!cancel <pending_id>` - approve or cancel a suggested change
 - `!clear-archive` then `DELETE` - clear archive data (keeps `.git`)
+
+When Squire proposes updates to an existing note, Discord actions can present `Confirm`, `Create New`, and `Cancel` buttons.
+If an update is auto-applied, Squire also provides a `Was this incorrect?` button with `!fix`/`!append` fallback.
 
 Optional prefixes when capturing:
 
@@ -92,8 +97,8 @@ Data mounts used by compose:
 Squire exposes a lightweight liveness endpoint:
 
 - Route: `GET /health`
-- Default bind: `0.0.0.0`
-- Default port: `8080` (override with `HEALTH_PORT`)
+- Default bind: `0.0.0.0` (override with `HEALTH_HOST`)
+- Default port: `8080` (override with `HEALTH_PORT`; set `HEALTH_PORT=0` to disable)
 - Response: HTTP `200` with `{"status":"ok"}`
 
 Quick check:
@@ -110,6 +115,13 @@ Common target examples:
 - Repo default (`docker-compose.yml`): `http://squire-core:8080/health`
 - Same Docker network: `http://<container-name>:<health-port>/health`
 - From another machine/network: `http://<host-ip-or-dns>:<health-port>/health`
+
+## Logging Behavior
+
+Runtime logs are split by severity:
+
+- `INFO`/`WARNING` and below are emitted to `stdout`
+- `ERROR` and above are emitted to `stderr`
 
 ## Run from Source
 
@@ -173,6 +185,8 @@ Then run `!status` to see your current daily view, and try `!find dentist` follo
 Main config file: `config.yaml`
 
 Common settings include AI model/prompt paths, data storage location (`archive_root`), daily and weekly schedule times, and search/result display limits.
+Matching defaults also include hybrid lexical + semantic retrieval for safer update/append routing.
+To disable semantic scoring and run lexical-only matching, set `matching.semantic_weight: 0`.
 
 Start with:
 

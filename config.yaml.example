@@ -68,7 +68,3 @@ surfacing:
     default_recent_limit: 10
     default_find_limit: 5
     cursor_ttl_minutes: 45
-
-querying:
-  execute_threshold: 0.8
-  confirm_threshold: 0.6

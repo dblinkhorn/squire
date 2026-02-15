@@ -2,4 +2,9 @@
 
 ## Stable Interfaces
 
-Core extension points include IngestProvider, Interpreter, StoreProvider, and IndexProvider. Providers register via configuration and do not require changes to core logic.
+Current state:
+
+- Squire is modular by package (`discord_bot`, `matching`, `surfacing`, `operation_apply`, etc.) but does not yet
+  expose formal provider registration interfaces.
+- Prompt behavior is configurable via `config.yaml` prompt paths under `llm.*`.
+- Additional ingest/store/index/provider integrations currently require code changes.

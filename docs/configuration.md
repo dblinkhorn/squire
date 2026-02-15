@@ -6,18 +6,24 @@ Required or optional environment variables include:
 
 - `DISCORD_TOKEN` (required)
 - `OPENAI_API_KEY` (required)
-- `GOOGLE_CALENDAR_CREDENTIALS` (optional)
 - `HEALTH_HOST` (optional, default `0.0.0.0`)
 - `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
 
 ## config.yaml
 
-Configuration specifies enabled modules, confidence thresholds, schedules, reminder defaults, repo paths, index paths, and prompt file locations. Configuration drives composition and sets the confidence gates for automatic actions and query execution.
+Configuration specifies LLM behavior, confidence thresholds, daily/weekly digest schedule and destination settings, archive storage paths, and surfacing behavior.
 
-Query thresholds in `config.yaml`:
+LLM settings in `config.yaml`:
 
-- querying.execute_threshold: execute queries when confidence is high.
-- querying.confirm_threshold: execute but ask for confirmation when confidence is moderate.
+- `llm.interpreter_model`: model name used for classify/extract/decision/candidate-query interpretation calls.
+- `llm.classify_prompt_path`: classify prompt path.
+- `llm.interpreter_prompt_path`: extraction prompt path.
+- `llm.decision_prompt_path`: decision prompt path for update/append routing.
+- `llm.candidate_query_prompt_path`: candidate-query prompt path for matching retrieval.
+
+Confidence settings in `config.yaml`:
+
+- `confidence.create_threshold`: minimum classification confidence required before creating/interpreting a note from a captured message.
 
 Decision thresholds in `config.yaml` (update/append gating):
 
@@ -103,6 +109,7 @@ Surfacing behavior is configured under `surfacing` in `config.yaml`.
 - `surfacing.admin.due_soon_days`: include admin items due within this many days in the due-soon section.
 - `surfacing.projects.stale_days`: threshold for stale project surfacing.
 - `surfacing.projects.blocked_limit`: maximum blocked/stale projects shown in digest.
+- `surfacing.ideas.weekly_review`: include (or omit) the weekly “Ideas updated recently” section.
 - `surfacing.people.next_contact_days`: include people with `next_contact` due within this window.
 - `surfacing.pull.default_recent_limit`: default row count for `!recent`.
 - `surfacing.pull.default_find_limit`: default row count for `!find`.

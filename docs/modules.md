@@ -2,24 +2,33 @@
 
 ## Ingest (Discord)
 
-The ingest module receives DMs from a single allowed user via the Discord bot, distinguishes capture versus command, writes raw events, and emits normalized RawEvent objects. If raw writes fail, ingest returns an error and stops the pipeline.
+The ingest module receives Discord DM messages, distinguishes command versus capture paths, and writes a raw event
+record before downstream processing. If raw event writes fail, the pipeline stops for that message.
 
 ## Interpreter (LLM)
 
-The interpreter classifies intent, extracts structured fields, produces confidence scores, and emits DerivedEvent JSON with a strict schema. If validation fails, it stores a derivation_error artifact, responds to the user with a request to rephrase or prefix explicitly, and does not mutate canonical state. If confidence is below the configured threshold (default 0.6), it asks the user to clarify or provide an explicit prefix before creating or updating canonical objects.
+The interpreter classifies intent, extracts structured fields, and emits strict-schema derived JSON artifacts.
+When configured, it also runs decision and candidate-query prompts for update/append routing. Validation failures
+write invalid artifacts and return clarification responses without mutating canonical state.
 
 ## Store (Git Canonical Store)
 
-The store applies operations to canonical objects, enforces soft-delete and append-only semantics, commits all changes, and never deletes raw or derived artifacts. Operations are validated atomically per raw event, and apply errors are recorded without partial mutation.
+The store applies create/update/append operations to canonical markdown objects with schema validation and audit linkage
+(`source_event_ids`, `last_decision_id`). Operations run sequentially, and apply failures halt further processing for
+that message while surfacing the error to the user.
 
 ## Index (SQLite)
 
-The index parses canonical objects, builds queryable tables and FTS, and is fully rebuildable from git with no authoritative data stored in SQLite.
+The index parses canonical objects and builds derived SQLite search tables (`objects`, `objects_fts`).
+When semantic matching is enabled, semantic rows/metadata are also maintained in the same database.
+The index is rebuildable from canonical objects and is not authoritative state.
 
 ## Surfacer
 
-The surfacer provides push (scheduled daily/weekly digests) and pull (interactive commands), omits object IDs in user-facing list output by default, and never mutates state directly.
+The surfacer provides push (scheduled daily/weekly digest/review) and pull (interactive commands), with configurable
+ID visibility for scheduled outputs and ID-inclusive manual pull lists. It is read-only and does not mutate canonical state.
 
 ## Optional Providers
 
-Optional integrations include alternative LLM backends and alternative ingest interfaces (for example, Slack, a CLI entry point, or generic webhooks). Email and SMS are potential future extensions.
+Current runtime ships with Discord ingest and OpenAI model provider integration. Additional providers or ingest
+interfaces are not currently available and require explicit implementation.
