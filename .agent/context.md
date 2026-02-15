@@ -49,7 +49,7 @@
   - metadata-triggered full semantic reset/reindex
   - hybrid lexical/recency/affinity/semantic fusion with normalized weights and affinity cap
 - Integrated matching flow in `discord_bot`:
-  - retrieval now uses hybrid builder (`build_matching_candidates`)
+  - retrieval now uses hybrid builder (superseded by `build_matching_candidates_async` in runtime async flow)
   - matching trace artifacts written per event (`matching_trace_v1_*.json`) with schema validation
   - affinity memory tracked per user/channel key and updated on apply/confirm paths
   - semantic sync logs added for startup and index refresh paths
@@ -68,9 +68,28 @@
 - Initial scope targets read-only command intents (`status`, `weekly`, `recent`, `find`, `show`) with clarification on ambiguity.
 
 ## Runtime Stability Planning (2026-02-15)
-- Added separate transport spec for heartbeat stability and async migration:
-  `docs/async-llm-transport-spec.md`.
-- Plan is phased: off-loop bridge + timeouts first, async-native provider second.
+- Transport work was planned in phased form (off-loop bridge + timeouts first, async-native provider second).
+- Implementation is now complete; the temporary implementation spec doc was removed after completion.
+
+## Runtime Stability Implementation (2026-02-15)
+- Implemented Phase 1 transport hardening:
+  - `OpenAIProvider` now uses explicit request timeouts for interpret/embed HTTP calls.
+  - `urllib` network failures are wrapped with clearer transport-level runtime errors.
+  - Added `interpret_text_async` (`asyncio.to_thread`) and switched Discord message handling to use it for classify/decision/extract/candidate-query calls.
+  - Matching retrieval (`build_matching_candidates`) is now offloaded via `asyncio.to_thread` from async message handling.
+  - Index rebuild/semantic sync remains required for consistency but now runs off-loop via awaited `_refresh_index_async`.
+- Added provider transport tests in `tests/test_openai_provider.py` (timeout wiring + URL error wrapping).
+
+## Runtime Stability Implementation (2026-02-15, Phase 2)
+- Migrated OpenAI transport to async-native HTTP in `OpenAIProvider` using `aiohttp`:
+  - added await-native `interpret_async` and `embed_async`.
+  - retained sync wrappers for non-async call sites (`sync_semantic_index`, startup sync) with guardrails against use inside active loops.
+- Updated interpreter async path to prefer provider-native async interpretation and only fall back to thread offload for providers lacking async support.
+- Added async retrieval path in matching (`build_matching_candidates_async`) so message handling can await semantic embedding calls directly.
+- Discord message handling now uses await-native matching retrieval (no `to_thread` for LLM retrieval path).
+- Added/updated tests for async provider and async matching retrieval (`tests/test_openai_provider.py`, `tests/test_matching.py`).
+- Follow-up cleanup removed now-orphaned sync helper `interpret_text(...)` from `src/squire_core/interpreter.py`.
+- Follow-up cleanup also removed now-unused sync matching retrieval path (`build_matching_candidates` and `_search_semantic_candidates`) from `src/squire_core/matching.py`; runtime and tests now target async retrieval path only.
 
 ## Numbered Mutation Planning (2026-02-15)
 - Added dedicated spec for numbered mutation actions (`!done 2`, `!append 3 ...`, `!fix 1 ...`):

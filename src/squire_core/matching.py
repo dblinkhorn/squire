@@ -32,6 +32,11 @@ class EmbeddingProvider(Protocol):
         ...
 
 
+class AsyncEmbeddingProvider(Protocol):
+    async def embed_async(self, texts: list[str], model: str) -> list[list[float]]:
+        ...
+
+
 @dataclass(frozen=True)
 class SemanticSyncStats:
     indexed_count: int
@@ -159,7 +164,7 @@ def sync_semantic_index(
     )
 
 
-def build_matching_candidates(
+async def build_matching_candidates_async(
     *,
     db_path: str | Path,
     queries: list[str],
@@ -167,7 +172,7 @@ def build_matching_candidates(
     matching_config: MatchingConfig,
     score_threshold: float,
     affinity_scores: dict[str, float] | None,
-    embedding_provider: EmbeddingProvider | None,
+    embedding_provider: AsyncEmbeddingProvider | None,
 ) -> MatchingRetrievalResult:
     cleaned_queries = [value.strip() for value in queries if isinstance(value, str) and value.strip()]
     if not cleaned_queries:
@@ -217,7 +222,7 @@ def build_matching_candidates(
             fallback_reason = "semantic_index_missing"
         else:
             try:
-                semantic_rows = _search_semantic_candidates(
+                semantic_rows = await _search_semantic_candidates_async(
                     db_path=db_path,
                     queries=cleaned_queries,
                     object_type=object_type,
@@ -524,16 +529,31 @@ def _fallback_snippet(body: str, title: str) -> str:
     return title
 
 
-def _search_semantic_candidates(
+async def _search_semantic_candidates_async(
     *,
     db_path: str | Path,
     queries: list[str],
     object_type: str,
     candidate_pool: int,
     matching_config: MatchingConfig,
-    embedding_provider: EmbeddingProvider,
+    embedding_provider: AsyncEmbeddingProvider,
 ) -> list[dict[str, Any]]:
-    vectors = embedding_provider.embed(queries, matching_config.semantic_model)
+    vectors = await embedding_provider.embed_async(queries, matching_config.semantic_model)
+    return _search_semantic_candidates_from_vectors(
+        db_path=db_path,
+        vectors=vectors,
+        object_type=object_type,
+        candidate_pool=candidate_pool,
+    )
+
+
+def _search_semantic_candidates_from_vectors(
+    *,
+    db_path: str | Path,
+    vectors: list[list[float]],
+    object_type: str,
+    candidate_pool: int,
+) -> list[dict[str, Any]]:
     db_path = Path(db_path)
     if not db_path.exists():
         return []

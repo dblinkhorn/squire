@@ -10,6 +10,8 @@ record before downstream processing. If raw event writes fail, the pipeline stop
 The interpreter classifies intent, extracts structured fields, and emits strict-schema derived JSON artifacts.
 When configured, it also runs decision and candidate-query prompts for update/append routing. Validation failures
 write invalid artifacts and return clarification responses without mutating canonical state.
+OpenAI transport is async-native in runtime message handling; async interpreter paths await provider calls directly
+and fall back to off-loop execution only for providers without async methods.
 
 ## Store (Git Canonical Store)
 
