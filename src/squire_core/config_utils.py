@@ -20,6 +20,23 @@ _DEFAULT_DECISION_CONFIG = {
     "candidate_limit": 3,
     "candidate_score_threshold": 0.2,
 }
+_DEFAULT_MATCHING_CONFIG = {
+    "lexical_weight": 1.0,
+    "recency_weight": 0.15,
+    "affinity_weight": 0.25,
+    "semantic_weight": 0.15,
+    "semantic_provider": "openai",
+    "semantic_model": "text-embedding-3-small",
+    "candidate_multiplier": 4,
+    "max_candidate_pool": 20,
+    "affinity_recent_ids_per_thread": 20,
+    "affinity_ttl_days": 7,
+    "affinity_max_boost": 0.15,
+    "auto_min_score": 0.55,
+    "auto_min_margin": 0.20,
+    "candidate_limit": 5,
+    "semantic_text_schema_version": 1,
+}
 
 
 @dataclass(frozen=True)
@@ -28,6 +45,27 @@ class DecisionConfig:
     confirm_threshold: float
     candidate_limit: int
     candidate_score_threshold: float
+    auto_min_score: float
+    auto_min_margin: float
+
+
+@dataclass(frozen=True)
+class MatchingConfig:
+    lexical_weight: float
+    recency_weight: float
+    affinity_weight: float
+    semantic_weight: float
+    semantic_provider: str
+    semantic_model: str
+    candidate_multiplier: int
+    max_candidate_pool: int
+    affinity_recent_ids_per_thread: int
+    affinity_ttl_days: int
+    affinity_max_boost: float
+    auto_min_score: float
+    auto_min_margin: float
+    candidate_limit: int
+    semantic_text_schema_version: int
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -69,6 +107,9 @@ def load_decision_config(config: dict[str, Any]) -> DecisionConfig:
     raw = config.get("decision")
     if not isinstance(raw, dict):
         raw = {}
+    matching = config.get("matching")
+    if not isinstance(matching, dict):
+        matching = {}
 
     def _get_float(key: str) -> float:
         value = raw.get(key, _DEFAULT_DECISION_CONFIG[key])
@@ -82,9 +123,68 @@ def load_decision_config(config: dict[str, Any]) -> DecisionConfig:
             return int(value)
         return int(_DEFAULT_DECISION_CONFIG[key])
 
+    def _get_matching_float(key: str) -> float:
+        value = matching.get(key, _DEFAULT_MATCHING_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(_DEFAULT_MATCHING_CONFIG[key])
+
     return DecisionConfig(
         auto_apply_threshold=_get_float("auto_apply_threshold"),
         confirm_threshold=_get_float("confirm_threshold"),
         candidate_limit=_get_int("candidate_limit"),
         candidate_score_threshold=_get_float("candidate_score_threshold"),
+        auto_min_score=max(0.0, min(1.0, _get_matching_float("auto_min_score"))),
+        auto_min_margin=max(0.0, min(1.0, _get_matching_float("auto_min_margin"))),
+    )
+
+
+def load_matching_config(config: dict[str, Any]) -> MatchingConfig:
+    raw = config.get("matching")
+    if not isinstance(raw, dict):
+        raw = {}
+    decision = config.get("decision")
+    if not isinstance(decision, dict):
+        decision = {}
+
+    def _get_float(key: str) -> float:
+        value = raw.get(key, _DEFAULT_MATCHING_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(_DEFAULT_MATCHING_CONFIG[key])
+
+    def _get_int(key: str) -> int:
+        value = raw.get(key, _DEFAULT_MATCHING_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return int(value)
+        return int(_DEFAULT_MATCHING_CONFIG[key])
+
+    candidate_limit = raw.get("candidate_limit", decision.get("candidate_limit", _DEFAULT_MATCHING_CONFIG["candidate_limit"]))
+    if not isinstance(candidate_limit, (int, float)):
+        candidate_limit = _DEFAULT_MATCHING_CONFIG["candidate_limit"]
+
+    semantic_provider = str(raw.get("semantic_provider", _DEFAULT_MATCHING_CONFIG["semantic_provider"])).strip().lower()
+    if not semantic_provider:
+        semantic_provider = str(_DEFAULT_MATCHING_CONFIG["semantic_provider"])
+
+    semantic_model = str(raw.get("semantic_model", _DEFAULT_MATCHING_CONFIG["semantic_model"])).strip()
+    if not semantic_model:
+        semantic_model = str(_DEFAULT_MATCHING_CONFIG["semantic_model"])
+
+    return MatchingConfig(
+        lexical_weight=_get_float("lexical_weight"),
+        recency_weight=_get_float("recency_weight"),
+        affinity_weight=_get_float("affinity_weight"),
+        semantic_weight=_get_float("semantic_weight"),
+        semantic_provider=semantic_provider,
+        semantic_model=semantic_model,
+        candidate_multiplier=max(1, _get_int("candidate_multiplier")),
+        max_candidate_pool=max(1, _get_int("max_candidate_pool")),
+        affinity_recent_ids_per_thread=max(1, _get_int("affinity_recent_ids_per_thread")),
+        affinity_ttl_days=max(1, _get_int("affinity_ttl_days")),
+        affinity_max_boost=max(0.0, min(1.0, _get_float("affinity_max_boost"))),
+        auto_min_score=max(0.0, min(1.0, _get_float("auto_min_score"))),
+        auto_min_margin=max(0.0, min(1.0, _get_float("auto_min_margin"))),
+        candidate_limit=max(1, int(candidate_limit)),
+        semantic_text_schema_version=max(1, _get_int("semantic_text_schema_version")),
     )

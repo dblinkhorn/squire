@@ -28,6 +28,7 @@ def _base_derived() -> dict:
 def test_evaluate_decision_auto_apply_single_target() -> None:
     decision = {
         "confidence": 0.9,
+        "candidates": [{"id": "A_123", "title": "Pay rent", "snippet": "Pay rent", "score": 0.9}],
         "proposed_operations": [{"op": "update", "target_id": "A_123"}],
     }
     config = DecisionConfig(
@@ -35,6 +36,8 @@ def test_evaluate_decision_auto_apply_single_target() -> None:
         confirm_threshold=0.65,
         candidate_limit=3,
         candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.2,
     )
     routing = evaluate_decision(decision, config)
     assert routing.action == "auto_apply"
@@ -54,6 +57,8 @@ def test_evaluate_decision_requires_confirmation_multiple_targets() -> None:
         confirm_threshold=0.65,
         candidate_limit=3,
         candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.2,
     )
     routing = evaluate_decision(decision, config)
     assert routing.action == "needs_confirmation"
@@ -70,6 +75,8 @@ def test_evaluate_decision_low_confidence_forces_create() -> None:
         confirm_threshold=0.65,
         candidate_limit=3,
         candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.2,
     )
     routing = evaluate_decision(decision, config)
     assert routing.action == "create"
@@ -86,6 +93,8 @@ def test_apply_decision_forces_create_on_low_confidence() -> None:
         confirm_threshold=0.65,
         candidate_limit=3,
         candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.2,
     )
     routing = evaluate_decision(decision, config)
     updated = apply_decision_to_derived(derived, routing)
@@ -104,8 +113,44 @@ def test_apply_decision_sets_target_for_update() -> None:
         confirm_threshold=0.65,
         candidate_limit=3,
         candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.2,
     )
     routing = evaluate_decision(decision, config)
     updated = apply_decision_to_derived(derived, routing)
     assert updated["proposed_operations"][0]["op"] == "append"
     assert updated["proposed_operations"][0]["target_id"] == "A_9"
+
+
+def test_evaluate_decision_requires_confirmation_when_score_is_too_low() -> None:
+    decision = {
+        "confidence": 0.95,
+        "proposed_operations": [{"op": "update", "target_id": "A_1"}],
+    }
+    config = DecisionConfig(
+        auto_apply_threshold=0.85,
+        confirm_threshold=0.65,
+        candidate_limit=3,
+        candidate_score_threshold=0.2,
+        auto_min_score=0.75,
+        auto_min_margin=0.2,
+    )
+    routing = evaluate_decision(decision, config, top_score=0.6, second_score=0.2)
+    assert routing.action == "needs_confirmation"
+
+
+def test_evaluate_decision_requires_confirmation_when_margin_is_too_small() -> None:
+    decision = {
+        "confidence": 0.95,
+        "proposed_operations": [{"op": "append", "target_id": "A_9"}],
+    }
+    config = DecisionConfig(
+        auto_apply_threshold=0.85,
+        confirm_threshold=0.65,
+        candidate_limit=3,
+        candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.3,
+    )
+    routing = evaluate_decision(decision, config, top_score=0.8, second_score=0.7)
+    assert routing.action == "needs_confirmation"

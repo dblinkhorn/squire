@@ -40,6 +40,7 @@ Use multiple signals to build a better shortlist before decisioning:
    - conversation affinity boost (recently touched object IDs in current DM/thread)
 3. Optional semantic retrieval (phase 2):
    - local embedding index over canonical objects (derived artifact, rebuildable)
+   - initial embedding provider/model should use the existing OpenAI integration for fast rollout
    - fuse lexical and semantic signals with deterministic weighted scoring.
 
 Deterministic scoring model:
@@ -53,7 +54,7 @@ Deterministic scoring model:
 - De-duplicate by object ID, keep highest-scoring row, then return top `candidate_limit`.
 
 Notes:
-- In phase 1, `semantic_weight` remains `0.0`, so behavior is lexical + deterministic boosts only.
+- Semantic matching ships enabled with a conservative default (`semantic_weight: 0.15`) and should be tuned with telemetry.
 - This design intentionally keeps retrieval deterministic and inspectable for easier threshold tuning.
 - Affinity defaults for phase 1:
   - track recently touched IDs per DM/thread
@@ -130,11 +131,43 @@ Semantic index freshness/versioning:
   - `embedding_model`
   - `chunk_size`
   - `chunk_overlap`
+  - `embedding_text_schema_version`
   - `index_schema_version`
 - Trigger full semantic reindex when any metadata value changes.
 - Trigger incremental/background sync on canonical object writes.
 - On startup, run a background sync check and avoid blocking normal command handling.
 - Queries should use the last successful index snapshot while background sync runs.
+
+### 5) Semantic Embedding Generation and Lifecycle
+
+Semantic indexing should be deterministic and incremental.
+
+Embedding text composition:
+
+- Build a deterministic embedding text payload from canonical content:
+  - required: `id`, `type`, `title`
+  - type-specific high-signal fields when present (for example `next_action`, `one_liner`, `status`)
+  - canonical body text
+- Keep the embedding text builder versioned via `embedding_text_schema_version`.
+- In phase 2, default to one embedding per object first; introduce chunking only when needed for long-object recall.
+
+Incremental update behavior:
+
+- On create: generate embeddings for the new object and write semantic rows.
+- On update/append: recompute embedding text hash and only re-embed changed objects/chunks.
+- On unchanged content: reuse stored vectors (no re-embedding).
+
+Object-state behavior:
+
+- `status=done` (or equivalent closed status) remains indexed and searchable.
+- Retrieval may apply a small deterministic down-rank for done/closed status, but must not hard-exclude those objects.
+- `archived=true` objects are excluded from active semantic retrieval.
+- If an object is deleted from canonical storage, remove its semantic rows.
+
+Storage and clearing behavior:
+
+- Semantic index files, embedding caches, and semantic metadata must live under `archive_root` as derived artifacts.
+- `make clear-archive` must remove all semantic/vector artifacts along with other derived archive data.
 
 ## Timezone & Datetime Handling
 
@@ -157,7 +190,9 @@ matching:
   lexical_weight: 1.0
   recency_weight: 0.15
   affinity_weight: 0.25
-  semantic_weight: 0.0
+  semantic_weight: 0.15
+  semantic_provider: "openai"
+  semantic_model: "text-embedding-3-small"
   candidate_multiplier: 4
   max_candidate_pool: 20
   affinity_recent_ids_per_thread: 20
@@ -169,7 +204,8 @@ matching:
 ```
 
 Notes:
-- `semantic_weight` stays `0.0` until semantic index is implemented.
+- `semantic_weight` ships with a conservative non-zero default and can be adjusted per deployment.
+- `semantic_provider`/`semantic_model` default to OpenAI for initial rollout because Squire already depends on OpenAI for interpretation.
 - `candidate_limit` controls post-fusion shortlist size; `candidate_multiplier` and `max_candidate_pool` control pre-fusion recall depth.
 - Weight values are normalized at runtime across active signals.
 
@@ -178,7 +214,9 @@ Notes:
 - No canonical schema changes required.
 - Add derived schema for matching trace artifact (for example `config/schemas/matching_trace_v1.json`).
 - Extend index (or helper cache) to expose fields needed for structured boosts (for example `next_action`, `updated_at` already present; add lightweight affinity cache keyed by channel/thread).
-- Add semantic index metadata storage (provider/model/chunking/schema version) to drive safe rebuild triggers.
+- Add semantic index metadata storage (provider/model/chunking/embedding text schema/index schema version) to drive safe rebuild triggers.
+- Add semantic embedding cache keyed by normalized embedding text hash + provider/model.
+- Ensure semantic artifacts are archive-derived and live under `archive_root`.
 
 ## Evaluation Plan
 
@@ -203,6 +241,8 @@ Track:
 - `auto_apply_precision >= 0.98` on eval set.
 - no increase in unintended auto-applies vs baseline test corpus.
 - all matching and gating outcomes logged in derived artifacts.
+- done/closed objects remain retrievable via semantic search.
+- archived/deleted objects are excluded from active semantic retrieval.
 
 ## Rollout Plan
 

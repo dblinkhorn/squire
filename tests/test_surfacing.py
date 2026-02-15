@@ -148,13 +148,13 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     assert all("PR001" not in line for line in all_lines)
 
     rendered = digest.render()
-    assert rendered.startswith("📌 Daily digest · Thu Jan 22")
-    assert "⚖️ Overdue 1 | Today 1 | Soon 1 | Projects 1 | People 1" in rendered
-    assert "🔴 Admin overdue" in rendered
-    assert "🟠 Admin due today" in rendered
-    assert "🟡 Admin due soon" in rendered
-    assert "🧱 Projects needing attention" in rendered
-    assert "🤝 People to follow up" in rendered
+    assert rendered.startswith("📌 **Daily digest** · Thu Jan 22")
+    assert "🔴 **Admin overdue**" in rendered
+    assert "🟠 **Admin due today**" in rendered
+    assert "🟡 **Admin due soon**" in rendered
+    assert "🧱 **Projects needing attention**" in rendered
+    assert "🤝 **People to follow up**" in rendered
+    assert "────────────" in rendered
     assert "• Pay rent - due Tue Jan 20 (2 days ago)" in rendered
     assert "• Call vet - due Thu Jan 22 at 3:00 PM (today)" in rendered
     assert "• Submit report - due Fri Jan 23 (tomorrow)" in rendered
@@ -168,8 +168,7 @@ def test_daily_digest_render_all_clear_sections(tmp_path: Path) -> None:
     digest = build_daily_digest(objects_root, config, now=now)
     rendered = digest.render()
 
-    assert rendered.startswith("📌 Daily digest · Mon Feb 9")
-    assert "⚖️ Overdue 0 | Today 0 | Soon 0 | Projects 0 | People 0" in rendered
+    assert rendered.startswith("📌 **Daily digest** · Mon Feb 9")
     assert rendered.count("• All clear") == 5
 
 
@@ -411,13 +410,12 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
     assert all("PR_BLOCKED" not in line for line in all_lines)
 
     rendered = review.render()
-    assert rendered.startswith("🗓️ Weekly review · Thu Jan 22")
-    assert "⚖️ Changed 4 | Unscheduled 2 | Projects 1 | People 1 | Ideas 1" in rendered
-    assert "📝 Recently changed notes" in rendered
-    assert "📂 Open admin without due dates" in rendered
-    assert "🧱 Blocked or stale projects" in rendered
-    assert "🤝 People overdue for contact" in rendered
-    assert "💡 Ideas updated recently" in rendered
+    assert rendered.startswith("🗓️ **Weekly review** · Thu Jan 22")
+    assert "📝 **Recently changed notes**" in rendered
+    assert "📂 **Open admin without due dates**" in rendered
+    assert "🧱 **Blocked or stale projects**" in rendered
+    assert "🤝 **People overdue for contact**" in rendered
+    assert "💡 **Ideas updated recently**" in rendered
 
 
 def test_build_weekly_review_ideas_section_optional(tmp_path: Path) -> None:

@@ -24,6 +24,8 @@ class DecisionConfigTests(unittest.TestCase):
                 confirm_threshold=0.65,
                 candidate_limit=3,
                 candidate_score_threshold=0.2,
+                auto_min_score=0.55,
+                auto_min_margin=0.20,
             ),
         )
 
@@ -41,6 +43,19 @@ class DecisionConfigTests(unittest.TestCase):
         self.assertEqual(decision.confirm_threshold, 0.7)
         self.assertEqual(decision.candidate_limit, 4)
         self.assertEqual(decision.candidate_score_threshold, 0.35)
+        self.assertEqual(decision.auto_min_score, 0.55)
+        self.assertEqual(decision.auto_min_margin, 0.20)
+
+    def test_matching_gate_values_are_loaded_from_matching_block(self) -> None:
+        config = {
+            "matching": {
+                "auto_min_score": 0.7,
+                "auto_min_margin": 0.25,
+            }
+        }
+        decision = load_decision_config(config)
+        self.assertEqual(decision.auto_min_score, 0.7)
+        self.assertEqual(decision.auto_min_margin, 0.25)
 
 
 if __name__ == "__main__":

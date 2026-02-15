@@ -26,6 +26,56 @@ class _Message:
         self.content = content
 
 
+def _button_labels(view) -> list[str]:
+    labels: list[str] = []
+    for child in view.children:
+        label = getattr(child, "label", None)
+        if isinstance(label, str):
+            labels.append(label)
+    return labels
+
+
+def test_pending_action_view_shows_primary_buttons() -> None:
+    async def _run() -> None:
+        view = discord_bot.PendingActionView(
+            pending_id="PA_1",
+            pending_root="/tmp/pending",
+            objects_root="/tmp/objects",
+            index_db="/tmp/index.sqlite",
+            schema_path=Path("config/schemas/derived_event_admin_v1.json"),
+            author_id=1,
+            candidates=[{"id": "A_1", "title": "Call dermatologist", "snippet": "Call dermatologist"}],
+            default_target_id="A_1",
+            matching=None,
+            affinity_key=(1, 2),
+        )
+        labels = _button_labels(view)
+        assert labels == ["Confirm", "Create New", "Cancel"]
+
+    asyncio.run(_run())
+
+
+def test_pending_action_view_shows_confirmation_buttons() -> None:
+    async def _run() -> None:
+        view = discord_bot.PendingActionView(
+            pending_id="PA_1",
+            pending_root="/tmp/pending",
+            objects_root="/tmp/objects",
+            index_db="/tmp/index.sqlite",
+            schema_path=Path("config/schemas/derived_event_admin_v1.json"),
+            author_id=1,
+            candidates=[{"id": "A_1", "title": "Call dermatologist", "snippet": "Call dermatologist"}],
+            default_target_id="A_1",
+            matching=None,
+            affinity_key=(1, 2),
+            confirm_action="cancel",
+        )
+        labels = _button_labels(view)
+        assert labels == ["Yes, cancel (do nothing)", "No, go back"]
+
+    asyncio.run(_run())
+
+
 def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -58,7 +108,7 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
         calls.append(f"status:{status}")
         return pending
 
-    def _fake_refresh_index(objects_root, index_db):
+    def _fake_refresh_index(objects_root, index_db, *, matching=None):
         calls.append(f"refresh:{objects_root}:{index_db}")
 
     monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
@@ -76,7 +126,7 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
         }
     }
 
-    handled = asyncio.run(discord_bot._handle_command(object(), "!confirm PA_1", "R_1", config))
+    handled = asyncio.run(discord_bot._handle_command(_Message("!confirm PA_1"), "!confirm PA_1", "R_1", config))
 
     assert handled is True
     assert "status:confirmed" in calls
