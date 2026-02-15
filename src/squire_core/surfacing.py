@@ -125,6 +125,18 @@ _SECTION_EMOJI = {
     "People overdue for contact": "🤝",
     "Ideas updated recently": "💡",
 }
+_SECTION_DIVIDER_WIDTH = {
+    "Admin overdue": 15,
+    "Admin due today": 16,
+    "Admin due soon": 16,
+    "Projects needing attention": 24,
+    "People to follow up": 18,
+    "Recently changed notes": 22,
+    "Open admin without due dates": 27,
+    "Blocked or stale projects": 24,
+    "People overdue for contact": 25,
+    "Ideas updated recently": 21,
+}
 
 
 def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
@@ -271,7 +283,7 @@ def _format_section_title(title: str) -> str:
 
 
 def _section_divider(title: str) -> str:
-    width = max(12, min(28, len(title) + 2))
+    width = _SECTION_DIVIDER_WIDTH.get(title, len(title))
     return "─" * width
 
 

@@ -6,7 +6,6 @@ Purpose:
 
 ## Near-Term Priorities
 
-- Async-safe LLM transport hardening to avoid event-loop blocking under network latency.
 - Natural-language command routing for read-only intents (`status`, `weekly`, `recent`, `find`, `show`).
 - Numbered mutation ergonomics (`!done 2`, `!append 3 ...`, `!fix 1 ...`).
 

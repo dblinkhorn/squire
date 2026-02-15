@@ -28,10 +28,10 @@ from squire_core.decision_flow import DecisionRouting, apply_decision_to_derived
 from squire_core.derived_event_store import write_derived_event
 from squire_core.id_utils import generate_prefixed_id
 from squire_core.indexer import rebuild_index
-from squire_core.interpreter import InterpretationValidationError, interpret_text
+from squire_core.interpreter import InterpretationValidationError, interpret_text_async
 from squire_core.llm.openai_provider import OpenAIProvider
 from squire_core.llm.prompts import load_prompt
-from squire_core.matching import build_matching_candidates, sync_semantic_index
+from squire_core.matching import build_matching_candidates_async, sync_semantic_index
 from squire_core.operation_apply import apply_operations
 from squire_core.pending_actions import (
     PendingAction,
@@ -602,7 +602,21 @@ def _refresh_index(
         logging.exception("semantic_sync_failed error=%s", exc)
 
 
-def _candidate_queries_from_llm(
+async def _refresh_index_async(
+    objects_root: str | Path,
+    index_db: str | Path,
+    *,
+    matching: MatchingConfig | None = None,
+) -> None:
+    await asyncio.to_thread(
+        _refresh_index,
+        objects_root,
+        index_db,
+        matching=matching,
+    )
+
+
+async def _candidate_queries_from_llm(
     *,
     provider: OpenAIProvider,
     model: str,
@@ -611,7 +625,7 @@ def _candidate_queries_from_llm(
 ) -> list[str]:
     schema_path = Path("config/schemas/candidate_query_v1.json")
     try:
-        result = interpret_text(
+        result = await interpret_text_async(
             provider=provider,
             text=message,
             model=model,
@@ -840,7 +854,7 @@ class PendingActionView(discord.ui.View):
             _write_pending_with_status(self.pending_root, pending, "failed", derived=derived)
             await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
             return
-        _refresh_index(self.objects_root, self.index_db, matching=self._matching)
+        await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
         if self._matching:
             touched_ids = _extract_target_ids_from_derived(derived)
             _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
@@ -877,7 +891,7 @@ class PendingActionView(discord.ui.View):
             _write_pending_with_status(self.pending_root, pending, "failed", derived=derived)
             await interaction.response.send_message("Failed to create a new item. Check logs for details.")
             return
-        _refresh_index(self.objects_root, self.index_db, matching=self._matching)
+        await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
         if self._matching:
             touched_ids = _extract_ids_from_written_paths(result.written_paths)
             _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
@@ -1024,7 +1038,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     extract_prompt = f"{extract_prompt} {reference}"
 
     try:
-        classification = interpret_text(
+        classification = await interpret_text_async(
             provider=provider,
             text=content,
             model=model,
@@ -1100,7 +1114,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
         queries = [content]
         if candidate_query_prompt:
-            llm_queries = _candidate_queries_from_llm(
+            llm_queries = await _candidate_queries_from_llm(
                 provider=provider,
                 model=model,
                 prompt=candidate_query_prompt,
@@ -1111,7 +1125,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         semantic_provider = provider if matching_config.semantic_weight > 0 and matching_config.semantic_provider == "openai" else None
         affinity_key = _cursor_key(message)
         affinity_scores = _load_affinity_scores(affinity_key, matching=matching_config)
-        retrieval = build_matching_candidates(
+        retrieval = await build_matching_candidates_async(
             db_path=index_db,
             queries=queries,
             object_type=object_type,
@@ -1174,7 +1188,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             )
             decision_schema = Path("config/schemas/decision_v1.json")
             try:
-                decision = interpret_text(
+                decision = await interpret_text_async(
                     provider=provider,
                     text=decision_input,
                     model=model,
@@ -1228,7 +1242,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         logging.warning("decision_config_missing id=%s decision_prompt_path=%s", raw_id, decision_prompt_path)
 
     try:
-        interpretation = interpret_text(
+        interpretation = await interpret_text_async(
             provider=provider,
             text=content,
             model=model,
@@ -1384,7 +1398,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         object_type,
         ",".join(str(path) for path in result.written_paths),
     )
-    _refresh_index(
+    await _refresh_index_async(
         objects_root,
         config.get("paths", {}).get("index_db", "index/sb.sqlite"),
         matching=matching_config,
@@ -1851,7 +1865,7 @@ async def _handle_command(
             await _swap_reaction(message, "⏳", "⚠️")
             await _send_response(message, "Failed to apply pending action. Check logs for details.")
             return True
-        _refresh_index(objects_root, index_db, matching=matching_config)
+        await _refresh_index_async(objects_root, index_db, matching=matching_config)
         touched_ids = _extract_target_ids_from_derived(pending.derived)
         touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
         _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
@@ -1998,7 +2012,7 @@ async def _apply_command_operation(
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "Command failed. Check logs for details.")
         return True
-    _refresh_index(
+    await _refresh_index_async(
         objects_root,
         config.get("paths", {}).get("index_db", "index/sb.sqlite"),
         matching=matching_config,

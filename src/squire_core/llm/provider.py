@@ -13,3 +13,8 @@ class LLMResult:
 class LLMProvider(Protocol):
     def interpret(self, text: str, schema: dict, model: str, system_prompt: str) -> LLMResult:
         ...
+
+
+class AsyncLLMProvider(Protocol):
+    async def interpret_async(self, text: str, schema: dict, model: str, system_prompt: str) -> LLMResult:
+        ...

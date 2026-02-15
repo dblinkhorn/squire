@@ -21,6 +21,12 @@ LLM settings in `config.yaml`:
 - `llm.decision_prompt_path`: decision prompt path for update/append routing.
 - `llm.candidate_query_prompt_path`: candidate-query prompt path for matching retrieval.
 
+OpenAI transport timeout behavior:
+
+- OpenAI HTTP timeout values are runtime defaults (not currently configurable via `config.yaml`).
+- Current defaults: `45` seconds for interpret and embedding calls.
+- Minimum enforced timeout: `10` seconds.
+
 Confidence settings in `config.yaml`:
 
 - `confidence.create_threshold`: minimum classification confidence required before creating/interpreting a note from a captured message.

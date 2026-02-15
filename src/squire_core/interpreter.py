@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from squire_core.llm.provider import LLMProvider, LLMResult
+from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.schema_loader import load_json_schema, validate_json
 
 
@@ -20,16 +21,25 @@ class InterpretationValidationError(ValueError):
         self.raw_text = raw_text
         self.payload = payload
 
-
-def interpret_text(
-    provider: LLMProvider,
+async def interpret_text_async(
+    provider: LLMProvider | AsyncLLMProvider,
     text: str,
     model: str,
     system_prompt: str,
     schema_path: str | Path,
 ) -> Interpretation:
     schema = load_json_schema(schema_path)
-    result: LLMResult = provider.interpret(text=text, schema=schema, model=model, system_prompt=system_prompt)
+    interpret_async = getattr(provider, "interpret_async", None)
+    if callable(interpret_async):
+        result = await interpret_async(text=text, schema=schema, model=model, system_prompt=system_prompt)
+    else:
+        result = await asyncio.to_thread(
+            provider.interpret,
+            text=text,
+            schema=schema,
+            model=model,
+            system_prompt=system_prompt,
+        )
     try:
         validate_json(schema, result.payload)
     except Exception as exc:
