@@ -44,6 +44,8 @@ Squire can also interpret natural-language queries via the LLM, translate them i
 ## Nice-to-Have (v1.1+)
 
 Planned follow-ons include `!due [days]`, `!archive`, `!help`, and `!rebuild-index` for proposed calendar actions.
+Future maintenance UX ideas include Discord component shortcuts on surfaced lists (for example a `Mark Items Done` button
+that opens a multi-select menu for bulk completion with confirm/undo safeguards).
 
 Commands never generate new canonical objects unless explicitly stated.
 

@@ -61,3 +61,21 @@
   - primary actions: `Confirm`, `Create New`, `Cancel`
   - second step confirmation with `No, go back` restoring original controls
   - cancel copy explicitly states it does nothing.
+
+## Planned UX Routing (2026-02-15)
+- Added spec for natural-language command routing to prevent command-like text from entering capture/create flows:
+  `docs/nl-command-routing-spec.md`.
+- Initial scope targets read-only command intents (`status`, `weekly`, `recent`, `find`, `show`) with clarification on ambiguity.
+
+## Runtime Stability Planning (2026-02-15)
+- Added separate transport spec for heartbeat stability and async migration:
+  `docs/async-llm-transport-spec.md`.
+- Plan is phased: off-loop bridge + timeouts first, async-native provider second.
+
+## Numbered Mutation Planning (2026-02-15)
+- Added dedicated spec for numbered mutation actions (`!done 2`, `!append 3 ...`, `!fix 1 ...`):
+  `docs/numbered-mutations-spec.md`.
+- Scope includes phased rollout from `!recent`/`!find` to digest/review (`!status`/`!weekly`) row targeting.
+- Resolved v1 decisions: literal row numbering, include all surfaced types, and return confirmation-only (no auto re-render).
+- Resolved UX decision: add concise command tips to `!recent`, `!find`, `!status`, and `!weekly` outputs; include `!recent N` max-50 reminder.
+- Added future maintenance UX direction: Discord component-based bulk done flow (`Mark Items Done` button + multi-select + confirm, with optional undo) in `docs/numbered-mutations-spec.md` and summarized in `docs/commands.md`.
