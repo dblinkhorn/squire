@@ -42,6 +42,7 @@ Matching settings in `config.yaml` (hybrid lexical/semantic retrieval and determ
 
 - matching.lexical_weight / matching.recency_weight / matching.affinity_weight / matching.semantic_weight: component weights for fused candidate scoring.
   `matching.semantic_weight` ships at a conservative default of `0.15`.
+
 - matching.semantic_provider / matching.semantic_model: embedding provider/model for semantic retrieval (OpenAI-first rollout).
 - matching.candidate_multiplier / matching.max_candidate_pool / matching.candidate_limit: pre-fusion recall depth and post-fusion shortlist size.
 - matching.affinity_recent_ids_per_thread / matching.affinity_ttl_days / matching.affinity_max_boost: conversation-affinity memory window and max additive contribution.
@@ -69,6 +70,7 @@ The archive root controls where durable artifacts are stored and is required. By
 For Docker Compose deployments, set `archive_root` to the in-container mount path (for example, `"/data/archive"`).
 
 Archive paths include:
+
 - events_raw
 - events_derived
 - pending_actions

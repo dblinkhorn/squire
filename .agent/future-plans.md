@@ -1,6 +1,7 @@
 # Future Plans (High-Level)
 
 Purpose:
+
 - Track non-spec, high-level future ideas outside runtime reference docs.
 - Keep user-facing docs (`README.md`, `docs/*.md` reference guides) focused on implemented behavior only.
 

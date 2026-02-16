@@ -53,9 +53,11 @@ Admin items are tasks and commitments that need completion (including calendarab
 The SQLite index is derived and rebuildable.
 
 Current tables:
+
 - `objects`: canonical object rows used for filtering/ranking metadata.
 - `objects_fts`: FTS5 virtual table over title/body for lexical search.
 
 When semantic matching is enabled, additional derived semantic tables are maintained in the same SQLite database:
+
 - `semantic_objects`
 - `semantic_meta`
