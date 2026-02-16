@@ -53,6 +53,7 @@ from squire_core.surfacing import (
     build_weekly_review,
     load_surfacing_config,
 )
+from squire_core.test_seed import SeedStats, ensure_test_safe_archive_root, seed_test_canonical_objects
 from squire_core.timezone_utils import (
     format_reference_date,
     format_reference_time,
@@ -497,6 +498,91 @@ def _clear_archive_contents(archive_root: str | Path) -> int:
     return removed
 
 
+def _run_test_mode_reset_seed(
+    config: dict[str, Any],
+    *,
+    env_value: str | None = None,
+    now: datetime | None = None,
+) -> SeedStats | None:
+    raw_env = env_value if env_value is not None else os.getenv("SQUIRE_ENV")
+    if str(raw_env or "").strip().lower() != "test":
+        return None
+
+    archive_root = config.get("archive_root")
+    if not isinstance(archive_root, str) or not archive_root.strip():
+        raise ValueError("archive_root is not configured.")
+
+    paths = config.get("paths")
+    if not isinstance(paths, dict):
+        raise ValueError("paths are not configured.")
+    objects_root = paths.get("objects_root")
+    index_db = paths.get("index_db")
+    if not isinstance(objects_root, str) or not objects_root.strip():
+        raise ValueError("paths.objects_root is not configured.")
+    if not isinstance(index_db, str) or not index_db.strip():
+        raise ValueError("paths.index_db is not configured.")
+
+    root = ensure_test_safe_archive_root(archive_root)
+    root.mkdir(parents=True, exist_ok=True)
+    logging.info("test_mode_startup_enabled archive_root=%s", root)
+
+    removed = _clear_archive_contents(root)
+    logging.info("test_mode_reset_completed removed_entries=%s", removed)
+
+    stats = seed_test_canonical_objects(
+        objects_root=objects_root,
+        schema_path=Path("config/schemas/canonical_object_v1.json"),
+        now=now,
+    )
+    logging.info(
+        "test_mode_seed_completed admin=%s projects=%s people=%s ideas=%s",
+        stats.admin_count,
+        stats.projects_count,
+        stats.people_count,
+        stats.ideas_count,
+    )
+
+    rebuild_index(objects_root, index_db)
+    logging.info("test_mode_rebuild_index_completed")
+    return stats
+
+
+def _apply_test_archive_root_override(
+    config: dict[str, Any],
+    *,
+    env_value: str | None = None,
+) -> dict[str, Any]:
+    raw_env = env_value if env_value is not None else os.getenv("SQUIRE_ENV")
+    if str(raw_env or "").strip().lower() != "test":
+        return config
+
+    override = config.get("test_archive_root")
+    if not isinstance(override, str) or not override.strip():
+        return config
+
+    updated = dict(config)
+    updated["archive_root"] = override.strip()
+
+    paths = config.get("paths")
+    if isinstance(paths, dict):
+        relative_paths: dict[str, Any] = {}
+        for key, value in paths.items():
+            candidate = Path(str(value)).expanduser()
+            if not candidate.is_absolute():
+                relative_paths[str(key)] = value
+        if relative_paths:
+            updated["paths"] = relative_paths
+        else:
+            updated.pop("paths", None)
+
+    logging.info(
+        "test_mode_archive_root_override enabled=true archive_root=%s test_archive_root=%s",
+        config.get("archive_root"),
+        override.strip(),
+    )
+    return updated
+
+
 def _prune_result_cursors(now: datetime | None = None) -> None:
     current = now or datetime.now(timezone.utc)
     expired = [key for key, value in _RESULT_CURSORS.items() if value.expires_at <= current]
@@ -706,7 +792,7 @@ def _number_sections_for_cursor(sections: list[DigestSection]) -> tuple[list[Dig
             if object_id is None:
                 numbered_lines.append(line)
                 continue
-            numbered_lines.append(f"{next_number}. {line}")
+            numbered_lines.append(_format_numbered_row(section.title, line, next_number))
             numbered_object_ids.append(object_id)
             cursor_object_ids.append(object_id)
             next_number += 1
@@ -719,6 +805,57 @@ def _number_sections_for_cursor(sections: list[DigestSection]) -> tuple[list[Dig
         )
 
     return numbered_sections, cursor_object_ids
+
+
+def _format_numbered_row(section_title: str, line: str, number: int) -> str:
+    parsed = _split_section_row_metadata(section_title, line)
+    if parsed is None:
+        return f"{number}. {line}"
+    title, metadata = parsed
+    if not metadata:
+        return f"{number}. {title}"
+    bullet_lines = "\n".join(f"   • {item}" for item in metadata)
+    return f"{number}. {title}\n{bullet_lines}"
+
+
+def _split_section_row_metadata(section_title: str, line: str) -> tuple[str, list[str]] | None:
+    value = line.strip()
+    if not value:
+        return None
+
+    section_markers: dict[str, list[str]] = {
+        "Admin overdue": [" - due "],
+        "Admin due today": [" - due "],
+        "Admin due soon": [" - due "],
+        "Projects needing attention": [" - blocked", " - stale "],
+        "People to follow up": [" - next contact "],
+        "Completed this week": [" - "],
+        "Open admin without due dates": [" - "],
+        "Blocked or stale projects": [" - blocked", " - stale "],
+        "People overdue for contact": [" - next contact "],
+        "Ideas updated recently": [" - updated "],
+    }
+
+    markers = section_markers.get(section_title, [" - "])
+    for marker in markers:
+        index = value.find(marker)
+        if index <= 0:
+            continue
+        title = value[:index].strip()
+        metadata_value = value[index + 3 :].strip()
+        if not title or not metadata_value:
+            continue
+        metadata = _split_metadata_items(section_title, metadata_value)
+        return title, metadata
+
+    return None
+
+
+def _split_metadata_items(section_title: str, metadata_value: str) -> list[str]:
+    multi_item_sections = {"Completed this week", "Open admin without due dates"}
+    if section_title not in multi_item_sections:
+        return [metadata_value]
+    return [part.strip() for part in metadata_value.split(",") if part.strip()]
 
 
 def _render_numbered_daily_digest_for_command(digest: Any) -> tuple[str, list[str]]:
@@ -2481,9 +2618,15 @@ def main() -> None:
     _configure_logging()
     config_path = Path("config.yaml")
     config = load_config(config_path)
+    config = _apply_test_archive_root_override(config)
     try:
         config = normalize_archive_config(config)
     except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    try:
+        _run_test_mode_reset_seed(config)
+    except Exception as exc:
+        logging.exception("test_mode_startup_failed reason=%s", exc)
         raise SystemExit(str(exc)) from exc
     matching_config = load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")

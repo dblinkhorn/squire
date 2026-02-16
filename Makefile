@@ -1,10 +1,11 @@
-.PHONY: help install init run-bot test clear-archive
+.PHONY: help install init run-bot run-bot-test test clear-archive
 
 help:
 	@echo "Available targets:"
 	@echo "  install   Install dependencies (pip -e .)"
 	@echo "  init      Initialize archive storage (squire init)"
 	@echo "  run-bot   Run the Discord bot"
+	@echo "  run-bot-test  Run Discord bot in test reset+seed mode"
 	@echo "  test      Run test suite"
 	@echo "  clear-archive  Delete archive contents (uses archive_root from config.yaml)"
 
@@ -16,6 +17,9 @@ init:
 
 run-bot:
 	python -m squire_core.discord_bot
+
+run-bot-test:
+	SQUIRE_ENV=test python -m squire_core.discord_bot
 
 test:
 	python3 -m pytest -q

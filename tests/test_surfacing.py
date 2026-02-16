@@ -302,10 +302,10 @@ def test_build_find_list_and_item_detail(tmp_path: Path) -> None:
 
     detail = build_item_detail(objects_root, surfaced.object_ids[0], config)
     assert detail is not None
-    assert "Title: Call dentist" in detail
-    assert "Type: admin" in detail
-    assert "ID: ADM_DENTIST" in detail
-    assert "Notes:" in detail
+    assert "**Title:** Call dentist" in detail
+    assert "**Type:** admin" in detail
+    assert "(ID: ADM_DENTIST)" in detail
+    assert "**Notes:**" in detail
 
 
 
