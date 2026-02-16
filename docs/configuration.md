@@ -8,6 +8,12 @@ Required or optional environment variables include:
 - `OPENAI_API_KEY` (required)
 - `HEALTH_HOST` (optional, default `0.0.0.0`)
 - `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
+- `SQUIRE_RUN_ID` (optional; startup run/session identifier for log/trace/artifact correlation)
+- `SQUIRE_ENV` (optional; environment label used by observability settings, overrides `observability.environment` when set)
+- `SQUIRE_LOG_LEVEL` (optional; one-off runtime log level override, used by `make run-bot log_level=...`)
+- `OTEL_ENABLED` (optional; `true`/`false` to enable OTLP telemetry export)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` (optional; OTLP base endpoint)
+- `OTEL_EXPORTER_OTLP_HEADERS` (optional; OTLP headers as `k=v,k=v`)
 
 ## config.yaml
 
@@ -48,6 +54,20 @@ Matching settings in `config.yaml` (hybrid lexical/semantic retrieval and determ
 - matching.auto_min_score / matching.auto_min_margin: deterministic auto-apply score and margin gates (in addition to decision confidence thresholds).
 - matching.semantic_text_schema_version: embedding text composition version; changing this triggers a full semantic reindex.
 
+Observability settings in `config.yaml`:
+
+- `observability.enabled`: enables OTLP telemetry initialization when true and an OTLP endpoint is configured.
+- `observability.service_name`: telemetry service name.
+- `observability.environment`: telemetry environment label.
+- `observability.log_level`: runtime log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`), default `INFO`.
+- `observability.otlp_endpoint`: OTLP base endpoint (for traces/metrics signal export).
+- `observability.otlp_headers`: OTLP headers as `k=v,k=v`.
+
+Behavior note:
+
+- when observability is enabled, missing required OTLP configuration is treated as a startup error (fail fast).
+- runtime logging format is always structured JSON (no plain-text/toggle mode).
+
 ## Prompt Files
 
 Prompt files are stored under `config/prompts/` and referenced by path in `config.yaml`:
@@ -64,11 +84,12 @@ To customize behavior, copy the default prompt files, edit them, and point `conf
 
 ## Archive Storage
 
-The archive root controls where durable artifacts are stored and is required. By default, `squire init` creates `~/squire-archive` and writes the derived paths into `config.yaml`. `archive_root` must be an absolute path (use `~/...` for home). You can disable git initialization with `archive_git_enabled: false` or `squire init --no-git`.
+The archive root controls where durable artifacts are stored and is required. By default, `make init` (which runs `python -m squire_core.cli_init`) creates `~/squire-archive` and writes the derived paths into `config.yaml`. `archive_root` must be an absolute path (use `~/...` for home). You can disable git initialization with `archive_git_enabled: false` by running `python -m squire_core.cli_init --no-git`.
 
 For Docker Compose deployments, set `archive_root` to the in-container mount path (for example, `"/data/archive"`).
 
 Archive paths include:
+
 - events_raw
 - events_derived
 - pending_actions

@@ -122,6 +122,8 @@ Runtime logs are split by severity:
 
 - `INFO`/`WARNING` and below are emitted to `stdout`
 - `ERROR` and above are emitted to `stderr`
+- Format is structured JSON lines (single logging format across all environments)
+- Level defaults to `INFO`; set `observability.log_level: "DEBUG"` in `config.yaml` (or use `make run-bot log_level=DEBUG`) to include stage lifecycle debug logs
 
 ## Run from Source
 
@@ -175,6 +177,18 @@ make init
 python -m squire_core.discord_bot
 ```
 
+Or via make with explicit runtime mode:
+
+```sh
+make run-bot env=dev
+```
+
+For one-off verbose stage lifecycle logs:
+
+```sh
+make run-bot env=dev log_level=DEBUG
+```
+
 ## First-Time Use
 
 Open a DM with your bot and send a simple note like `Call dentist next Tuesday`.
@@ -207,14 +221,7 @@ pip install -e ".[dev]"
 
 ## Docker Releases
 
-This repo publishes Docker images from GitHub Actions when you push a SemVer tag (`vX.Y.Z`).
-
-Example:
-
-```sh
-git tag v0.1.2
-git push origin v0.1.2
-```
+This repo publishes Docker images from GitHub Actions when a new SemVer tag (`vX.Y.Z`) is pushed.
 
 On your host, update containers explicitly:
 

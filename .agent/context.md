@@ -1,46 +1,54 @@
 # Squire AI Context
 
 ## Product Scope (Current)
+
 - Primary runtime interface is Discord.
 - Primary LLM provider is OpenAI.
 - Slack/multi-user/extra providers are not active priorities unless explicitly reopened.
 
 ## Behavior and Audit Invariants
+
 - Raw events are immutable; derived artifacts are versioned; canonical objects are mutable source-of-truth.
 - Update/append decisions use conservative gating with pending-action confirmation when confidence is not high and uniquely targeted.
 - Canonical objects must preserve audit linkage via `source_event_ids` and `last_decision_id`.
 - Pending actions are stored under `events/pending` and transition through explicit statuses.
 
 ## Active Roadmap Pointers
+
 - Current top implementation priority: matching reliability improvements in `docs/matching-spec.md`.
 - High-level future ideas: `.agent/future-plans.md`.
 - Command/config contracts: `docs/commands.md` and `docs/configuration.md`.
 
 ## AI Workflow Conventions
+
 - Canonical workflow rules live in `AGENTS.md`.
 - Tracked working files: `.agent/plan.md` and `.agent/context.md`.
 - Local-only session notes: `.agent/scratchpad.md`.
 - Deprecated workflow artifacts: `.sop/`, `.ralph/`, `PROMPT.md`, `ralph.yml`.
 
 ## Recent Changes (2026-02-10)
+
 - Implemented surfacing readability Phase 1 in digest/review rendering:
   emoji-prefixed headers, summary count lines, `All clear` empty-state rows, and human-readable dates with near-term relative labels.
 - Kept surfacing behavior deterministic and list-first; no ranking/selection logic changes.
 - Deferred explicit done/edit UI actions to a later phase; existing text commands remain the mutation path.
 
 ## Matching Decisions (2026-02-14)
+
 - Matching spec now locks lexical normalization to `1 / (1 + max(0, bm25_rank))`.
 - Phase 1 affinity defaults: last 20 touched IDs per DM/thread, 7-day decay TTL, capped additive boost (`<= 0.15`).
 - Matching trace artifact shape is explicitly documented (`schema_version`, queries, mode/fallback, pool stats, weights, per-candidate component scores, ranking margins, gate outcome).
 - Degraded retrieval behavior: never auto-apply when retrieval is unavailable; freeform capture falls back to create, explicit mutation commands fail with actionable error.
 
 ## Matching Clarifications (2026-02-14)
+
 - Semantic retrieval rollout is explicitly OpenAI-first (`matching.semantic_provider`/`matching.semantic_model`) with provider abstraction retained for future local backends.
 - Semantic lifecycle is now specified: create/update are incremental, done/closed notes remain searchable, archived/deleted notes are excluded from active semantic retrieval.
 - Semantic artifacts (vector index, embedding cache, metadata) must live under `archive_root`; `make clear-archive` is expected to clear them.
 - Full semantic reindex triggers now include `embedding_text_schema_version` changes (not only model/chunking/index schema changes).
 
 ## Matching Implementation (2026-02-14)
+
 - Added `MatchingConfig` loading and deterministic auto-apply score/margin gates in `DecisionConfig` (`auto_min_score`, `auto_min_margin`).
 - Implemented semantic index + hybrid retrieval in `src/squire_core/matching.py`:
   - local semantic rows stored in SQLite (`semantic_objects`, `semantic_meta`) under the existing `index_db`
@@ -63,15 +71,18 @@
   - cancel copy explicitly states it does nothing.
 
 ## Planned UX Routing (2026-02-15)
+
 - Added spec for natural-language command routing to prevent command-like text from entering capture/create flows:
   `docs/nl-command-routing-spec.md`.
 - Initial scope targets read-only command intents (`status`, `weekly`, `recent`, `find`, `show`) with clarification on ambiguity.
 
 ## Runtime Stability Planning (2026-02-15)
+
 - Transport work was planned in phased form (off-loop bridge + timeouts first, async-native provider second).
 - Implementation is now complete; the temporary implementation spec doc was removed after completion.
 
 ## Runtime Stability Implementation (2026-02-15)
+
 - Implemented Phase 1 transport hardening:
   - `OpenAIProvider` now uses explicit request timeouts for interpret/embed HTTP calls.
   - `urllib` network failures are wrapped with clearer transport-level runtime errors.
@@ -81,6 +92,7 @@
 - Added provider transport tests in `tests/test_openai_provider.py` (timeout wiring + URL error wrapping).
 
 ## Runtime Stability Implementation (2026-02-15, Phase 2)
+
 - Migrated OpenAI transport to async-native HTTP in `OpenAIProvider` using `aiohttp`:
   - added await-native `interpret_async` and `embed_async`.
   - retained sync wrappers for non-async call sites (`sync_semantic_index`, startup sync) with guardrails against use inside active loops.
@@ -92,6 +104,7 @@
 - Follow-up cleanup also removed now-unused sync matching retrieval path (`build_matching_candidates` and `_search_semantic_candidates`) from `src/squire_core/matching.py`; runtime and tests now target async retrieval path only.
 
 ## Numbered Mutation Planning (2026-02-15)
+
 - Added dedicated spec for numbered mutation actions (`!done 2`, `!append 3 ...`, `!fix 1 ...`):
   `docs/numbered-mutations-spec.md`.
 - Scope includes phased rollout from `!recent`/`!find` to digest/review (`!status`/`!weekly`) row targeting.
@@ -100,12 +113,14 @@
 - Added future maintenance UX direction: Discord component-based bulk done flow (`Mark Items Done` button + multi-select + confirm, with optional undo) in `docs/numbered-mutations-spec.md` and summarized in `docs/commands.md`.
 
 ## Configuration Audit (2026-02-15)
+
 - Synced config docs to runtime behavior:
   - removed unimplemented `GOOGLE_CALENDAR_CREDENTIALS` and `querying.*` references from config docs/template.
   - added missing implemented keys: `llm.interpreter_model`, `confidence.create_threshold`, and `surfacing.ideas.weekly_review`.
 - `config.yaml.example` now omits the unused `querying` block to match current runtime parsing.
 
 ## Docs Accuracy Audit (2026-02-15)
+
 - Updated runtime-facing docs to remove shipped-vs-planned drift:
   - `docs/architecture.md`: update/append pipeline now documented as implemented.
   - `docs/commands.md`: removed unimplemented NL-query/tag command claims; updated update/append section label.
@@ -118,3 +133,96 @@
 - Policy update:
   - runtime/reference docs should describe implemented behavior only.
   - planned/future work should live in working docs (`.agent/context.md`, `.agent/plan.md`, `.agent/future-plans.md`) and detailed specs.
+
+## Agent Harness + O11y Planning (2026-02-15)
+
+- Added implementation spec: `docs/agent-harness-spec.md`.
+- Core direction is dual-mode observability:
+  - local ephemeral stack for dev/agent sessions (Alloy + Loki + Tempo + Prometheus, Grafana optional UI).
+  - production collector-agnostic export (OTLP + structured logs).
+- Session enforcement direction: local `make verify-session` gate is mandatory for executable-behavior changes and must emit `.agent/runs/<run_id>/session_gate.json`.
+- Gate includes both deterministic harness checks and live Discord smoke checks; docs-only changes may skip smoke with recorded reason.
+- CI-level attestation/smoke enforcement is a planned follow-on, not required in the initial rollout.
+- Telemetry correlation standard should include `run_id` across logs/traces/artifacts; avoid `run_id` metric labels (high cardinality).
+- Entropy-control direction: keep `AGENTS.md` as table-of-contents style navigation and reduce duplicated procedural instructions.
+
+## Agent Harness Phase 0 Implementation (2026-02-15)
+
+- Refactored `AGENTS.md` into table-of-contents style with canonical doc links and workflow/gate references.
+- Added `docs/agent-harness-runbook.md` to separate current baseline workflow from target harness workflow.
+- Added `docs/observability.md` to separate currently implemented runtime signals from planned telemetry model.
+- Phase 0 intentionally does not claim `make verify-session` is implemented yet; command remains planned in spec.
+
+## Agent Harness Phase 1 Implementation (2026-02-15)
+
+- Added `src/squire_core/observability.py` with:
+  - JSON logging formatter + stdout/stderr split logging configuration.
+  - startup/session `run_id` context and generation.
+  - stage observation helper (`observe_stage`) with duration logging and failure counters.
+  - metrics helper scaffolding (`increment_counter`, `observe_histogram`, in-memory snapshots for tests).
+  - OTLP initialization path (enabled by config/env, with OTel as required runtime dependency).
+- Integrated observability hooks in `src/squire_core/discord_bot.py`:
+  - startup now loads observability config, configures logging format, sets `run_id`, and initializes telemetry.
+  - stage hooks added for message receive/raw write/classify/retrieve/decision/extract/apply/response/matching-trace-write.
+  - counters added for messages, decision outcomes, and pending-action status transitions.
+- Added tests in `tests/test_observability.py` for JSON log fields, stage metric behavior, and config loading.
+- Updated docs:
+  - `docs/configuration.md` with observability env/config keys.
+  - `docs/observability.md` to reflect Phase 1 implemented behavior vs planned items.
+- Local test note: sandbox disallows binding local sockets, so `tests/test_health_server.py` cannot run in this environment.
+
+## Architecture Principles + Dependency Policy Update (2026-02-15)
+
+- `AGENTS.md` now includes a dedicated architecture principles section covering boundaries, dependency direction, core-vs-IO separation, observability, DI, and testability.
+- `AGENTS.md` now includes a dependency sync policy:
+  - when dependency manifests change, run env sync (`uv sync` preferred; `pip install -e ".[dev]"` fallback) before validating.
+  - fail fast when required dependencies for enabled features are missing.
+- Future ideas were added to `.agent/future-plans.md`:
+  - extract transport-agnostic orchestration from `discord_bot` for future chat interfaces.
+  - run DI audit and incremental dependency inversion where it improves extensibility/testability.
+  - reduce side-effect surface in orchestration paths.
+  - automate dependency sync/validation in `verify-session`, including attested check results.
+- Observability initialization now fails fast when explicitly enabled but required OTLP configuration is missing.
+
+## Logging Policy Update (2026-02-15)
+
+- Runtime logging format is now JSON-only across all environments; `SQUIRE_LOG_JSON` and `observability.logs.json` are removed from code/docs.
+- `stage_complete` log events now emit at `DEBUG` level regardless of environment and are visible when `observability.log_level: "DEBUG"` is set in `config.yaml`.
+- Stage duration logging now enforces a minimum `duration_ms` of `1` to avoid zero-duration rows from timing roundoff.
+- Runtime verbosity defaults from `observability.log_level` in config (default `INFO`) and can be overridden at launch with `SQUIRE_LOG_LEVEL` (used by `make run-bot log_level=...`).
+- Key lifecycle lines (`session_started`, `raw_event_written`, `matching_trace_written`, `response_sent`) now emit as structured events via `log_event(...)` with top-level fields.
+- `discord_bot.main()` still sets runtime environment from config/env for telemetry labeling consistency.
+- Startup now applies config log level after loading `config.yaml` by re-running `configure_logging(observability_config.log_level)`.
+
+## Run Mode Selection Update (2026-02-15)
+
+- `make run-bot` now supports local mode selection directly: `make run-bot env=dev|test|prod`.
+- `SQUIRE_ENV` is applied at launch via Make target and now has precedence over `observability.environment` config in `load_observability_config`.
+- This keeps runtime mode selection explicit for local agent sessions without introducing logging format switches or extra enforcement checks.
+
+## Phase 2 Spec Hardening (2026-02-15)
+
+- Expanded `docs/agent-harness-spec.md` with a normative Phase 2 execution contract that now fixes:
+  - required local o11y services, ports, and config files
+  - Alloy routing expectations (logs->Loki, traces->Tempo, metrics->Prometheus remote write)
+  - required make target behavior and run env file semantics
+  - required query endpoints + baseline query set
+  - required artifact filenames and JSON schema keys
+  - pass/failed/blocked semantics plus retry/timeout defaults
+- Updated `docs/agent-harness-runbook.md` with Phase 2 implementation defaults mirroring the same contract for quick operator reference.
+
+## Architecture Guidance Clarification (2026-02-15)
+
+- `AGENTS.md` architecture principles now explicitly call out:
+  - prefer pure functions where practical
+  - isolate side effects (network/disk/db/clock/env/global state) in boundary/adapter modules
+
+## Docs Alignment Follow-up (2026-02-16)
+
+- Completed a focused docs drift review for logging/observability/run commands.
+- `docs/configuration.md` now reflects current runtime behavior:
+  - includes `SQUIRE_LOG_LEVEL` as a one-off runtime override path (primarily used by `make run-bot log_level=...`).
+  - replaces stale `squire init` references with `make init` / `python -m squire_core.cli_init`.
+- `docs/commands.md` corrected inline `!fix` syntax to include `<id>`.
+- `docs/observability.md` and `docs/agent-harness-spec.md` now clarify that OTLP backend configuration is optional, while OpenTelemetry Python packages are required runtime dependencies.
+- `docs/agent-harness-runbook.md` status section now explicitly lists implemented JSON logging/run_id correlation and stage metric hooks.

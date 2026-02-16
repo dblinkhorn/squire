@@ -6,7 +6,6 @@ import logging
 import os
 import shlex
 import shutil
-import sys
 import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -40,6 +39,17 @@ from squire_core.pending_actions import (
     write_pending_action,
 )
 from squire_core.raw_event import RawEvent, Source, write_raw_event
+from squire_core.observability import (
+    configure_logging,
+    generate_run_id,
+    increment_counter,
+    initialize_observability,
+    log_event,
+    load_observability_config,
+    observe_stage,
+    set_run_id,
+    set_runtime_environment,
+)
 from squire_core.schema_loader import load_json_schema, validate_json
 from squire_core.canonical_store import find_object_path, load_frontmatter
 from squire_core.surfacing import (
@@ -173,36 +183,6 @@ class _ArchiveClearConfirmation:
 
 
 _ARCHIVE_CLEAR_CONFIRMATIONS: dict[tuple[int, int], _ArchiveClearConfirmation] = {}
-
-
-class _MaxLevelFilter(logging.Filter):
-    def __init__(self, max_level: int) -> None:
-        super().__init__()
-        self._max_level = max_level
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        return record.levelno < self._max_level
-
-
-def _configure_logging() -> None:
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-
-    stdout_handler = logging.StreamHandler(stream=sys.stdout)
-    stdout_handler.setLevel(logging.INFO)
-    stdout_handler.addFilter(_MaxLevelFilter(logging.ERROR))
-    stdout_handler.setFormatter(formatter)
-
-    stderr_handler = logging.StreamHandler(stream=sys.stderr)
-    stderr_handler.setLevel(logging.ERROR)
-    stderr_handler.setFormatter(formatter)
-
-    root.addHandler(stdout_handler)
-    root.addHandler(stderr_handler)
 
 
 class _HealthRequestHandler(BaseHTTPRequestHandler):
@@ -953,6 +933,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     content = (message.content or "").strip()
     if not content:
         return
+    increment_counter("squire_messages_total", entrypoint="discord")
     if content == "DELETE":
         handled = await _handle_archive_clear_confirmation(message, config)
         if handled:
@@ -969,11 +950,19 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         timestamp=message.created_at.isoformat(),
         text=content,
     )
-    write_raw_event(raw_event, raw_dir)
-    logging.info(
-        "raw_event_written id=%s source=discord source_message_id=%s",
-        raw_id,
-        message.id,
+    with observe_stage(
+        "event.raw.write",
+        raw_event_id=raw_id,
+        discord_message_id=str(message.id),
+    ):
+        write_raw_event(raw_event, raw_dir)
+    log_event(
+        logging.INFO,
+        "raw_event_written",
+        "raw_event_written",
+        raw_event_id=raw_id,
+        source="discord",
+        source_message_id=str(message.id),
     )
 
     if content.startswith("!"):
@@ -1038,13 +1027,14 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
     extract_prompt = f"{extract_prompt} {reference}"
 
     try:
-        classification = await interpret_text_async(
-            provider=provider,
-            text=content,
-            model=model,
-            system_prompt=classify_prompt,
-            schema_path=classify_schema,
-        )
+        with observe_stage("classify", raw_event_id=raw_id):
+            classification = await interpret_text_async(
+                provider=provider,
+                text=content,
+                model=model,
+                system_prompt=classify_prompt,
+                schema_path=classify_schema,
+            )
     except InterpretationValidationError as exc:
         write_derived_event(
             derived=exc.payload,
@@ -1125,15 +1115,16 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         semantic_provider = provider if matching_config.semantic_weight > 0 and matching_config.semantic_provider == "openai" else None
         affinity_key = _cursor_key(message)
         affinity_scores = _load_affinity_scores(affinity_key, matching=matching_config)
-        retrieval = await build_matching_candidates_async(
-            db_path=index_db,
-            queries=queries,
-            object_type=object_type,
-            matching_config=matching_config,
-            score_threshold=decision_config.candidate_score_threshold,
-            affinity_scores=affinity_scores,
-            embedding_provider=semantic_provider,
-        )
+        with observe_stage("candidate.retrieve", raw_event_id=raw_id, object_type=object_type):
+            retrieval = await build_matching_candidates_async(
+                db_path=index_db,
+                queries=queries,
+                object_type=object_type,
+                matching_config=matching_config,
+                score_threshold=decision_config.candidate_score_threshold,
+                affinity_scores=affinity_scores,
+                embedding_provider=semantic_provider,
+            )
         candidates = retrieval.candidates[: decision_config.candidate_limit]
         ranking_rows = [
             {"id": candidate.object_id, "score": candidate.score}
@@ -1188,13 +1179,14 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             )
             decision_schema = Path("config/schemas/decision_v1.json")
             try:
-                decision = await interpret_text_async(
-                    provider=provider,
-                    text=decision_input,
-                    model=model,
-                    system_prompt=decision_prompt,
-                    schema_path=decision_schema,
-                )
+                with observe_stage("decision.route", raw_event_id=raw_id, object_type=object_type):
+                    decision = await interpret_text_async(
+                        provider=provider,
+                        text=decision_input,
+                        model=model,
+                        system_prompt=decision_prompt,
+                        schema_path=decision_schema,
+                    )
             except InterpretationValidationError as exc:
                 write_derived_event(
                     derived=exc.payload,
@@ -1242,13 +1234,14 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         logging.warning("decision_config_missing id=%s decision_prompt_path=%s", raw_id, decision_prompt_path)
 
     try:
-        interpretation = await interpret_text_async(
-            provider=provider,
-            text=content,
-            model=model,
-            system_prompt=extract_prompt,
-            schema_path=schema_path,
-        )
+        with observe_stage("interpret.extract", raw_event_id=raw_id, object_type=object_type):
+            interpretation = await interpret_text_async(
+                provider=provider,
+                text=content,
+                model=model,
+                system_prompt=extract_prompt,
+                schema_path=schema_path,
+            )
         interpretation.derived["raw_event_id"] = raw_id
     except InterpretationValidationError as exc:
         write_derived_event(
@@ -1312,6 +1305,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             second_score=trace_second_score,
         )
         effective_derived = apply_decision_to_derived(interpretation.derived, decision_routing)
+        increment_counter("squire_decision_outcomes_total", outcome=decision_routing.action)
     if matching_trace:
         gate = matching_trace.get("gate")
         if not isinstance(gate, dict):
@@ -1329,6 +1323,11 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         _write_matching_trace(derived_root=derived_root, raw_event_id=raw_id, trace_payload=matching_trace)
 
     if decision_routing and decision_routing.action == "needs_confirmation":
+        if decision_payload is None:
+            logging.warning("pending_confirmation_missing_decision id=%s", raw_id)
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Couldn't prepare confirmation details. Please try again.")
+            return
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
         pending_id = generate_prefixed_id("PA_")
         now_iso = _now_iso()
@@ -1346,6 +1345,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             last_decision_id=decision_artifact_id,
         )
         write_pending_action(pending, pending_root)
+        increment_counter("squire_pending_actions_total", status="pending")
         candidates = decision_payload.get("candidates") if isinstance(decision_payload, dict) else []
         candidate_list = [candidate for candidate in (candidates or []) if isinstance(candidate, dict)]
         default_target_id = None
@@ -1380,13 +1380,14 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
 
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     try:
-        result = apply_operations(
-            effective_derived,
-            objects_root=objects_root,
-            canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-            derived_schema_path=schema_path,
-            last_decision_id=decision_artifact_id,
-        )
+        with observe_stage("operation.apply", raw_event_id=raw_id, object_type=object_type):
+            result = apply_operations(
+                effective_derived,
+                objects_root=objects_root,
+                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                derived_schema_path=schema_path,
+                last_decision_id=decision_artifact_id,
+            )
     except Exception as exc:
         logging.exception("apply_failed id=%s object_type=%s", raw_id, object_type)
         await _swap_reaction(message, "⏳", "⚠️")
@@ -1526,16 +1527,23 @@ def _write_matching_trace(
     trace_payload: dict[str, Any],
 ) -> None:
     try:
-        schema = load_json_schema(Path("config/schemas/matching_trace_v1.json"))
-        validate_json(schema, trace_payload)
-        write_derived_event(
-            derived=trace_payload,
-            raw_text="",
-            derived_root=derived_root,
+        with observe_stage("matching.trace.write", raw_event_id=raw_event_id):
+            schema = load_json_schema(Path("config/schemas/matching_trace_v1.json"))
+            validate_json(schema, trace_payload)
+            write_derived_event(
+                derived=trace_payload,
+                raw_text="",
+                derived_root=derived_root,
+                raw_event_id=raw_event_id,
+                label="matching_trace",
+            )
+        log_event(
+            logging.INFO,
+            "matching_trace_written",
+            "matching_trace_written",
             raw_event_id=raw_event_id,
-            label="matching_trace",
+            retrieval_mode=trace_payload.get("retrieval_mode"),
         )
-        logging.info("matching_trace_written id=%s mode=%s", raw_event_id, trace_payload.get("retrieval_mode"))
     except Exception as exc:
         logging.warning("matching_trace_write_failed id=%s error=%s", raw_event_id, exc)
 
@@ -1619,7 +1627,8 @@ async def _send_response(
 ) -> None:
     if isinstance(message.channel, discord.Thread):
         try:
-            await message.channel.send(content=content, view=view)
+            with observe_stage("response.send", channel_kind="thread", discord_message_id=str(message.id)):
+                await message.channel.send(content=content, view=view)
         except (discord.HTTPException, discord.Forbidden) as exc:
             logging.warning("response_send_failed channel=thread error=%s", exc)
         return
@@ -1632,18 +1641,34 @@ async def _send_response(
             name = f"Squire: {trimmed}"
         else:
             name = f"Squire: {message.author.display_name}"
-        thread = await message.create_thread(
-            name=name,
-            auto_archive_duration=1440,
+        with observe_stage("response.send", channel_kind="thread_create", discord_message_id=str(message.id)):
+            thread = await message.create_thread(
+                name=name,
+                auto_archive_duration=1440,
+            )
+            await thread.send(content=content, view=view)
+        log_event(
+            logging.INFO,
+            "response_sent",
+            "response_sent",
+            channel_kind="thread_create",
+            thread_id=str(thread.id),
+            discord_message_id=str(message.id),
         )
-        await thread.send(content=content, view=view)
-        logging.info("response_sent thread=%s", thread.id)
         return
     except (discord.HTTPException, discord.Forbidden) as exc:
         logging.warning("thread_create_failed channel=%s error=%s", message.channel.id, exc)
         try:
-            await message.channel.send(content=content, view=view)
-            logging.info("response_sent channel=%s", message.channel.id)
+            with observe_stage("response.send", channel_kind="channel_fallback", discord_message_id=str(message.id)):
+                await message.channel.send(content=content, view=view)
+            log_event(
+                logging.INFO,
+                "response_sent",
+                "response_sent",
+                channel_kind="channel_fallback",
+                channel_id=str(message.channel.id),
+                discord_message_id=str(message.id),
+            )
         except (discord.HTTPException, discord.Forbidden) as send_exc:
             logging.warning("response_send_failed channel=%s error=%s", message.channel.id, send_exc)
 
@@ -1862,6 +1887,7 @@ async def _handle_command(
         except Exception as exc:
             logging.exception("pending_apply_failed id=%s", pending_id)
             update_pending_action_status(pending_root, pending_id, "failed")
+            increment_counter("squire_pending_actions_total", status="failed")
             await _swap_reaction(message, "⏳", "⚠️")
             await _send_response(message, "Failed to apply pending action. Check logs for details.")
             return True
@@ -1870,6 +1896,7 @@ async def _handle_command(
         touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
         _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
         update_pending_action_status(pending_root, pending_id, "confirmed")
+        increment_counter("squire_pending_actions_total", status="confirmed")
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(
             message,
@@ -1893,6 +1920,7 @@ async def _handle_command(
             await _send_response(message, f"Pending action {pending_id} is {pending.status}.")
             return True
         update_pending_action_status(pending_root, pending_id, "cancelled")
+        increment_counter("squire_pending_actions_total", status="cancelled")
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(message, f"Cancelled pending action {pending_id}.")
         return True
@@ -1979,11 +2007,12 @@ async def _apply_command_operation(
         await _send_response(message, f"Unable to determine object type for {target_id}")
         return True
     if validate_fix:
-        fields, validation_error = _validate_fix_updates(object_type, fields)
-        if validation_error:
+        validated_fields, validation_error = _validate_fix_updates(object_type, fields)
+        if validation_error or validated_fields is None:
             await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, validation_error)
+            await _send_response(message, validation_error or "No valid fields provided.")
             return True
+        fields = validated_fields
     if op == "update" and object_type != "admin" and fields.get("status") == "done":
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "Only admin items can be marked done.")
@@ -2001,12 +2030,13 @@ async def _apply_command_operation(
         ],
     }
     try:
-        result = apply_operations(
-            derived,
-            objects_root=objects_root,
-            canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-            derived_schema_path=None,
-        )
+        with observe_stage("operation.apply", raw_event_id=raw_id, object_type=object_type):
+            result = apply_operations(
+                derived,
+                objects_root=objects_root,
+                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                derived_schema_path=None,
+            )
     except Exception as exc:
         logging.exception("command_apply_failed id=%s op=%s", raw_id, op)
         await _swap_reaction(message, "⏳", "⚠️")
@@ -2080,10 +2110,11 @@ class SquireBot(discord.Client):
             self._weekly_review_task = asyncio.create_task(self._weekly_review_loop())
 
     async def on_message(self, message: discord.Message) -> None:
-        if not message.author.bot and isinstance(message.channel, discord.DMChannel):
-            self._last_dm_channel_id = message.channel.id
-            self._last_dm_user_id = message.author.id
-        await _handle_message(message, self._config)
+        with observe_stage("discord.message.receive", discord_message_id=str(message.id)):
+            if not message.author.bot and isinstance(message.channel, discord.DMChannel):
+                self._last_dm_channel_id = message.channel.id
+                self._last_dm_user_id = message.author.id
+            await _handle_message(message, self._config)
 
     async def _resolve_digest_channel(self) -> discord.abc.Messageable | None:
         if self._digest_channel_id:
@@ -2181,13 +2212,25 @@ class SquireBot(discord.Client):
 
 def main() -> None:
     load_dotenv()
-    _configure_logging()
+    configure_logging()
     config_path = Path("config.yaml")
     config = load_config(config_path)
     try:
         config = normalize_archive_config(config)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+    observability_config = load_observability_config(config)
+    configure_logging(observability_config.log_level)
+    set_runtime_environment(observability_config.environment)
+    run_id = set_run_id(os.getenv("SQUIRE_RUN_ID", "").strip() or generate_run_id())
+    initialize_observability(observability_config)
+    log_event(
+        logging.INFO,
+        "session_started",
+        "session_started",
+        run_id=run_id,
+        environment=observability_config.environment,
+    )
     matching_config = load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
