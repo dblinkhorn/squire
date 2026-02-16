@@ -45,6 +45,14 @@ matching:
   candidate_limit: 5
   semantic_text_schema_version: 1
 
+observability:
+  enabled: false
+  service_name: "squire-core"
+  environment: "dev"
+  log_level: "INFO"
+  # otlp_endpoint: "http://localhost:4318"
+  # otlp_headers: "k=v"
+
 schedule:
   daily_digest_time: "09:00"
   weekly_review_day: "SUN"

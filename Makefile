@@ -4,7 +4,7 @@ help:
 	@echo "Available targets:"
 	@echo "  install   Install dependencies (pip -e .)"
 	@echo "  init      Initialize archive storage (squire init)"
-	@echo "  run-bot   Run the Discord bot"
+	@echo "  run-bot   Run the Discord bot (optional: env=dev|test|prod log_level=DEBUG|INFO|WARNING|ERROR)"
 	@echo "  test      Run test suite"
 	@echo "  clear-archive  Delete archive contents (uses archive_root from config.yaml)"
 
@@ -15,7 +15,7 @@ init:
 	python -m squire_core.cli_init
 
 run-bot:
-	python -m squire_core.discord_bot
+	SQUIRE_ENV=$${SQUIRE_ENV:-$(if $(env),$(env),dev)} SQUIRE_LOG_LEVEL=$${SQUIRE_LOG_LEVEL:-$(if $(log_level),$(log_level),)} python -m squire_core.discord_bot
 
 test:
 	python3 -m pytest -q

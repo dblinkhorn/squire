@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -487,13 +487,18 @@ def _format_people_lines(
     *,
     reference_date: date,
 ) -> list[str]:
-    due_entries = [entry for entry in entries if entry.next_contact and entry.next_contact <= cutoff]
+    due_entries: list[tuple[date, PeopleEntry]] = []
+    for entry in entries:
+        next_contact = entry.next_contact
+        if next_contact is None or next_contact > cutoff:
+            continue
+        due_entries.append((next_contact, entry))
     min_dt = _min_datetime(tz)
-    due_entries.sort(key=lambda entry: (entry.next_contact, entry.updated_at or min_dt))
+    due_entries.sort(key=lambda item: (item[0], item[1].updated_at or min_dt))
     lines: list[str] = []
-    for entry in due_entries:
+    for next_contact, entry in due_entries:
         title = _format_title(entry.name, entry.object_id, include_ids)
-        lines.append(f"{title} - next contact {_format_human_date(entry.next_contact, reference_date)}")
+        lines.append(f"{title} - next contact {_format_human_date(next_contact, reference_date)}")
     return lines
 
 
@@ -505,7 +510,7 @@ def _build_project_attention_lines(
     limit: int,
     include_ids: bool,
 ) -> list[str]:
-    min_dt = _min_datetime(now.tzinfo)
+    min_dt = _min_datetime(now.tzinfo or timezone.utc)
     blocked = [item for item in projects if item.status == "blocked"]
     blocked.sort(key=lambda item: item.updated_at or min_dt)
 
@@ -601,13 +606,18 @@ def _build_overdue_people_lines(
     limit: int = _WEEKLY_PEOPLE_OVERDUE_LIMIT,
 ) -> list[str]:
     min_dt = _min_datetime(tz)
-    overdue = [entry for entry in entries if entry.next_contact and entry.next_contact < today]
-    overdue.sort(key=lambda entry: (entry.next_contact, entry.updated_at or min_dt))
+    overdue: list[tuple[date, PeopleEntry]] = []
+    for entry in entries:
+        next_contact = entry.next_contact
+        if next_contact is None or next_contact >= today:
+            continue
+        overdue.append((next_contact, entry))
+    overdue.sort(key=lambda item: (item[0], item[1].updated_at or min_dt))
 
     lines: list[str] = []
-    for entry in overdue[:limit]:
+    for next_contact, entry in overdue[:limit]:
         title = _format_title(entry.name, entry.object_id, include_ids)
-        lines.append(f"{title} - next contact {_format_human_date(entry.next_contact, today)}")
+        lines.append(f"{title} - next contact {_format_human_date(next_contact, today)}")
     return lines
 
 
