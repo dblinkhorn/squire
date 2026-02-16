@@ -63,8 +63,8 @@ def test_apply_test_archive_root_override_applies_in_test_env(tmp_path: Path) ->
     assert "index_db" not in paths
 
 
-def test_run_test_mode_reset_seed_rejects_unsafe_archive_root(tmp_path: Path) -> None:
-    root = tmp_path / "archive"
+def test_run_test_mode_reset_seed_rejects_unsafe_archive_root() -> None:
+    root = Path.home() / "squire-ci-unsafe-archive"
     config = _config_for(root)
 
     with pytest.raises(ValueError, match="test-safe"):

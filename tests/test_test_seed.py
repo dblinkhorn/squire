@@ -25,8 +25,8 @@ def _object_path(objects_root: Path, object_type: str, object_id: str) -> Path:
     return objects_root / directory / f"{prefix}{object_id}.md"
 
 
-def test_ensure_test_safe_archive_root_rejects_unsafe_path(tmp_path: Path) -> None:
-    unsafe = tmp_path / "archive"
+def test_ensure_test_safe_archive_root_rejects_unsafe_path() -> None:
+    unsafe = Path.home() / "squire-ci-unsafe-archive"
     with pytest.raises(ValueError, match="test-safe"):
         ensure_test_safe_archive_root(unsafe)
 
