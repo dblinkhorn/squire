@@ -239,10 +239,23 @@ def _render_sectioned_message(header: str, sections: list[DigestSection], *, sum
         lines.append(_section_divider(section.title))
         if section.lines:
             for line in section.lines:
-                lines.append(f"• {line}")
+                if _is_numbered_row(line):
+                    lines.append(line)
+                else:
+                    lines.append(f"• {line}")
         else:
             lines.append("• All clear")
     return "\n".join(lines)
+
+
+def _is_numbered_row(line: str) -> bool:
+    value = line.lstrip()
+    if not value:
+        return False
+    first_token = value.split(" ", 1)[0]
+    if not first_token.endswith("."):
+        return False
+    return first_token[:-1].isdigit()
 
 
 def _is_archived(value: Any) -> bool:
@@ -1030,8 +1043,7 @@ def build_item_detail(
     if not isinstance(title, str) or not isinstance(object_type, str):
         return None
 
-    lines = [f"Title: {title}", f"Type: {_render_type_label(object_type)}"]
-    lines.append(f"ID: {object_id}")
+    lines = [f"**Title:** {title}", f"**Type:** {_render_type_label(object_type)}"]
 
     field_map = [
         ("status", "Status"),
@@ -1040,20 +1052,22 @@ def build_item_detail(
         ("due_date", "Due date"),
         ("next_action", "Next action"),
         ("next_contact", "Next contact"),
-        ("updated_at", "Updated"),
     ]
     for key, label in field_map:
         value = frontmatter.get(key)
         if isinstance(value, str) and value.strip():
-            lines.append(f"{label}: {value.strip()}")
+            lines.append(f"**{label}:** {value.strip()}")
 
     body = _load_body(path)
     if body:
         body_lines = [line.strip() for line in body.splitlines() if line.strip()]
         if body_lines:
             lines.append("")
-            lines.append("Notes:")
+            lines.append("**Notes:**")
             for line in body_lines[:6]:
                 lines.append(f"- {line}")
+
+    lines.append("")
+    lines.append(f"(ID: {object_id})")
 
     return "\n".join(lines)

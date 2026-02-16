@@ -25,10 +25,12 @@ On startup, the bot:
 
 1. Loads `.env` values (including `DISCORD_TOKEN` and `OPENAI_API_KEY`).
 2. Validates and normalizes archive paths from `config.yaml`.
-3. Rebuilds the SQLite index if it is missing.
-4. If semantic matching is enabled, runs semantic index sync against the same SQLite database.
-5. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
-6. Connects to Discord and starts message handling and scheduled digest loops.
+3. If `SQUIRE_ENV=test`, validates test-safe archive guardrails, clears archive contents (preserving `.git`), seeds deterministic canonical fixtures, and rebuilds the SQLite index.
+   If `test_archive_root` is configured, test mode uses that root instead of `archive_root`.
+4. Otherwise, rebuilds the SQLite index if it is missing.
+5. If semantic matching is enabled, runs semantic index sync against the same SQLite database.
+6. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
+7. Connects to Discord and starts message handling and scheduled digest loops.
 
 ## Quick Start (Compose)
 

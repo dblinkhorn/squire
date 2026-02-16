@@ -264,7 +264,7 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch) -> No
 
     def _fake_build_item_detail(objects_root, object_id, config):
         captured["show_ids_daily_weekly"] = config.get("surfacing", {}).get("output", {}).get("show_ids_daily_weekly")
-        return "Title: Call dentist\nID: A_2"
+        return "**Title:** Call dentist\n\n(ID: A_2)"
 
     monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
     monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
@@ -285,7 +285,7 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch) -> No
 
     assert handled is True
     assert captured["show_ids_daily_weekly"] is False
-    assert "ID: A_2" in str(captured["response"])
+    assert "(ID: A_2)" in str(captured["response"])
 
 
 def test_handle_command_status_stores_numbered_cursor(monkeypatch) -> None:
@@ -324,9 +324,11 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch) -> None:
     handled = asyncio.run(discord_bot._handle_command(message, "!status", "R_1", config))
 
     assert handled is True
-    assert "• 1. Call dentist" in str(captured["response"])
-    assert "• 2. Pay rent" in str(captured["response"])
-    assert "• 3. Blocked launch" in str(captured["response"])
+    assert "\n1. Call dentist" in str(captured["response"])
+    assert "\n   • due Mon Feb 16 (today)" in str(captured["response"])
+    assert "\n2. Pay rent" in str(captured["response"])
+    assert "\n3. Blocked launch" in str(captured["response"])
+    assert "\n   • blocked: Waiting on vendor" in str(captured["response"])
     assert "!done <number>" in str(captured["response"])
     key = discord_bot._cursor_key(message)
     assert discord_bot._RESULT_CURSORS[key].object_ids == ["A_1", "A_2", "P_1"]
@@ -481,8 +483,10 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch) -> None:
     handled = asyncio.run(discord_bot._handle_command(message, "!weekly", "R_1", config))
 
     assert handled is True
-    assert "• 1. New unscheduled admin" in str(captured["response"])
-    assert "• 2. Alex" in str(captured["response"])
+    assert "\n1. New unscheduled admin" in str(captured["response"])
+    assert "\n   • admin" in str(captured["response"])
+    assert "\n2. Alex" in str(captured["response"])
+    assert "\n   • next contact Sun Feb 15 (yesterday)" in str(captured["response"])
     assert "!append <number> <text>" in str(captured["response"])
     key = discord_bot._cursor_key(message)
     assert discord_bot._RESULT_CURSORS[key].object_ids == ["A_10", "P_20"]

@@ -8,6 +8,7 @@ Required or optional environment variables include:
 - `OPENAI_API_KEY` (required)
 - `HEALTH_HOST` (optional, default `0.0.0.0`)
 - `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
+- `SQUIRE_ENV` (optional; set to `test` to enable startup reset+seed mode for smoke testing)
 
 ## config.yaml
 
@@ -69,6 +70,10 @@ The archive root controls where durable artifacts are stored and is required. By
 
 For Docker Compose deployments, set `archive_root` to the in-container mount path (for example, `"/data/archive"`).
 
+Optional test-mode override:
+
+- `test_archive_root`: when `SQUIRE_ENV=test`, startup uses this root instead of `archive_root` before path normalization. Use this to keep a separate throwaway test archive.
+
 Archive paths include:
 
 - events_raw
@@ -79,6 +84,9 @@ Archive paths include:
 
 Relative archive paths (including `index_db`) are resolved under `archive_root` and validated to stay inside it. The
 SQLite index is derived and will be rebuilt automatically if missing on startup.
+
+When `SQUIRE_ENV=test`, startup performs a destructive reset+seed cycle before normal startup indexing/sync. In this mode,
+startup refuses to reset unless the active archive root is test-safe (under `/tmp` or containing a `squire-test` path segment).
 
 ## config.yaml.example
 

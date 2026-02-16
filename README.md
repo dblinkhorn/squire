@@ -172,8 +172,16 @@ make init
 ### Step 5: Run the bot
 
 ```sh
-python -m squire_core.discord_bot
+make run-bot
 ```
+
+For deterministic smoke testing with a fresh seeded dataset on every startup:
+
+```sh
+make run-bot-test
+```
+
+This mode is destructive for the active test archive. Set `test_archive_root` in `config.yaml` (for example `/tmp/squire-test-archive`) to keep it separate from your normal `archive_root`.
 
 ## First-Time Use
 

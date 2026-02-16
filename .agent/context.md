@@ -210,3 +210,39 @@
 - Added spec doc for separate PR: `docs/test-env-reset-seed-spec.md`.
 - Proposed behavior: `SQUIRE_ENV=test` triggers startup reset + deterministic fixture seeding + index rebuild before normal bot startup flow.
 - Includes explicit guardrails to fail closed unless `archive_root` is test-safe (`/tmp` or containing `squire-test`) and keeps `run-bot` non-destructive.
+
+## Test Mode Reset+Seed Implementation (2026-02-16)
+
+- Implemented startup test mode wiring in `discord_bot`:
+  - new `_run_test_mode_reset_seed(...)` executes only when `SQUIRE_ENV=test`.
+  - validates archive guardrails (`/tmp` or `squire-test` path segment) before destructive reset.
+  - clears archive contents (preserving `.git`), writes deterministic seed fixtures, and rebuilds SQLite index.
+  - emits structured startup logs:
+    - `test_mode_startup_enabled`
+    - `test_mode_reset_completed`
+    - `test_mode_seed_completed`
+    - `test_mode_rebuild_index_completed`
+    - `test_mode_startup_failed` (on failure, startup exits).
+- Added dedicated seed helper module: `src/squire_core/test_seed.py`.
+  - uses fixed deterministic `TEST_*` IDs for admin/projects/people/ideas fixture records.
+  - seed timestamps are UTC and relative to startup `now`.
+- Added convenience make target:
+  - `make run-bot-test` (exports `SQUIRE_ENV=test`).
+  - kept `make run-bot` unchanged/non-destructive.
+- Added tests:
+  - `tests/test_test_seed.py`
+  - `tests/test_test_mode_startup.py`
+- Updated docs:
+  - `README.md`
+  - `docs/configuration.md`
+  - `docs/deployment.md`
+
+## Test Archive Root Override (2026-02-16)
+
+- Added optional config key `test_archive_root`.
+- Startup now applies a test-only archive-root override before archive-path normalization when `SQUIRE_ENV=test`.
+- Behavior:
+  - non-test env: unchanged, uses `archive_root`.
+  - test env with `test_archive_root` set: uses `test_archive_root` as active archive root.
+- Guardrails are unchanged and apply to the active root used by test mode.
+- Added tests in `tests/test_test_mode_startup.py` for override gating and normalization interaction.

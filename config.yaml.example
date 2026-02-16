@@ -10,6 +10,7 @@ llm:
 timezone: "local" # Use system local timezone, or set an IANA name like "America/Los_Angeles".
 
 archive_root: "~/squire-archive" # For Docker, set this to "/data/archive".
+test_archive_root: "/tmp/squire-test-archive" # Optional: used only when SQUIRE_ENV=test.
 archive_git_enabled: true # Set false to skip git initialization for the archive.
 
 paths:
