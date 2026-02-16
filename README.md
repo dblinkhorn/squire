@@ -28,10 +28,10 @@ Core commands:
 - `!weekly` - show weekly review now
 - `!recent [N]` - list recent notes
 - `!find <query>` - search notes
-- `!show <number>` - open one result from your last list
-- `!append <id> <text>` - add text to a note
-- `!done <id>` - mark a task as done
-- `!fix <id> field=value ...` - edit note fields
+- `!show <number>` - open one result from your latest numbered list
+- `!append <id|number> <text>` - add text to a note (`<number>` uses your latest numbered list)
+- `!done <id|number>` - mark a task as done (`<number>` uses your latest numbered list)
+- `!fix <id|number> field=value ...` - edit note fields (`<number>` uses your latest numbered list)
 - `!confirm <pending_id>` / `!cancel <pending_id>` - approve or cancel a suggested change
 - `!clear-archive` then `DELETE` - clear archive data (keeps `.git`)
 

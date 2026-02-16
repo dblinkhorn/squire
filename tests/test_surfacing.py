@@ -135,6 +135,7 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
 
     digest = build_daily_digest(objects_root, config, now=now)
     sections = {section.title: section.lines for section in digest.sections}
+    section_objects = {section.title: section.object_ids for section in digest.sections}
 
     assert "Suggested next actions" not in sections
     assert any("Pay rent" in line for line in sections["Admin overdue"])
@@ -142,6 +143,11 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     assert any("Submit report" in line for line in sections["Admin due soon"])
     assert any("Launch beta" in line for line in sections["Projects needing attention"])
     assert any("Alex" in line for line in sections["People to follow up"])
+    assert section_objects["Admin overdue"] == ["ADM001"]
+    assert section_objects["Admin due today"] == ["ADM002"]
+    assert section_objects["Admin due soon"] == ["ADM003"]
+    assert section_objects["Projects needing attention"] == ["PR001"]
+    assert section_objects["People to follow up"] == ["P001"]
 
     all_lines = [line for lines in sections.values() for line in lines]
     assert all("ADM001" not in line for line in all_lines)
@@ -398,12 +404,18 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
     }
     review = build_weekly_review(objects_root, config, now=now)
     sections = {section.title: section.lines for section in review.sections}
+    section_objects = {section.title: section.object_ids for section in review.sections}
 
-    assert any("New unscheduled admin" in line for line in sections["Recently changed notes"])
+    assert "Completed this week" not in sections
     assert sections["Open admin without due dates"][0].startswith("Old unscheduled admin")
+    assert any("New unscheduled admin" in line for line in sections["Open admin without due dates"])
     assert any("Blocked project" in line for line in sections["Blocked or stale projects"])
     assert any("Jordan" in line for line in sections["People overdue for contact"])
     assert any("Recent idea" in line for line in sections["Ideas updated recently"])
+    assert section_objects["Open admin without due dates"][:2] == ["ADM_OLD", "ADM_NEW"]
+    assert section_objects["Blocked or stale projects"] == ["PR_BLOCKED"]
+    assert section_objects["People overdue for contact"] == ["P_OVERDUE"]
+    assert section_objects["Ideas updated recently"] == ["I_RECENT"]
 
     all_lines = [line for lines in sections.values() for line in lines]
     assert all("ADM_OLD" not in line for line in all_lines)
@@ -411,11 +423,41 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
 
     rendered = review.render()
     assert rendered.startswith("🗓️ **Weekly review** · Thu Jan 22")
-    assert "📝 **Recently changed notes**" in rendered
+    assert "✅ **Completed this week**" not in rendered
     assert "📂 **Open admin without due dates**" in rendered
     assert "🧱 **Blocked or stale projects**" in rendered
     assert "🤝 **People overdue for contact**" in rendered
     assert "💡 **Ideas updated recently**" in rendered
+
+
+def test_build_weekly_review_completed_section_when_populated(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_DONE",
+                object_type="admin",
+                title="Finished admin item",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-21T00:00:00+00:00",
+            ),
+            "status": "done",
+            "completed_at": "2026-01-21T00:00:00+00:00",
+            "next_action": "Finished admin item",
+        },
+    )
+
+    config = {"timezone": "UTC"}
+    review = build_weekly_review(objects_root, config, now=now)
+    sections = {section.title: section.lines for section in review.sections}
+
+    assert "Completed this week" in sections
+    assert any("Finished admin item" in line for line in sections["Completed this week"])
+    rendered = review.render()
+    assert "✅ **Completed this week**" in rendered
 
 
 def test_build_weekly_review_ideas_section_optional(tmp_path: Path) -> None:

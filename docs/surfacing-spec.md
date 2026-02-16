@@ -54,7 +54,7 @@ Schedule:
 
 Sections:
 
-- Recently changed notes (last 7 days)
+- Completed this week (done/archived/completed notes in last 7 days)
 - Open admin items without due dates (oldest first)
 - Blocked/stale projects
 - People overdue for contact
@@ -66,7 +66,8 @@ Rules:
 - no object IDs in output
 - include a weekly summary count line
 - use the same section emoji and human-readable date style as daily digest
-- if section is empty, show `All clear`
+- omit `Completed this week` when empty
+- for other weekly sections, if empty show `All clear`
 
 ## Pull Surfacing
 

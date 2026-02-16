@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 from typing import Any, Iterable
@@ -14,6 +14,7 @@ from squire_core.timezone_utils import resolve_timezone
 class DigestSection:
     title: str
     lines: list[str]
+    object_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ _DEFAULT_SURFACING_CONFIG = {
 }
 
 _WEEKLY_RECENT_DAYS = 7
-_WEEKLY_RECENT_LIMIT = 10
+_WEEKLY_COMPLETED_LIMIT = 10
 _WEEKLY_UNSCHEDULED_LIMIT = 10
 _WEEKLY_PEOPLE_OVERDUE_LIMIT = 10
 _WEEKLY_IDEAS_LIMIT = 5
@@ -119,7 +120,7 @@ _SECTION_EMOJI = {
     "Admin due soon": "🟡",
     "Projects needing attention": "🧱",
     "People to follow up": "🤝",
-    "Recently changed notes": "📝",
+    "Completed this week": "✅",
     "Open admin without due dates": "📂",
     "Blocked or stale projects": "🧱",
     "People overdue for contact": "🤝",
@@ -131,7 +132,7 @@ _SECTION_DIVIDER_WIDTH = {
     "Admin due soon": 16,
     "Projects needing attention": 24,
     "People to follow up": 18,
-    "Recently changed notes": 22,
+    "Completed this week": 19,
     "Open admin without due dates": 27,
     "Blocked or stale projects": 24,
     "People overdue for contact": 25,
@@ -486,15 +487,17 @@ def _format_people_lines(
     include_ids: bool,
     *,
     reference_date: date,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     due_entries = [entry for entry in entries if entry.next_contact and entry.next_contact <= cutoff]
     min_dt = _min_datetime(tz)
     due_entries.sort(key=lambda entry: (entry.next_contact, entry.updated_at or min_dt))
     lines: list[str] = []
+    object_ids: list[str] = []
     for entry in due_entries:
         title = _format_title(entry.name, entry.object_id, include_ids)
         lines.append(f"{title} - next contact {_format_human_date(entry.next_contact, reference_date)}")
-    return lines
+        object_ids.append(entry.object_id)
+    return lines, object_ids
 
 
 def _build_project_attention_lines(
@@ -504,7 +507,7 @@ def _build_project_attention_lines(
     stale_days: int,
     limit: int,
     include_ids: bool,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     min_dt = _min_datetime(now.tzinfo)
     blocked = [item for item in projects if item.status == "blocked"]
     blocked.sort(key=lambda item: item.updated_at or min_dt)
@@ -518,6 +521,7 @@ def _build_project_attention_lines(
     stale.sort(key=lambda item: item.updated_at or min_dt)
 
     lines: list[str] = []
+    object_ids: list[str] = []
     seen: set[str] = set()
 
     def _add(line: str, object_id: str) -> None:
@@ -527,6 +531,7 @@ def _build_project_attention_lines(
             return
         seen.add(object_id)
         lines.append(line)
+        object_ids.append(object_id)
 
     for item in blocked:
         title = _format_title(item.title, item.object_id, include_ids)
@@ -540,34 +545,59 @@ def _build_project_attention_lines(
         updated = _format_human_date(item.updated_at.date(), now.date(), include_relative=False) if item.updated_at else "unknown"
         _add(f"{title} - stale (last updated {updated})", item.object_id)
 
-    return lines
+    return lines, object_ids
 
 
-def _build_recently_changed_lines(
+def _build_completed_this_week_lines(
     items: list[CanonicalItem],
     *,
     now: datetime,
     tz: tzinfo,
     include_ids: bool,
     days: int = _WEEKLY_RECENT_DAYS,
-    limit: int = _WEEKLY_RECENT_LIMIT,
-) -> list[str]:
+    limit: int = _WEEKLY_COMPLETED_LIMIT,
+) -> tuple[list[str], list[str]]:
     cutoff = now - timedelta(days=max(0, days))
-    candidates = [
-        item
-        for item in items
-        if not _is_archived(item.frontmatter.get("archived")) and _object_updated_at(item, tz) >= cutoff
-    ]
-    candidates.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
+    rows: list[tuple[datetime, str, str]] = []
+    for item in items:
+        frontmatter = item.frontmatter
+        status = str(frontmatter.get("status") or "").strip().lower()
+        archived = _is_archived(frontmatter.get("archived"))
+        completed_at: datetime | None = None
+        state_label: str | None = None
+
+        if archived:
+            completed_at = _object_updated_at(item, tz)
+            state_label = "archived"
+        elif item.object_type == "admin" and status == "done":
+            completed_at = _coerce_datetime(frontmatter.get("completed_at"), tz) or _object_updated_at(item, tz)
+            state_label = "done"
+        elif item.object_type == "projects" and status == "completed":
+            completed_at = _object_updated_at(item, tz)
+            state_label = "completed"
+        elif item.object_type == "ideas" and status == "done":
+            completed_at = _object_updated_at(item, tz)
+            state_label = "done"
+
+        if completed_at is None or state_label is None:
+            continue
+        if completed_at < cutoff:
+            continue
+        title = _format_title(item.title, item.object_id, include_ids)
+        line = (
+            f"{title} - {_render_type_label(item.object_type)}, "
+            f"{state_label} {_format_human_date(completed_at.date(), now.date())}"
+        )
+        rows.append((completed_at, line, item.object_id))
+
+    rows.sort(key=lambda row: row[0], reverse=True)
 
     lines: list[str] = []
-    for item in candidates[:limit]:
-        title = _format_title(item.title, item.object_id, include_ids)
-        updated = _object_updated_at(item, tz)
-        lines.append(
-            f"{title} - {_render_type_label(item.object_type)}, updated {_format_human_date(updated.date(), now.date())}"
-        )
-    return lines
+    object_ids: list[str] = []
+    for _, line, object_id in rows[:limit]:
+        lines.append(line)
+        object_ids.append(object_id)
+    return lines, object_ids
 
 
 def _build_open_admin_without_due_lines(
@@ -576,7 +606,7 @@ def _build_open_admin_without_due_lines(
     tz: tzinfo,
     include_ids: bool,
     limit: int = _WEEKLY_UNSCHEDULED_LIMIT,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     min_dt = _min_datetime(tz)
     unscheduled = [
         entry
@@ -586,10 +616,12 @@ def _build_open_admin_without_due_lines(
     unscheduled.sort(key=lambda entry: entry.created_at or entry.updated_at or min_dt)
 
     lines: list[str] = []
+    object_ids: list[str] = []
     for entry in unscheduled[:limit]:
         title = _format_title(entry.title, entry.object_id, include_ids)
         lines.append(f"{title} - open, unscheduled")
-    return lines
+        object_ids.append(entry.object_id)
+    return lines, object_ids
 
 
 def _build_overdue_people_lines(
@@ -599,16 +631,18 @@ def _build_overdue_people_lines(
     tz: tzinfo,
     include_ids: bool,
     limit: int = _WEEKLY_PEOPLE_OVERDUE_LIMIT,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     min_dt = _min_datetime(tz)
     overdue = [entry for entry in entries if entry.next_contact and entry.next_contact < today]
     overdue.sort(key=lambda entry: (entry.next_contact, entry.updated_at or min_dt))
 
     lines: list[str] = []
+    object_ids: list[str] = []
     for entry in overdue[:limit]:
         title = _format_title(entry.name, entry.object_id, include_ids)
         lines.append(f"{title} - next contact {_format_human_date(entry.next_contact, today)}")
-    return lines
+        object_ids.append(entry.object_id)
+    return lines, object_ids
 
 
 def _build_recent_idea_lines(
@@ -619,7 +653,7 @@ def _build_recent_idea_lines(
     include_ids: bool,
     days: int = _WEEKLY_RECENT_DAYS,
     limit: int = _WEEKLY_IDEAS_LIMIT,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     cutoff = now - timedelta(days=max(0, days))
     ideas = [
         item
@@ -631,11 +665,13 @@ def _build_recent_idea_lines(
     ideas.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
 
     lines: list[str] = []
+    object_ids: list[str] = []
     for item in ideas[:limit]:
         title = _format_title(item.title, item.object_id, include_ids)
         updated = _object_updated_at(item, tz)
         lines.append(f"{title} - updated {_format_human_date(updated.date(), now.date())}")
-    return lines
+        object_ids.append(item.object_id)
+    return lines, object_ids
 
 
 def _object_updated_at(item: CanonicalItem, tz: tzinfo) -> datetime:
@@ -756,22 +792,25 @@ def build_daily_digest(
             ),
         )
 
+    overdue_sorted = _sort_due(overdue)
     overdue_lines = _format_admin_due_lines(
-        _sort_due(overdue),
+        overdue_sorted,
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
     )
+    today_sorted = _sort_due(today)
     today_lines = _format_admin_due_lines(
-        _sort_due(today),
+        today_sorted,
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
     )
+    soon_sorted = _sort_due(soon)
     soon_lines = _format_admin_due_lines(
-        _sort_due(soon),
+        soon_sorted,
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
     )
-    project_lines = _build_project_attention_lines(
+    project_lines, project_ids = _build_project_attention_lines(
         project_items,
         now=now,
         stale_days=surfacing.projects_stale_days,
@@ -780,7 +819,7 @@ def build_daily_digest(
     )
 
     people_cutoff = now.date() + timedelta(days=surfacing.people_next_contact_days)
-    people_lines = _format_people_lines(
+    people_lines, people_ids = _format_people_lines(
         people_items,
         people_cutoff,
         tz,
@@ -789,11 +828,11 @@ def build_daily_digest(
     )
 
     sections = [
-        DigestSection(title="Admin overdue", lines=overdue_lines),
-        DigestSection(title="Admin due today", lines=today_lines),
-        DigestSection(title="Admin due soon", lines=soon_lines),
-        DigestSection(title="Projects needing attention", lines=project_lines),
-        DigestSection(title="People to follow up", lines=people_lines),
+        DigestSection(title="Admin overdue", lines=overdue_lines, object_ids=[entry.object_id for entry in overdue_sorted]),
+        DigestSection(title="Admin due today", lines=today_lines, object_ids=[entry.object_id for entry in today_sorted]),
+        DigestSection(title="Admin due soon", lines=soon_lines, object_ids=[entry.object_id for entry in soon_sorted]),
+        DigestSection(title="Projects needing attention", lines=project_lines, object_ids=project_ids),
+        DigestSection(title="People to follow up", lines=people_lines, object_ids=people_ids),
     ]
 
     return DailyDigest(generated_at=now, sections=sections)
@@ -819,47 +858,67 @@ def build_weekly_review(
     project_items = _project_entries(items, tz)
     people_items = _people_entries(items, tz)
 
-    recently_changed_lines = _build_recently_changed_lines(
+    completed_lines, completed_ids = _build_completed_this_week_lines(
         items,
         now=now,
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
     )
-    unscheduled_admin_lines = _build_open_admin_without_due_lines(
+    unscheduled_admin_lines, unscheduled_admin_ids = _build_open_admin_without_due_lines(
         admin_items,
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
     )
-    project_lines = _build_project_attention_lines(
+    project_lines, project_ids = _build_project_attention_lines(
         project_items,
         now=now,
         stale_days=surfacing.projects_stale_days,
         limit=surfacing.projects_blocked_limit,
         include_ids=surfacing.show_ids_daily_weekly,
     )
-    overdue_people_lines = _build_overdue_people_lines(
+    overdue_people_lines, overdue_people_ids = _build_overdue_people_lines(
         people_items,
         today=now.date(),
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
     )
 
-    sections = [
-        DigestSection(title="Recently changed notes", lines=recently_changed_lines),
-        DigestSection(title="Open admin without due dates", lines=unscheduled_admin_lines),
-        DigestSection(title="Blocked or stale projects", lines=project_lines),
-        DigestSection(title="People overdue for contact", lines=overdue_people_lines),
-    ]
+    sections: list[DigestSection] = []
+    if completed_lines:
+        sections.append(
+            DigestSection(
+                title="Completed this week",
+                lines=completed_lines,
+                object_ids=completed_ids,
+            )
+        )
+    sections.extend(
+        [
+            DigestSection(
+                title="Open admin without due dates",
+                lines=unscheduled_admin_lines,
+                object_ids=unscheduled_admin_ids,
+            ),
+            DigestSection(title="Blocked or stale projects", lines=project_lines, object_ids=project_ids),
+            DigestSection(
+                title="People overdue for contact",
+                lines=overdue_people_lines,
+                object_ids=overdue_people_ids,
+            ),
+        ]
+    )
     if surfacing.ideas_weekly_review:
+        idea_lines, idea_ids = _build_recent_idea_lines(
+            items,
+            now=now,
+            tz=tz,
+            include_ids=surfacing.show_ids_daily_weekly,
+        )
         sections.append(
             DigestSection(
                 title="Ideas updated recently",
-                lines=_build_recent_idea_lines(
-                    items,
-                    now=now,
-                    tz=tz,
-                    include_ids=surfacing.show_ids_daily_weekly,
-                ),
+                lines=idea_lines,
+                object_ids=idea_ids,
             )
         )
 
