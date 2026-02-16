@@ -23,6 +23,7 @@ Outputs should be small and predictable. The system never invents data and alway
 Current surfacing output is deterministic and local-data driven (no LLM formatting pass in the surfacing layer).
 
 ID behavior:
+
 - scheduled digests/reviews omit IDs by default (configurable via `surfacing.output.show_ids_daily_weekly`)
 - manual pull lists (`!recent`, `!find`, `!show`) include IDs
 

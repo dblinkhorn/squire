@@ -7,6 +7,7 @@ This is precise but high-friction after list-style review flows where users thin
 `!find`, `!status`, or `!weekly`).
 
 Goal example:
+
 - User sees a surfaced row `2` and sends `!done 2` or natural language "mark 2 done".
 
 ## Goals
@@ -129,14 +130,17 @@ Only apply this when NL command routing classifies intent as command-like with h
 ## UX Copy
 
 Errors:
+
 - "No active numbered list. Run `!recent`, `!find`, `!status`, or `!weekly` first."
 - "That number is out of range for your last list."
 - "`!done` only applies to admin items."
 
 Success:
+
 - Keep current mutation success style, but include resolved title when available.
 
 Tips (examples):
+
 - `Tip: !show <number> · !done <number> · !append <number> <text> · !fix <number> field=value`
 - `Tip: !recent N supports up to 50`
 
@@ -190,6 +194,7 @@ All previously open questions are resolved for v1:
 ## Future Multi-Action Commands (Out of Scope for v1)
 
 Examples like:
+
 - "mark 1 and 4 done"
 - "change due date of 2 to YYYY-MM-DD"
 - "update time of 3 to 4pm"

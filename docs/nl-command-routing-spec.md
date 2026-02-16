@@ -5,6 +5,7 @@
 Squire currently treats any non-`!` DM as capture-first input. This causes command-like natural language (for example, "show me all my notes") to flow through LLM classification/extraction and sometimes fail in apply, while adding avoidable latency.
 
 Observed failure mode:
+
 - command-like message enters capture path
 - retrieval/decision/extraction runs
 - extracted fields may be incomplete for canonical create
@@ -64,36 +65,43 @@ Given normalized content:
 ### 3) Precedence Rules
 
 Before command routing:
+
 - preserve existing explicit command behavior for `!...`
 - preserve `DELETE` archive-clear confirmation handling
 
 After command routing:
+
 - if a route executes, do not invoke capture classification/decision/extraction
 - if clarification is sent, do not invoke capture classification/decision/extraction
 
 ## Example Phrase Map (Seed)
 
 `status`:
+
 - "status"
 - "daily digest"
 - "what's due today"
 
 `weekly`:
+
 - "weekly review"
 - "weekly status"
 
 `recent`:
+
 - "show my notes"
 - "show all my notes"
 - "recent notes"
 - "last N notes"
 
 `find`:
+
 - "find X"
 - "search for X"
 - "look up X"
 
 `show`:
+
 - "show 2"
 - "open 3"
 - "show item 1"
@@ -108,6 +116,7 @@ When medium confidence:
 - use clarification only when input is clearly command-like but ambiguous
 
 Example:
+
 - Input: "show my dentist note"
 - Clarification: "Did you mean search (`!find dentist`) or recent list (`!recent`)?"
 
@@ -144,6 +153,7 @@ nl_command_routing:
 ```
 
 Defaults:
+
 - enabled true
 - clarification enabled
 - mutations disabled

@@ -54,6 +54,7 @@ Deterministic scoring model:
 - De-duplicate by object ID, keep highest-scoring row, then return top `candidate_limit`.
 
 Notes:
+
 - Semantic matching ships enabled with a conservative default (`semantic_weight: 0.15`) and should be tuned with telemetry.
 - This design intentionally keeps retrieval deterministic and inspectable for easier threshold tuning.
 - Affinity defaults for phase 1:
@@ -204,6 +205,7 @@ matching:
 ```
 
 Notes:
+
 - `semantic_weight` ships with a conservative non-zero default and can be adjusted per deployment.
 - `semantic_provider`/`semantic_model` default to OpenAI for initial rollout because Squire already depends on OpenAI for interpretation.
 - `candidate_limit` controls post-fusion shortlist size; `candidate_multiplier` and `max_candidate_pool` control pre-fusion recall depth.

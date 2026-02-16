@@ -25,9 +25,11 @@ In this spec, "responses" means the bot messages shown to the user in Discord fo
 ### Daily Digest
 
 Schedule:
+
 - run once daily at configured local time (`schedule.daily_digest_time`)
 
 Sections:
+
 - Admin overdue
 - Admin due today
 - Admin due soon (within configurable window)
@@ -35,6 +37,7 @@ Sections:
 - People to follow up (where `next_contact` is due)
 
 Rules:
+
 - no suggested next action section
 - no object IDs in output
 - each line shows concise title + due/status context
@@ -46,9 +49,11 @@ Rules:
 ### Weekly Review
 
 Schedule:
+
 - once weekly (configurable day/time)
 
 Sections:
+
 - Recently changed notes (last 7 days)
 - Open admin items without due dates (oldest first)
 - Blocked/stale projects
@@ -56,6 +61,7 @@ Sections:
 - Ideas updated recently (optional)
 
 Rules:
+
 - no recommendations; list-only output
 - no object IDs in output
 - include a weekly summary count line
@@ -83,6 +89,7 @@ To support quick drill-down by list position:
 ## Output Format
 
 For list views (`!status`, `!recent`, `!find`):
+
 - include section title
 - include up to configured limit rows
 - each row is plain text with compact metadata
@@ -90,12 +97,14 @@ For list views (`!status`, `!recent`, `!find`):
 - `!status` follows digest no-ID behavior by default
 
 Daily/weekly readability format:
+
 - header includes a digest/review icon and human-readable date
 - summary count line appears under the header
 - section rows use bullet markers
 - dates prioritize readability while retaining precision
 
 For detail view (`!show <number>`):
+
 - title
 - key fields by type (status, due fields, etc.)
 - first body lines (truncated)
@@ -125,6 +134,7 @@ schedule:
 ```
 
 Notes:
+
 - `show_ids_daily_weekly` defaults to `false` for this baseline.
 - `!recent`, `!find`, and `!show` include IDs regardless of this setting.
 

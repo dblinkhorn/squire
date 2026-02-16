@@ -1,46 +1,55 @@
 # Squire AI Context
 
 ## Product Scope (Current)
+
 - Primary runtime interface is Discord.
 - Primary LLM provider is OpenAI.
 - Slack/multi-user/extra providers are not active priorities unless explicitly reopened.
 
 ## Behavior and Audit Invariants
+
 - Raw events are immutable; derived artifacts are versioned; canonical objects are mutable source-of-truth.
 - Update/append decisions use conservative gating with pending-action confirmation when confidence is not high and uniquely targeted.
 - Canonical objects must preserve audit linkage via `source_event_ids` and `last_decision_id`.
 - Pending actions are stored under `events/pending` and transition through explicit statuses.
 
 ## Active Roadmap Pointers
+
 - Current top implementation priority: matching reliability improvements in `docs/matching-spec.md`.
 - High-level future ideas: `.agent/future-plans.md`.
 - Command/config contracts: `docs/commands.md` and `docs/configuration.md`.
 
 ## AI Workflow Conventions
+
 - Canonical workflow rules live in `AGENTS.md`.
 - Tracked working files: `.agent/plan.md` and `.agent/context.md`.
 - Local-only session notes: `.agent/scratchpad.md`.
 - Deprecated workflow artifacts: `.sop/`, `.ralph/`, `PROMPT.md`, `ralph.yml`.
 
 ## Recent Changes (2026-02-10)
+
 - Implemented surfacing readability Phase 1 in digest/review rendering:
   emoji-prefixed headers, summary count lines, `All clear` empty-state rows, and human-readable dates with near-term relative labels.
+
 - Kept surfacing behavior deterministic and list-first; no ranking/selection logic changes.
 - Deferred explicit done/edit UI actions to a later phase; existing text commands remain the mutation path.
 
 ## Matching Decisions (2026-02-14)
+
 - Matching spec now locks lexical normalization to `1 / (1 + max(0, bm25_rank))`.
 - Phase 1 affinity defaults: last 20 touched IDs per DM/thread, 7-day decay TTL, capped additive boost (`<= 0.15`).
 - Matching trace artifact shape is explicitly documented (`schema_version`, queries, mode/fallback, pool stats, weights, per-candidate component scores, ranking margins, gate outcome).
 - Degraded retrieval behavior: never auto-apply when retrieval is unavailable; freeform capture falls back to create, explicit mutation commands fail with actionable error.
 
 ## Matching Clarifications (2026-02-14)
+
 - Semantic retrieval rollout is explicitly OpenAI-first (`matching.semantic_provider`/`matching.semantic_model`) with provider abstraction retained for future local backends.
 - Semantic lifecycle is now specified: create/update are incremental, done/closed notes remain searchable, archived/deleted notes are excluded from active semantic retrieval.
 - Semantic artifacts (vector index, embedding cache, metadata) must live under `archive_root`; `make clear-archive` is expected to clear them.
 - Full semantic reindex triggers now include `embedding_text_schema_version` changes (not only model/chunking/index schema changes).
 
 ## Matching Implementation (2026-02-14)
+
 - Added `MatchingConfig` loading and deterministic auto-apply score/margin gates in `DecisionConfig` (`auto_min_score`, `auto_min_margin`).
 - Implemented semantic index + hybrid retrieval in `src/squire_core/matching.py`:
   - local semantic rows stored in SQLite (`semantic_objects`, `semantic_meta`) under the existing `index_db`
@@ -63,15 +72,19 @@
   - cancel copy explicitly states it does nothing.
 
 ## Planned UX Routing (2026-02-15)
+
 - Added spec for natural-language command routing to prevent command-like text from entering capture/create flows:
   `docs/nl-command-routing-spec.md`.
+
 - Initial scope targets read-only command intents (`status`, `weekly`, `recent`, `find`, `show`) with clarification on ambiguity.
 
 ## Runtime Stability Planning (2026-02-15)
+
 - Transport work was planned in phased form (off-loop bridge + timeouts first, async-native provider second).
 - Implementation is now complete; the temporary implementation spec doc was removed after completion.
 
 ## Runtime Stability Implementation (2026-02-15)
+
 - Implemented Phase 1 transport hardening:
   - `OpenAIProvider` now uses explicit request timeouts for interpret/embed HTTP calls.
   - `urllib` network failures are wrapped with clearer transport-level runtime errors.
@@ -81,6 +94,7 @@
 - Added provider transport tests in `tests/test_openai_provider.py` (timeout wiring + URL error wrapping).
 
 ## Runtime Stability Implementation (2026-02-15, Phase 2)
+
 - Migrated OpenAI transport to async-native HTTP in `OpenAIProvider` using `aiohttp`:
   - added await-native `interpret_async` and `embed_async`.
   - retained sync wrappers for non-async call sites (`sync_semantic_index`, startup sync) with guardrails against use inside active loops.
@@ -92,20 +106,24 @@
 - Follow-up cleanup also removed now-unused sync matching retrieval path (`build_matching_candidates` and `_search_semantic_candidates`) from `src/squire_core/matching.py`; runtime and tests now target async retrieval path only.
 
 ## Numbered Mutation Planning (2026-02-15)
+
 - Added dedicated spec for numbered mutation actions (`!done 2`, `!append 3 ...`, `!fix 1 ...`):
   `docs/numbered-mutations-spec.md`.
+
 - Scope includes phased rollout from `!recent`/`!find` to digest/review (`!status`/`!weekly`) row targeting.
 - Resolved v1 decisions: literal row numbering, include all surfaced types, and return confirmation-only (no auto re-render).
 - Resolved UX decision: add concise command tips to `!recent`, `!find`, `!status`, and `!weekly` outputs; include `!recent N` max-50 reminder.
 - Added future maintenance UX direction: Discord component-based bulk done flow (`Mark Items Done` button + multi-select + confirm, with optional undo) in `docs/numbered-mutations-spec.md` and summarized in `docs/commands.md`.
 
 ## Configuration Audit (2026-02-15)
+
 - Synced config docs to runtime behavior:
   - removed unimplemented `GOOGLE_CALENDAR_CREDENTIALS` and `querying.*` references from config docs/template.
   - added missing implemented keys: `llm.interpreter_model`, `confidence.create_threshold`, and `surfacing.ideas.weekly_review`.
 - `config.yaml.example` now omits the unused `querying` block to match current runtime parsing.
 
 ## Docs Accuracy Audit (2026-02-15)
+
 - Updated runtime-facing docs to remove shipped-vs-planned drift:
   - `docs/architecture.md`: update/append pipeline now documented as implemented.
   - `docs/commands.md`: removed unimplemented NL-query/tag command claims; updated update/append section label.
@@ -118,3 +136,9 @@
 - Policy update:
   - runtime/reference docs should describe implemented behavior only.
   - planned/future work should live in working docs (`.agent/context.md`, `.agent/plan.md`, `.agent/future-plans.md`) and detailed specs.
+
+## Workflow ToC Refresh (2026-02-16)
+
+- Reworked `AGENTS.md` into a concise table-of-contents style workflow index.
+- Added task-to-doc routing guidance so agents can quickly select relevant docs per task.
+- Added a canonical docs index with brief descriptions for each doc in `docs/`.
