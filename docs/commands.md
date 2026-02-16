@@ -16,8 +16,11 @@ Prefixes:
 `!status` returns the daily digest (admin overdue/today/soon sections, project attention, and people follow-ups).
 `!weekly` returns the weekly review sections on demand.
 `!recent [N]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
-returns numbered matches. `!show <number>` prints a compact view for an item from the latest `!recent` or `!find`
-result set. Manual pull commands (`!recent`, `!find`, `!show`) include IDs to support intentional follow-up edits.
+returns numbered matches. `!show <number>` prints a compact view for an item from the latest numbered list
+(`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context. Manual pull commands (`!recent`,
+`!find`, `!show`) include IDs to support intentional follow-up edits.
+`!done <number>`, `!append <number> <text>`, and `!fix <number> ...` can resolve numbered rows from the latest
+numbered list (`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
 Scheduled/on-demand digest commands (`!status`, `!weekly`) remain list-first and avoid IDs by default.
 Scheduled/on-demand digest commands are currently read-only; explicit `done`/`edit` action buttons are deferred and
 text commands remain the mutation path.
@@ -32,9 +35,9 @@ The following commands are currently implemented:
 - `!recent [N]`
 - `!find <query>`
 - `!show <number>`
-- `!append <id> <text>`
-- `!done <id>`
-- `!fix <id> field=value [field=value…]`
+- `!append <id|number> <text>`
+- `!done <id|number>`
+- `!fix <id|number> field=value [field=value…]`
 - `!confirm <pending_id>`
 - `!cancel <pending_id>`
 - `!clear-archive` (requires follow-up `DELETE` confirmation)
@@ -71,6 +74,6 @@ Discord interaction patterns:
 
 Explicit commands remain available for precision:
 
-- `!append <id> …` (force append)
-- `!done <id>` (mark admin done)
-- `!fix <id> field=value` (field updates)
+- `!append <id|number> …` (force append)
+- `!done <id|number>` (mark admin done)
+- `!fix <id|number> field=value` (field updates)

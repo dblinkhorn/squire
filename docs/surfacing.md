@@ -6,11 +6,11 @@ The v1 daily digest includes overdue and due-today admin items (plus any due soo
 projects needing attention (blocked/stale), and people with `next_contact` due.
 Sections are list-only and do not include suggested next actions. Digests include a compact summary count line,
 emoji-prefixed section headers, and human-readable date rendering with near-term relative labels.
-Empty sections are shown as `All clear` for predictable scanning.
+Daily digest empty sections are shown as `All clear` for predictable scanning.
 
-Weekly review is also supported on a separate weekly schedule. It includes recently changed notes, open unscheduled
+Weekly review is also supported on a separate weekly schedule. It includes completed notes this week, open unscheduled
 admin items, blocked/stale projects, people overdue for contact, and optional recently updated ideas.
-Weekly output follows the same readability conventions as daily digests.
+The `Completed this week` section is omitted when empty; other weekly sections still use `All clear` when applicable.
 
 ## Pull (Interactive)
 

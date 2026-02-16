@@ -142,3 +142,71 @@
 - Reworked `AGENTS.md` into a concise table-of-contents style workflow index.
 - Added task-to-doc routing guidance so agents can quickly select relevant docs per task.
 - Added a canonical docs index with brief descriptions for each doc in `docs/`.
+
+## Numbered Mutations Phase A (2026-02-16)
+
+- Implemented numbered target resolution for explicit mutation commands in `discord_bot`:
+  - `!done <id|number>`
+  - `!append <id|number> <text>`
+  - `!fix <id|number> field=value ...`
+- Numeric targets now resolve against the active per-user/per-channel result cursor populated by `!recent`/`!find`.
+- Added deterministic failure copy for numeric resolution:
+  - no active numbered cursor
+  - out-of-range row number
+- Added concise command tips to manual pull outputs:
+  - `!recent`: numbered mutation tip + `!recent N` max-50 reminder
+  - `!find`: numbered mutation tip
+- Updated docs to match runtime:
+  - `README.md` command list now documents `<id|number>` for mutation commands.
+  - `docs/commands.md` command syntax and behavior now documents numbered targeting from recent/find.
+- Added tests in `tests/test_discord_commands.py`:
+  - numbered resolution success for `!done`
+  - missing cursor and out-of-range failures
+  - non-numeric ID fallback unchanged
+  - tip footer assertions for `!recent`/`!find`.
+
+## Numbered Mutations Phase B (2026-02-16)
+
+- Extended numbered cursor support to digest/review command views:
+  - `!status` and `!weekly` now number actionable rows and populate the same per-user/per-channel cursor used by `!show`, `!done`, `!append`, and `!fix`.
+- Surfacing sections now carry deterministic per-line `object_ids` metadata in `DigestSection`; render output format remains unchanged by default.
+- Command-only numbering is applied inside `discord_bot`:
+  - scheduled push digests/reviews continue using unnumbered `render()` output.
+  - on-demand `!status`/`!weekly` add numbered rows and include the numbered mutation tip footer when rows are actionable.
+- Updated numbered-list guidance/error copy to include `!status`/`!weekly`:
+  - `!show` missing-list message
+  - numbered mutation resolution message.
+- Added tests:
+  - surfacing tests now assert digest/review `object_ids` alignment with lines.
+  - discord command tests now cover `!status`/`!weekly` numbered rendering and cursor storage.
+  - added end-to-end command test for `!status` cursor followed by `!done <number>` resolution.
+- Follow-up fix:
+  - resolved thread-context cursor lookup mismatch by adding parent-channel fallback when resolving numbered rows from thread replies (for example `!status` in channel, `!done 1` in the created thread).
+
+## Numbered Mutations Follow-up (2026-02-16)
+
+- Added structured numbered-mutation telemetry logs in `discord_bot`:
+  - `numbered_mutation_resolved` (raw event id, command, source view, row number, object id)
+  - `numbered_mutation_resolution_failed` (raw event id, command, reason, source view, row number)
+- Added explicit expired-cursor behavior for numbered commands:
+  - cursor resolution now distinguishes `expired` from `no_cursor`.
+  - user-facing guidance now tells users to rerun a list command when the numbered list has expired.
+- Added safe failure telemetry for wrong-type numbered `!done` attempts (`reason=wrong_type`).
+- Added tests for missing phase-A/B coverage in `tests/test_discord_commands.py`:
+  - numbered `!append` resolution path
+  - numbered `!fix` resolution path
+  - expired cursor guidance path
+  - wrong-type numbered `!done` rejection
+  - telemetry emission checks for resolved/failure paths.
+
+## Weekly Completed Section UX (2026-02-16)
+
+- Weekly review section title is now `Completed this week` (replacing legacy `Recently changed notes` language in tests/spec docs).
+- `Completed this week` is intentionally omitted when it has no rows; it does not render with `All clear`.
+- Other weekly sections keep existing empty-state behavior (`All clear`) for predictable scanning.
+
+## Test Mode Reset+Seed Spec (2026-02-16)
+
+- Added spec doc for separate PR: `docs/test-env-reset-seed-spec.md`.
+- Proposed behavior: `SQUIRE_ENV=test` triggers startup reset + deterministic fixture seeding + index rebuild before normal bot startup flow.
+- Includes explicit guardrails to fail closed unless `archive_root` is test-safe (`/tmp` or containing `squire-test`) and keeps `run-bot` non-destructive.
