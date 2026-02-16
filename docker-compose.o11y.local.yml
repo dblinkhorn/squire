@@ -1,0 +1,77 @@
+services:
+  alloy:
+    image: grafana/alloy:v1.7.4
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+    volumes:
+      - ./config/observability/config.alloy:/etc/alloy/config.alloy:ro
+      - ./.agent/runs:/var/log/squire-runs:ro
+    ports:
+      - "${SQUIRE_O11Y_ALLOY_READY_PORT:-12345}:12345"
+      - "${SQUIRE_O11Y_OTLP_GRPC_PORT:-4317}:4317"
+      - "${SQUIRE_O11Y_OTLP_HTTP_PORT:-4318}:4318"
+    depends_on:
+      - loki
+      - tempo
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:12345/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  loki:
+    image: grafana/loki:2.9.13
+    command:
+      - -config.file=/etc/loki/loki.local.yml
+    volumes:
+      - ./config/observability/loki.local.yml:/etc/loki/loki.local.yml:ro
+      - loki-data:/loki
+    ports:
+      - "${SQUIRE_O11Y_LOKI_PORT:-3100}:3100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  tempo:
+    image: grafana/tempo:2.3.1
+    command:
+      - -config.file=/etc/tempo/tempo.local.yml
+    volumes:
+      - ./config/observability/tempo.local.yml:/etc/tempo/tempo.local.yml:ro
+      - tempo-data:/tmp/tempo
+    ports:
+      - "${SQUIRE_O11Y_TEMPO_PORT:-3200}:3200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - --config.file=/etc/prometheus/prometheus.local.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=24h
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./config/observability/prometheus.local.yml:/etc/prometheus/prometheus.local.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${SQUIRE_O11Y_PROM_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  loki-data:
+  tempo-data:
+  prometheus-data:

@@ -11,7 +11,10 @@ This runbook is the execution companion to the spec.
 Current state in this repository:
 
 - `docs/agent-harness-spec.md` is implemented as the planning contract.
-- `make verify-session` and the full harness target family are not implemented yet.
+- Initial Phase 2 harness targets are implemented:
+  - `make harness-bootstrap`, `make harness-up`, `make harness-run`, `make harness-inspect`,
+    `make harness-validate`, `make harness-down`, `make harness`, `make verify-session`,
+    plus `make o11y-up` / `make o11y-down`.
 - Runtime currently has:
   - unit tests (`make test`)
   - health endpoint (`GET /health`)
@@ -19,9 +22,45 @@ Current state in this repository:
   - stage timing/failure metric hooks for the Discord pipeline
   - structured derived matching trace artifacts in archive data
 
-## Session Workflow (Current Baseline)
+## Session Workflow (Harness)
 
-Use this flow until the harness targets are implemented:
+Use this flow for implementation sessions:
+
+1. `make harness-bootstrap`
+2. `make harness-up`
+3. `make harness-run`
+4. `make harness-inspect`
+5. `make harness-validate`
+6. `make harness-down`
+
+Default gate for executable-behavior changes:
+
+1. `make verify-session`
+2. inspect `.agent/runs/<run_id>/session_gate.json`
+3. record any `blocked` evidence before handoff
+
+`make test` is still useful as a quick pre-check, but it is not the session gate.
+
+## Known-Good Smoke Flow
+
+Use this copy/paste sequence to verify local o11y ingestion and assertions:
+
+1. `RUN_ID="run_o11y_smoke_$(date +%s)"`
+2. `make harness-bootstrap RUN_ID="$RUN_ID" mode=deterministic env=dev`
+3. `make o11y-up RUN_ID="$RUN_ID"`
+4. `.venv/bin/python tools/harness/run_harness.py emit-telemetry --run-id "$RUN_ID" --environment dev`
+5. `make harness-inspect RUN_ID="$RUN_ID"`
+6. `make harness-validate RUN_ID="$RUN_ID"`
+7. `cat ".agent/runs/$RUN_ID/assertions.json"`
+
+Expected result:
+
+- all checks `pass`
+- overall `"status": "pass"` in `assertions.json`
+
+## Session Workflow (Fallback Baseline)
+
+Use this when local o11y stack is unavailable:
 
 1. Validate startup prerequisites (`config.yaml`, `.env`, Discord/OpenAI credentials as needed).
 2. If dependency manifests changed (`pyproject.toml`, lockfiles), sync environment first:
@@ -35,19 +74,10 @@ Use this flow until the harness targets are implemented:
 5. If running live smoke manually, use a dedicated Discord test server/channel only.
 6. Record outcome, skipped steps, and blockers in session summary response.
 
-## Session Workflow (Target)
+Expected result from harness workflow:
 
-After harness implementation phases land, use:
-
-1. `make harness-bootstrap`
-2. `make harness-up`
-3. `make verify-session`
-4. `make harness-down`
-
-Expected result:
-
-- run artifacts under `.agent/runs/<run_id>/`
-- local gate attestation at `.agent/runs/<run_id>/session_gate.json`
+1. run artifacts under `.agent/runs/<run_id>/`
+2. local gate attestation at `.agent/runs/<run_id>/session_gate.json`
 
 ## Phase 2 Implementation Defaults
 
@@ -56,13 +86,15 @@ Use these defaults when implementing Phase 2 unless the user explicitly requests
 - Local stack command:
   - `docker compose -f docker-compose.o11y.local.yml up -d`
 - Services:
-  - `alloy`, `loki`, `tempo`, `prometheus` (`grafana` optional)
+  - `alloy`, `loki`, `tempo`, `prometheus`
+  - Grafana UI is intentionally deferred for now.
 - Ports:
-  - Alloy OTLP gRPC `4317`, OTLP HTTP `4318`
-  - Loki `3100`
-  - Tempo `3200`
-  - Prometheus `9090`
-  - Grafana `3000` (optional)
+  - base defaults are Alloy OTLP gRPC `4317`, OTLP HTTP `4318`, Loki `3100`, Tempo `3200`, Prometheus `9090`
+  - harness bootstrap now allocates a run-scoped free port bundle and writes it to `.agent/runs/<run_id>/run.env`
+  - harness commands reuse that same run-scoped bundle by default
+- Compose project isolation:
+  - harness bootstrap writes `SQUIRE_O11Y_PROJECT` into `run.env`
+  - `harness-up/down` and lifecycle commands reuse that compose project to avoid cross-run collisions
 - Harness run env defaults:
   - `SQUIRE_ENV=dev`
   - unique `SQUIRE_RUN_ID` per run

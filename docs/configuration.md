@@ -14,6 +14,16 @@ Required or optional environment variables include:
 - `OTEL_ENABLED` (optional; `true`/`false` to enable OTLP telemetry export)
 - `OTEL_EXPORTER_OTLP_ENDPOINT` (optional; OTLP base endpoint)
 - `OTEL_EXPORTER_OTLP_HEADERS` (optional; OTLP headers as `k=v,k=v`)
+- `SQUIRE_HARNESS_MODE` (optional; harness mode: `deterministic` or `integration-smoke`)
+- `SQUIRE_HARNESS_NOW` (optional; deterministic harness reference timestamp)
+- `SQUIRE_SMOKE_COMMAND` (optional; command used by `make verify-session` integration smoke check)
+- `SQUIRE_O11Y_PROJECT` (optional; docker compose project name for local harness isolation)
+- `SQUIRE_O11Y_ALLOY_READY_PORT` (optional; local Alloy ready endpoint port, default base `12345`)
+- `SQUIRE_O11Y_OTLP_GRPC_PORT` (optional; local Alloy OTLP gRPC ingress, default base `4317`)
+- `SQUIRE_O11Y_OTLP_HTTP_PORT` (optional; local Alloy OTLP HTTP ingress, default base `4318`)
+- `SQUIRE_O11Y_LOKI_PORT` (optional; local Loki API port, default base `3100`)
+- `SQUIRE_O11Y_TEMPO_PORT` (optional; local Tempo API port, default base `3200`)
+- `SQUIRE_O11Y_PROM_PORT` (optional; local Prometheus API port, default base `9090`)
 
 ## config.yaml
 

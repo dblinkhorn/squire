@@ -1,0 +1,78 @@
+logging {
+  level = "info"
+  format = "logfmt"
+}
+
+local.file_match "squire_run_logs" {
+  path_targets = [
+    {
+      __path__ = "/var/log/squire-runs/*/squire.log.jsonl",
+      job      = "squire-core",
+      source   = "harness",
+    },
+  ]
+}
+
+loki.source.file "squire_run_logs" {
+  targets    = local.file_match.squire_run_logs.targets
+  forward_to = [loki.process.squire_run_logs.receiver]
+}
+
+loki.process "squire_run_logs" {
+  stage.static_labels {
+    values = {
+      stream = "stdout",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+
+  external_labels = {
+    cluster = "local",
+  }
+}
+
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    traces  = [otelcol.exporter.otlphttp.tempo.input]
+  }
+}
+
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}
+
+otelcol.exporter.otlphttp "tempo" {
+  client {
+    endpoint = "http://tempo:4318"
+  }
+}

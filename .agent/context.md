@@ -226,3 +226,58 @@
 - `docs/commands.md` corrected inline `!fix` syntax to include `<id>`.
 - `docs/observability.md` and `docs/agent-harness-spec.md` now clarify that OTLP backend configuration is optional, while OpenTelemetry Python packages are required runtime dependencies.
 - `docs/agent-harness-runbook.md` status section now explicitly lists implemented JSON logging/run_id correlation and stage metric hooks.
+
+## Agent Harness Phase 2 Implementation (2026-02-16)
+
+- Implemented Phase 2 harness baseline:
+  - local headless o11y stack via `docker-compose.o11y.local.yml` using `alloy`, `loki`, `tempo`, `prometheus`.
+  - no Grafana UI service in local compose profile (API-first agent querying).
+- Adopted modern Alloy naming convention:
+  - config path is now `config/observability/config.alloy`.
+- Added local observability configs:
+  - `config/observability/config.alloy`
+  - `config/observability/prometheus.local.yml`
+  - `config/observability/tempo.local.yml`
+  - `config/observability/loki.local.yml`
+- Added harness tooling scripts:
+  - `tools/harness/run_harness.py` (lifecycle + verify-session + session_gate emission)
+  - `tools/harness/query_o11y.py` (Loki/Prometheus/Tempo API queries)
+  - `tools/harness/assert_o11y.py` (machine-readable pass/failed/blocked assertions)
+- Added Make targets for harness workflows:
+  - `harness-bootstrap`, `harness-up`, `harness-run`, `harness-inspect`, `harness-validate`,
+    `harness-down`, `harness`, `verify-session`, `o11y-up`, `o11y-down`.
+- Docs aligned to implementation:
+  - `docs/agent-harness-spec.md` now references `config.alloy` and headless local stack profile.
+  - `docs/agent-harness-runbook.md` now reflects implemented harness targets and updated workflows.
+  - `README.md` now includes a short "Agent Harness (Phase 2)" usage section.
+  - `docs/configuration.md` now documents harness env vars (`SQUIRE_HARNESS_MODE`, `SQUIRE_HARNESS_NOW`, `SQUIRE_SMOKE_COMMAND`).
+
+## Agent Harness Phase 2 Stabilization (2026-02-16)
+
+- `emit-telemetry` now writes JSON log lines directly to `.agent/runs/<run_id>/squire.log.jsonl` (the same file Alloy tails), including manual emission flows that do not redirect stdout.
+- Harness telemetry emission now runs logging at `DEBUG` for this command path so `stage_complete` events are present for stage-coverage assertions.
+- Deterministic telemetry emission no longer redirects subprocess stdout to the run log file, preventing duplicate log lines now that file logging is explicit in `emit-telemetry`.
+- Tempo query logic now retries search attempts for a short window to handle eventual indexing delay before traces become searchable.
+- Loki query logic now retries on empty run results to reduce inspect-time races with file-tail ingestion.
+- Trace assertion logic now evaluates all successful Tempo attempts (not only the first successful response), preventing false failures when early attempts are empty but later attempts contain traces.
+- OTel resource attributes now include `run_id` when available so trace search by run id is more reliable in Tempo.
+
+## Agent Harness Workflow + Isolation Update (2026-02-16)
+
+- `make verify-session` is now documented as the required gate for executable-behavior changes; docs-only changes may skip with explicit note.
+- Added a runbook/README known-good smoke flow for manual local o11y validation (`bootstrap -> o11y-up -> emit-telemetry -> inspect -> validate`).
+- Harness bootstrap now allocates run-scoped local o11y isolation values and writes them to `.agent/runs/<run_id>/run.env`:
+  - `SQUIRE_O11Y_PROJECT`
+  - run-scoped `SQUIRE_O11Y_*_PORT` values
+- Harness up/down/inspect/emission paths now reuse run-scoped isolation values from `run.env` by default, reducing cross-run collisions on shared developer hosts.
+
+## Live Discord Smoke Contract Drafted (2026-02-16)
+
+- Added a new normative section in `docs/agent-harness-spec.md`:
+  - `Live Discord smoke automation contract (normative)`
+- The section defines:
+  - portable multi-developer architecture (`squire` bot + dedicated `smoke-driver` bot)
+  - required/optional smoke env contract
+  - test-only bot-author allowlist safety constraints
+  - smoke runner/scenario/artifact contracts (`tools/harness/smoke_discord.py`, `config/smoke/discord_smoke_v1.yaml`, `smoke.json`)
+  - integration telemetry evidence requirements and acceptance criteria for implementation.

@@ -366,11 +366,15 @@ def initialize_observability(config: ObservabilityConfig) -> None:
 
     headers = _parse_otlp_headers(config.otlp_headers)
     try:
+        resource_attributes: dict[str, str] = {
+            "service.name": config.service_name,
+            "deployment.environment": config.environment,
+        }
+        run_id = get_run_id()
+        if run_id:
+            resource_attributes["run_id"] = run_id
         resource = Resource.create(
-            {
-                "service.name": config.service_name,
-                "deployment.environment": config.environment,
-            }
+            resource_attributes
         )
 
         tracer_provider = TracerProvider(resource=resource)

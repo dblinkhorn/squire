@@ -161,7 +161,7 @@ Run a local stack with Docker Compose:
 - Loki (logs)
 - Prometheus (metrics)
 - Tempo (traces)
-- optional Grafana (UI only; not required for agent queries)
+- Grafana UI is deferred for now; agents query APIs directly.
 
 Agent access uses APIs directly:
 
@@ -339,7 +339,7 @@ Deliverables:
 Files:
 
 - `docker-compose.o11y.local.yml` (new)
-- `config/observability/alloy-local.river` (new)
+- `config/observability/config.alloy` (new)
 - `tools/harness/run_harness.py` (new)
 - `tools/harness/query_o11y.py` (new)
 - `tools/harness/assert_o11y.py` (new)
@@ -363,23 +363,29 @@ This section is binding for implementation details in Phase 2 so a fresh agent d
 - `loki`: log storage + query API.
 - `tempo`: trace storage + search/query API.
 - `prometheus`: metrics storage + query API.
-- `grafana` (optional): UI only, not required for automated checks.
+- no Grafana service in the default local compose profile.
 
-Default host ports:
+Base host ports:
 
 - `4317` OTLP gRPC ingress (Alloy)
 - `4318` OTLP HTTP ingress (Alloy)
 - `3100` Loki HTTP API
 - `3200` Tempo HTTP API
 - `9090` Prometheus HTTP API
-- `3000` Grafana UI (optional)
+- `12345` Alloy ready endpoint
+
+Isolation requirement:
+
+- bootstrap must assign a run-scoped compose project and free host-port bundle, then persist them in `.agent/runs/<run_id>/run.env`
+- harness commands must reuse the persisted run-scoped project/ports by default
 
 Required files:
 
 - `docker-compose.o11y.local.yml`
-- `config/observability/alloy-local.river`
+- `config/observability/config.alloy`
 - `config/observability/prometheus.local.yml`
 - `config/observability/tempo.local.yml`
+- `config/observability/loki.local.yml`
 
 Retention defaults:
 
@@ -407,9 +413,11 @@ Required targets and behavior:
 - `make harness-bootstrap`
   - creates `.agent/runs/<run_id>/`
   - writes `.agent/runs/<run_id>/run.env` with `SQUIRE_RUN_ID`, `SQUIRE_ENV`, `SQUIRE_HARNESS_MODE`, `SQUIRE_HARNESS_NOW`
+  - writes isolation keys: `SQUIRE_O11Y_PROJECT` and run-scoped `SQUIRE_O11Y_*_PORT` values
   - default `SQUIRE_ENV=dev` unless explicitly overridden
 - `make harness-up`
   - starts `docker compose -f docker-compose.o11y.local.yml up -d`
+  - uses run-scoped project/ports from `run.env` when available
   - blocks until Loki/Tempo/Prometheus health checks pass or timeout
 - `make harness-run`
   - executes deterministic checks and optional integration-smoke path based on mode
@@ -431,9 +439,9 @@ Required targets and behavior:
 
 Required query endpoints:
 
-- Loki: `http://127.0.0.1:3100/loki/api/v1/query_range`
-- Prometheus: `http://127.0.0.1:9090/api/v1/query`
-- Tempo: `http://127.0.0.1:3200/api/search` (or equivalent Tempo search endpoint configured in compose)
+- Loki: `http://127.0.0.1:<SQUIRE_O11Y_LOKI_PORT>/loki/api/v1/query_range`
+- Prometheus: `http://127.0.0.1:<SQUIRE_O11Y_PROM_PORT>/api/v1/query`
+- Tempo: `http://127.0.0.1:<SQUIRE_O11Y_TEMPO_PORT>/api/search` (or equivalent Tempo search endpoint configured in compose)
 
 Required baseline queries:
 
@@ -520,6 +528,136 @@ After retry budget exhaustion:
 - mark `integration_smoke` as `blocked`
 - include last error evidence in `summary.json` and `session_gate.json`
 
+##### Live Discord smoke automation contract (normative)
+
+This section defines the portable integration smoke model for all developers working in this repository.
+
+Objective:
+
+- allow agents to run a real end-to-end Discord smoke session against a developer-owned test server
+- keep the smoke workflow standardized while allowing per-developer server/channel/token configuration
+
+Architecture:
+
+- `squire` bot: the bot under test (existing `DISCORD_TOKEN`)
+- `smoke-driver` bot: a separate bot account used only to send smoke inputs and collect responses
+- harness runner: executes smoke command and stores evidence artifacts under `.agent/runs/<run_id>/`
+
+Rationale:
+
+- Squire currently ignores bot-authored messages by default (`message.author.bot` guard).
+- automated Discord smoke requires a controlled test-only allowlist for bot-authored inputs.
+- this allowlist must be restricted to explicit test context and never enable broad bot-to-bot traffic.
+
+Required environment contract (for integration smoke):
+
+- `SQUIRE_SMOKE_COMMAND`
+  - command executed by `verify-session` for smoke validation.
+  - must be non-interactive and return exit code `0` on success.
+- `SQUIRE_SMOKE_DRIVER_TOKEN`
+  - token for the dedicated smoke-driver bot.
+- `SQUIRE_SMOKE_DRIVER_BOT_ID`
+  - Discord user ID for the smoke-driver bot.
+- `SQUIRE_SMOKE_GUILD_ID`
+  - Discord guild ID of the dedicated smoke server.
+- `SQUIRE_SMOKE_CHANNEL_ID`
+  - Discord channel ID used for smoke scenarios.
+- `SQUIRE_SMOKE_ALLOWED_BOT_AUTHOR_IDS`
+  - comma-separated bot IDs allowed as test senders (must include `SQUIRE_SMOKE_DRIVER_BOT_ID`).
+
+Recommended optional environment values:
+
+- `SQUIRE_SMOKE_SCENARIO_PATH` (default: `config/smoke/discord_smoke_v1.yaml`)
+- `SQUIRE_SMOKE_TIMEOUT_SECONDS` (default: `480`)
+- `SQUIRE_SMOKE_STEP_TIMEOUT_SECONDS` (default: `45`)
+- `SQUIRE_SMOKE_POLL_INTERVAL_MS` (default: `1000`)
+- `SQUIRE_SMOKE_CLEANUP` (`true`/`false`, default `true`)
+
+Required safety constraints:
+
+- bot-author allowlist logic must only activate when:
+  - `SQUIRE_ENV=test`, and
+  - message guild/channel match configured smoke target, and
+  - sender bot ID is in `SQUIRE_SMOKE_ALLOWED_BOT_AUTHOR_IDS`
+- if any condition is unmet, existing `message.author.bot` ignore behavior must remain in effect.
+- production mode (`SQUIRE_ENV=prod`) must always ignore bot-authored messages.
+- smoke channel must be dedicated to test traffic only.
+
+Required implementation files for this contract:
+
+- `tools/harness/smoke_discord.py` (new)
+- `config/smoke/discord_smoke_v1.yaml` (new scenario file)
+- `tests/test_smoke_config.py` (new, env/config parsing + guardrails)
+- `tests/test_smoke_runner.py` (new, scenario execution and pass/fail semantics)
+
+Smoke runner command contract:
+
+- command must:
+  - connect as `smoke-driver` bot
+  - execute scenario steps in order
+  - capture response evidence (message IDs, timestamps, content excerpts)
+  - write `smoke.json` in run artifact directory
+  - exit `0` when all required checks pass, non-zero otherwise
+- command must accept at least:
+  - `--run-id`
+  - `--guild-id`
+  - `--channel-id`
+  - `--scenario`
+  - `--out`
+
+Scenario format contract (`discord_smoke_v1.yaml`):
+
+- top-level keys:
+  - `schema_version`
+  - `name`
+  - `steps`
+- each step includes:
+  - `id`
+  - `send` (message text to send)
+  - `expect` (one or more required matchers)
+  - optional `timeout_seconds`
+- matcher types to support:
+  - `contains` (substring)
+  - `regex`
+  - `not_contains`
+
+Minimum required smoke scenarios:
+
+- command routing sanity:
+  - `!status` returns expected digest header tokens.
+- retrieval sanity:
+  - `!recent 5` returns list format and at least one row when fixtures exist.
+  - `!find <known-token>` returns a result list.
+- mutation sanity:
+  - one safe mutation path (`!append` or `!done`) against a smoke fixture object.
+  - post-mutation verification command confirms expected state update.
+
+Telemetry evidence contract for smoke runs:
+
+- `smoke.json` must include:
+  - `run_id`
+  - `started_at`
+  - `finished_at`
+  - `status`
+  - `steps` (with per-step pass/fail evidence)
+  - `errors` (if any)
+- harness inspect/validate must verify:
+  - at least one `discord.message.receive` + `response.send` stage pair for smoke session
+  - no unexpected `stage_failed` events for required smoke steps
+  - trace search includes smoke-session spans within run window
+
+Artifact contract addition:
+
+- when integration smoke is executed, `.agent/runs/<run_id>/smoke.json` is required.
+- `session_gate.json.checks.integration_smoke.notes` must reference `smoke.json` on failure/blocked outcomes.
+
+Acceptance criteria for this contract:
+
+- two different developers can run the same smoke command shape using only different `.env` values.
+- smoke execution succeeds on a dedicated test Discord server without manual message sending.
+- bot-author guardrails prevent smoke bypass in non-test contexts.
+- agent can determine smoke pass/fail from artifacts and telemetry without opening Discord UI manually.
+
 ### Phase 3: Deterministic scenario fixtures
 
 Files:
@@ -546,7 +684,7 @@ Files:
 Deliverables:
 
 - clear operator guidance for local-only, cloud, and self-hosted collector setups
-- explicit note that Grafana UI is optional for agents
+- explicit note that Grafana UI setup is deferred; agent workflows are API-first
 
 ## Acceptance Criteria
 
@@ -574,7 +712,7 @@ Deliverables:
 ## Initial Decisions
 
 - Local dev telemetry is ephemeral-by-default.
-- Grafana UI is optional for local harness; agents use HTTP query APIs directly.
+- Grafana UI setup is deferred in the local harness profile; agents use HTTP query APIs directly.
 - Logs remain first-class and structured; traces/metrics are additive.
 - Production observability is collector-agnostic and opt-in by configuration.
 - Local implementation-session enforcement is attestation-first (`session_gate.json`); CI enforcement is planned follow-on.
