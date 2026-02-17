@@ -21,6 +21,7 @@ LLM settings in `config.yaml`:
 - `llm.interpreter_prompt_path`: extraction prompt path.
 - `llm.decision_prompt_path`: decision prompt path for update/append routing.
 - `llm.candidate_query_prompt_path`: candidate-query prompt path for matching retrieval.
+- `llm.nl_command_routing_prompt_path`: prompt path for natural-language command intent routing.
 
 OpenAI transport timeout behavior:
 
@@ -49,6 +50,15 @@ Matching settings in `config.yaml` (hybrid lexical/semantic retrieval and determ
 - matching.affinity_recent_ids_per_thread / matching.affinity_ttl_days / matching.affinity_max_boost: conversation-affinity memory window and max additive contribution.
 - matching.auto_min_score / matching.auto_min_margin: deterministic auto-apply score and margin gates (in addition to decision confidence thresholds).
 - matching.semantic_text_schema_version: embedding text composition version; changing this triggers a full semantic reindex.
+
+Natural-language command routing settings in `config.yaml`:
+
+- `nl_command_routing.enabled`: enable pre-capture NL routing for command-like DMs.
+- `nl_command_routing.clarify_on_ambiguous`: ask a clarification question on medium-confidence ambiguous command intents.
+- `nl_command_routing.allow_nl_mutations`: allow NL mutation intents (`done`/`append`/`fix`) with confirmation-first behavior.
+- `nl_command_routing.read_auto_min_confidence`: minimum confidence to auto-execute NL read intents.
+- `nl_command_routing.mutation_confirm_min_confidence`: minimum confidence to open NL mutation confirmation flow.
+- `nl_command_routing.max_recent_limit`: max `N` used when NL routing maps to `!recent N`.
 
 ## Prompt Files
 
@@ -121,7 +131,7 @@ channel is available.
 
 Surfacing behavior is configured under `surfacing` in `config.yaml`.
 
-- `surfacing.output.show_ids_daily_weekly`: include canonical IDs in daily/weekly digest output (default false). Manual pull commands (`!recent`, `!find`, `!show`) always include IDs.
+- `surfacing.output.show_ids_daily_weekly`: include canonical IDs in daily/weekly digest output (default false).
 - `surfacing.admin.due_soon_days`: include admin items due within this many days in the due-soon section.
 - `surfacing.projects.stale_days`: threshold for stale project surfacing.
 - `surfacing.projects.blocked_limit`: maximum blocked/stale projects shown in digest.

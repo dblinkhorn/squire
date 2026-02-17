@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nl_command_intent_v1.json",
+  "title": "Natural Language Command Intent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "intent",
+    "mapped_command",
+    "risk_tier",
+    "confidence",
+    "is_ambiguous",
+    "clarification_question",
+    "clarification_options",
+    "args"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "intent": {
+      "type": "string",
+      "enum": [
+        "status",
+        "weekly",
+        "recent",
+        "find",
+        "show",
+        "done",
+        "append",
+        "fix",
+        "clear_archive",
+        "confirm_pending",
+        "cancel_pending",
+        "none"
+      ]
+    },
+    "mapped_command": {
+      "type": ["string", "null"],
+      "enum": [
+        "!status",
+        "!weekly",
+        "!recent",
+        "!find",
+        "!show",
+        "!done",
+        "!append",
+        "!fix",
+        "!clear-archive",
+        "!confirm",
+        "!cancel",
+        null
+      ]
+    },
+    "risk_tier": {
+      "type": "string",
+      "enum": ["read", "mutation", "destructive", "control", "none"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "is_ambiguous": {
+      "type": "boolean"
+    },
+    "clarification_question": {
+      "type": ["string", "null"]
+    },
+    "clarification_options": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "string"
+      }
+    },
+    "args": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "number",
+        "query",
+        "text",
+        "fields",
+        "pending_id",
+        "recent_limit"
+      ],
+      "properties": {
+        "target": {
+          "type": ["string", "null"]
+        },
+        "number": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "query": {
+          "type": ["string", "null"]
+        },
+        "text": {
+          "type": ["string", "null"]
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "value"],
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "pending_id": {
+          "type": ["string", "null"]
+        },
+        "recent_limit": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

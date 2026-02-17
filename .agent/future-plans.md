@@ -7,7 +7,8 @@ Purpose:
 
 ## Near-Term Priorities
 
-- Natural-language command routing for read-only intents (`status`, `weekly`, `recent`, `find`, `show`).
+- Natural-language command routing with LLM intent interpretation for read + mutation intents,
+  using confirmation-first mutation handling and explicit-only destructive controls.
 - Numbered mutation ergonomics (`!done 2`, `!append 3 ...`, `!fix 1 ...`).
 
 ## Command UX Ideas

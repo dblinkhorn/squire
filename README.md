@@ -35,6 +35,12 @@ Core commands:
 - `!confirm <pending_id>` / `!cancel <pending_id>` - approve or cancel a suggested change
 - `!clear-archive` then `DELETE` - clear archive data (keeps `.git`)
 
+Natural-language routing:
+
+- Non-`!` command-like DMs can route to known commands (`status`, `weekly`, `recent`, `find`, `show`, `done`, `append`, `fix`) before capture.
+- NL mutation intents (`done`/`append`/`fix`) use confirmation-first buttons before applying writes.
+- Destructive/control actions remain explicit-only: `!clear-archive` + `DELETE`, `!confirm <pending_id>`, `!cancel <pending_id>`.
+
 When Squire proposes updates to an existing note, Discord actions can present `Confirm`, `Create New`, and `Cancel` buttons.
 If an update is auto-applied, Squire also provides a `Was this incorrect?` button with `!fix`/`!append` fallback.
 

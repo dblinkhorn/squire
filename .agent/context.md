@@ -246,3 +246,73 @@
   - test env with `test_archive_root` set: uses `test_archive_root` as active archive root.
 - Guardrails are unchanged and apply to the active root used by test mode.
 - Added tests in `tests/test_test_mode_startup.py` for override gating and normalization interaction.
+
+## NL Routing Policy Decision (2026-02-16)
+
+- Updated `docs/nl-command-routing-spec.md` to treat NL command routing as main-scope for both read and mutation intents (not deferred).
+- Routing model is now LLM-interpretive intent parsing + deterministic command validation/execution.
+- Safety policy:
+  - mutation intents are confirmation-first by default.
+  - `!clear-archive` remains explicit-command-only with typed `DELETE`.
+  - `!confirm` and `!cancel` remain explicit command/button only (not free-text NL).
+  - `Was this incorrect?` is kept as secondary recovery, not primary write safety.
+
+## NL Routing Implementation (2026-02-16)
+
+- Implemented pre-capture NL routing in `discord_bot` using a dedicated LLM intent pass:
+  - new schema: `config/schemas/nl_command_intent_v1.json`
+  - new prompt: `config/prompts/nl_command_routing_v1.txt`
+  - new config key: `llm.nl_command_routing_prompt_path` (defaulting to the new prompt path)
+- Added routed intent policy behavior:
+  - read intents (`status`, `weekly`, `recent`, `find`, `show`) can auto-execute at high confidence.
+  - mutation intents (`done`, `append`, `fix`) now queue confirmation-first pending actions from NL.
+  - explicit-only intents (`clear_archive`, `confirm_pending`, `cancel_pending`) are blocked from NL execution with explicit guidance.
+- Added a dedicated NL mutation confirmation view (`Confirm` / `Cancel`) that applies pending operations only after confirmation.
+- Kept correction flow semantics:
+  - `Was this incorrect?` remains post-apply guidance only (no direct revert), while mutation confirmation is now pre-write for NL mutation intents.
+- Added NL routing config loader in `config_utils`:
+  - `load_nl_command_routing_config(...)`
+  - defaults for enabled/clarify/mutation routing/confidence thresholds/max recent limit.
+- Updated docs/templates to reflect shipped behavior:
+  - `README.md`
+  - `docs/commands.md`
+  - `docs/configuration.md`
+  - `config.yaml.example`
+- Added tests:
+  - `tests/test_nl_command_routing_config.py`
+  - new NL routing behavior tests in `tests/test_discord_commands.py`
+- Validation:
+  - `.venv/bin/python -m pytest -q tests/test_nl_command_routing_config.py tests/test_discord_commands.py` => `34 passed`
+  - `.venv/bin/python -m pytest -q tests/test_matching_config.py tests/test_decision_config.py` => `5 passed`
+  - `.venv/bin/python -m pytest -q tests/test_discord_schedule.py tests/test_surfacing.py` => `13 passed`
+
+## NL Routing Follow-up (2026-02-16)
+
+- Fixed an observed misroute where "show me my notes" was interpreted as `show` (detail) and clarified for list number.
+- Added deterministic phrase override in NL routing:
+  - when intent is `show` without numeric target and message matches "my notes"/"recent notes"/"last N notes", route to `!recent`.
+- Added regression test in `tests/test_discord_commands.py`:
+  - `test_nl_route_overrides_show_my_notes_to_recent`.
+- Validation:
+  - `.venv/bin/python -m pytest -q tests/test_discord_commands.py tests/test_nl_command_routing_config.py` => `35 passed`.
+
+## Pull List UX Tweak (2026-02-16)
+
+- Updated pull list rendering (`!recent`, `!find`) to hide canonical IDs and present post-title metadata as bullet lines per row.
+- Search snippet text is now rendered as an additional bullet line under each matched title.
+- `!show` detail view no longer appends a trailing `(ID: ...)` line.
+- Simplified `!recent` tips to a single line including the limit reminder:
+  - ``!recent <number> (up to 50)`` included inline with numbered mutation tips.
+- Validation:
+  - `.venv/bin/python -m pytest -q tests/test_surfacing.py tests/test_discord_commands.py` => `41 passed`
+  - `.venv/bin/python -m pytest -q tests/test_discord_schedule.py tests/test_nl_command_routing_config.py` => `7 passed`
+
+## NL Operation Plan Spec Refresh (2026-02-16)
+
+- Rewrote `docs/nl-command-routing-spec.md` to define the new architecture:
+  - NL mutation handling should produce structured operation plans (not command-string translation).
+  - deterministic normalization/alias/value parsing should run before pending-action creation.
+  - explicit-only controls remain blocked from NL.
+- Added a new execution-ready implementation guide for fresh sessions:
+  - `docs/nl-command-routing-implementation-plan.md`
+  - includes file-by-file work breakdown, required schemas/prompts, test matrix, rollout gates, and handoff checklist.

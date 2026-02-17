@@ -6,6 +6,7 @@ llm:
   interpreter_prompt_path: "config/prompts/extract_v1.txt"
   decision_prompt_path: "config/prompts/decision_v1.txt"
   candidate_query_prompt_path: "config/prompts/candidate_query_v1.txt"
+  nl_command_routing_prompt_path: "config/prompts/nl_command_routing_v1.txt"
 
 timezone: "local" # Use system local timezone, or set an IANA name like "America/Los_Angeles".
 
@@ -45,6 +46,14 @@ matching:
   auto_min_margin: 0.20
   candidate_limit: 5
   semantic_text_schema_version: 1
+
+nl_command_routing:
+  enabled: true
+  clarify_on_ambiguous: true
+  allow_nl_mutations: true
+  read_auto_min_confidence: 0.85
+  mutation_confirm_min_confidence: 0.75
+  max_recent_limit: 25
 
 schedule:
   daily_digest_time: "09:00"

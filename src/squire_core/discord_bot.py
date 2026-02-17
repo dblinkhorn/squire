@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -19,9 +20,11 @@ from dotenv import load_dotenv
 
 from squire_core.config_utils import (
     MatchingConfig,
+    NLCommandRoutingConfig,
     load_config,
     load_decision_config,
     load_matching_config,
+    load_nl_command_routing_config,
     normalize_archive_config,
 )
 from squire_core.decision_flow import DecisionRouting, apply_decision_to_derived, evaluate_decision
@@ -80,7 +83,39 @@ _PENDING_CONTROLS_INSTRUCTION = (
 _NUMBERED_COMMAND_TIP = (
     "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value`"
 )
-_RECENT_LIMIT_TIP = "Tip: `!recent N` supports up to 50"
+_NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT = (
+    "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value` · `!recent <number>` (up to 50)"
+)
+_NL_ROUTE_MEDIUM_CONFIDENCE = 0.5
+_NL_INTENT_SCHEMA_PATH = Path("config/schemas/nl_command_intent_v1.json")
+_NL_INTENTS = {
+    "status",
+    "weekly",
+    "recent",
+    "find",
+    "show",
+    "done",
+    "append",
+    "fix",
+    "clear_archive",
+    "confirm_pending",
+    "cancel_pending",
+    "none",
+}
+_NL_EXPLICIT_ONLY_INTENTS = {"clear_archive", "confirm_pending", "cancel_pending"}
+_NL_COMMAND_FOR_INTENT = {
+    "status": "!status",
+    "weekly": "!weekly",
+    "recent": "!recent",
+    "find": "!find",
+    "show": "!show",
+    "done": "!done",
+    "append": "!append",
+    "fix": "!fix",
+    "clear_archive": "!clear-archive",
+    "confirm_pending": "!confirm",
+    "cancel_pending": "!cancel",
+}
 _WEEKDAY_MAP = {
     "MON": 0,
     "MONDAY": 0,
@@ -171,6 +206,15 @@ class _CommandTargetResolution:
     reason: str | None
     row_number: int | None
     source_view: str | None
+
+
+@dataclass(frozen=True)
+class _NLMutationPlan:
+    command_name: str
+    target_token: str
+    op: str
+    fields: dict[str, Any]
+    validate_fix: bool
 
 
 _RESULT_CURSORS: dict[tuple[int, int], _ResultCursor] = {}
@@ -375,6 +419,230 @@ def _parse_positive_int(value: str) -> int | None:
     if parsed <= 0:
         return None
     return parsed
+
+
+def _coerce_non_empty_str(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    return trimmed
+
+
+def _coerce_positive_int(value: Any) -> int | None:
+    parsed = _coerce_int(value)
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _looks_like_recent_request(content: str, args: dict[str, Any]) -> bool:
+    normalized = " ".join(content.strip().lower().split())
+    if not normalized:
+        return False
+    direct_phrases = {
+        "show my notes",
+        "show me my notes",
+        "show all my notes",
+        "list my notes",
+        "recent notes",
+    }
+    if normalized in direct_phrases:
+        return True
+    if "my notes" in normalized or "all my notes" in normalized or "recent notes" in normalized:
+        return True
+    if re.search(r"\blast\s+\d+\s+notes?\b", normalized):
+        return True
+
+    query = _coerce_non_empty_str(args.get("query")) or _coerce_non_empty_str(args.get("text"))
+    if query:
+        query_norm = " ".join(query.strip().lower().split())
+        if query_norm in {"my notes", "all my notes", "recent notes"}:
+            return True
+    return False
+
+
+def _confidence_band(confidence: float, threshold: float) -> str:
+    if confidence >= threshold:
+        return "high"
+    if confidence >= _NL_ROUTE_MEDIUM_CONFIDENCE:
+        return "medium"
+    return "low"
+
+
+def _log_nl_route_evaluated(
+    *,
+    raw_event_id: str,
+    route_result: str,
+    intent: str,
+    risk_tier: str,
+    confidence_band: str,
+    mapped_command: str | None,
+) -> None:
+    logging.info(
+        "nl_route_evaluated raw_event_id=%s route_result=%s intent=%s risk_tier=%s confidence_band=%s mapped_command=%s",
+        raw_event_id,
+        route_result,
+        intent,
+        risk_tier,
+        confidence_band,
+        mapped_command or "",
+    )
+
+
+def _log_nl_route_clarified(*, raw_event_id: str, options: list[str]) -> None:
+    logging.info(
+        "nl_route_clarified raw_event_id=%s options=%s",
+        raw_event_id,
+        "|".join(option.strip() for option in options if option.strip()),
+    )
+
+
+def _log_nl_route_blocked(*, raw_event_id: str, intent: str, reason: str) -> None:
+    logging.info(
+        "nl_route_blocked raw_event_id=%s intent=%s reason=%s",
+        raw_event_id,
+        intent,
+        reason,
+    )
+
+
+def _extract_nl_target_token(args: dict[str, Any]) -> str | None:
+    target = _coerce_non_empty_str(args.get("target"))
+    if target is not None:
+        return target
+    number = _coerce_positive_int(args.get("number"))
+    if number is None:
+        return None
+    return str(number)
+
+
+def _build_nl_read_command(
+    *,
+    intent: str,
+    args: dict[str, Any],
+    routing: NLCommandRoutingConfig,
+) -> tuple[str | None, str | None]:
+    if intent == "status":
+        return "!status", None
+    if intent == "weekly":
+        return "!weekly", None
+    if intent == "recent":
+        limit = _coerce_positive_int(args.get("recent_limit"))
+        if limit is None:
+            limit = _coerce_positive_int(args.get("number"))
+        if limit is None:
+            return "!recent", None
+        clamped = max(1, min(routing.max_recent_limit, limit))
+        return f"!recent {clamped}", None
+    if intent == "find":
+        query = _coerce_non_empty_str(args.get("query"))
+        if query is None:
+            query = _coerce_non_empty_str(args.get("text"))
+        if query is None:
+            return None, "I can run search, but I need what to search for."
+        return f"!find {query}", None
+    if intent == "show":
+        number = _coerce_positive_int(args.get("number"))
+        if number is None:
+            target = _coerce_non_empty_str(args.get("target"))
+            if target and target.isdigit():
+                number = _coerce_positive_int(target)
+        if number is None:
+            return None, "I can open an item, but I need a list number."
+        return f"!show {number}", None
+    return None, "I couldn't map that to a supported read command."
+
+
+def _parse_nl_fix_fields(args: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    raw_fields = args.get("fields")
+    if not isinstance(raw_fields, list) or not raw_fields:
+        return None, "I can update fields, but I need at least one `field=value` pair."
+    parsed: dict[str, Any] = {}
+    for item in raw_fields:
+        if not isinstance(item, dict):
+            continue
+        field = _coerce_non_empty_str(item.get("field"))
+        value = _coerce_non_empty_str(item.get("value"))
+        if field is None or value is None:
+            continue
+        parsed[field] = value
+    if not parsed:
+        return None, "I can update fields, but I need valid `field=value` values."
+    return parsed, None
+
+
+def _build_nl_mutation_plan(*, intent: str, args: dict[str, Any]) -> tuple[_NLMutationPlan | None, str | None]:
+    target_token = _extract_nl_target_token(args)
+    if target_token is None:
+        return None, "I can apply that update, but I need which item to target."
+    if intent == "done":
+        return (
+            _NLMutationPlan(
+                command_name="done",
+                target_token=target_token,
+                op="update",
+                fields={"status": "done", "completed_at": _now_iso()},
+                validate_fix=False,
+            ),
+            None,
+        )
+    if intent == "append":
+        text = _coerce_non_empty_str(args.get("text"))
+        if text is None:
+            return None, "I can append to that note, but I need the text to append."
+        return (
+            _NLMutationPlan(
+                command_name="append",
+                target_token=target_token,
+                op="append",
+                fields={"body": text},
+                validate_fix=False,
+            ),
+            None,
+        )
+    if intent == "fix":
+        fields, error = _parse_nl_fix_fields(args)
+        if error is not None or fields is None:
+            return None, error
+        return (
+            _NLMutationPlan(
+                command_name="fix",
+                target_token=target_token,
+                op="update",
+                fields=fields,
+                validate_fix=True,
+            ),
+            None,
+        )
+    return None, "I couldn't map that to a supported mutation command."
+
+
+def _format_nl_clarification_message(
+    *,
+    question: str | None,
+    options: list[str],
+    fallback: str,
+) -> str:
+    prompt = question.strip() if isinstance(question, str) and question.strip() else fallback
+    cleaned_options = [option.strip() for option in options if isinstance(option, str) and option.strip()]
+    if not cleaned_options:
+        return prompt
+    lines = [prompt, "", "Options:"]
+    for option in cleaned_options[:3]:
+        lines.append(f"- {option}")
+    return "\n".join(lines)
+
+
+def _explicit_only_guidance_for_intent(intent: str) -> str:
+    if intent == "clear_archive":
+        return "Clearing the archive can only be done explicitly with the command `!clear-archive`."
+    if intent == "confirm_pending":
+        return "Pending confirmation is explicit-only. Use `!confirm <pending_id>` or the Confirm button."
+    if intent == "cancel_pending":
+        return "Pending cancellation is explicit-only. Use `!cancel <pending_id>` or the Cancel button."
+    return "That action requires an explicit command."
 
 
 def _is_iso_date(value: str) -> bool:
@@ -1254,6 +1522,94 @@ class PendingActionView(discord.ui.View):
         await _disable_view(interaction, clear_pending_instructions=True)
 
 
+class MutationPendingView(discord.ui.View):
+    def __init__(
+        self,
+        *,
+        pending_id: str,
+        pending_root: str | Path,
+        objects_root: str | Path,
+        index_db: str | Path,
+        author_id: int,
+        matching: MatchingConfig | None,
+        affinity_key: tuple[int, int],
+    ) -> None:
+        super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
+        self.pending_id = pending_id
+        self.pending_root = pending_root
+        self.objects_root = objects_root
+        self.index_db = index_db
+        self.author_id = author_id
+        self._matching = matching
+        self._affinity_key = affinity_key
+
+    def is_author(self, interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        return bool(user and user.id == self.author_id)
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
+    async def confirm_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        if not self.is_author(interaction):
+            await interaction.response.send_message("This confirmation is not for you.")
+            return
+        pending = load_pending_action(self.pending_root, self.pending_id)
+        if not pending:
+            await interaction.response.send_message("That pending action no longer exists.")
+            return
+        if pending.status != "pending":
+            await interaction.response.send_message(f"This pending action is already {pending.status}.")
+            return
+        try:
+            result = apply_operations(
+                pending.derived,
+                objects_root=self.objects_root,
+                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                derived_schema_path=None,
+                last_decision_id=pending.last_decision_id,
+            )
+        except Exception:
+            logging.exception("nl_mutation_pending_apply_failed id=%s", self.pending_id)
+            _write_pending_with_status(self.pending_root, pending, "failed")
+            await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
+            return
+        await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
+        if self._matching:
+            touched_ids = _extract_target_ids_from_derived(pending.derived)
+            touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
+            _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
+        _write_pending_with_status(self.pending_root, pending, "confirmed")
+        title = _first_title_from_paths(result.written_paths)
+        if title:
+            await interaction.response.send_message(f'✅ Applied update to "{title}".')
+        else:
+            await interaction.response.send_message(f"✅ Applied update. ({len(result.written_paths)} item(s) updated.)")
+        await _disable_view(interaction)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.gray)
+    async def cancel_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        if not self.is_author(interaction):
+            await interaction.response.send_message("This cancellation is not for you.")
+            return
+        pending = load_pending_action(self.pending_root, self.pending_id)
+        if not pending:
+            await interaction.response.send_message("That pending action no longer exists.")
+            return
+        if pending.status != "pending":
+            await interaction.response.send_message(f"This pending action is already {pending.status}.")
+            return
+        _write_pending_with_status(self.pending_root, pending, "cancelled")
+        await interaction.response.send_message("Cancelled. No changes made.")
+        await _disable_view(interaction)
+
+
 class AutoApplyFeedbackView(discord.ui.View):
     def __init__(self, *, author_id: int, target_id: str) -> None:
         super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
@@ -1279,6 +1635,497 @@ class AutoApplyFeedbackView(discord.ui.View):
             )
         )
         await _disable_view(interaction)
+
+
+def _intent_from_mapped_command(mapped_command: str | None) -> str:
+    if not isinstance(mapped_command, str):
+        return "none"
+    normalized = mapped_command.strip().lower()
+    for intent, command in _NL_COMMAND_FOR_INTENT.items():
+        if command == normalized:
+            return intent
+    return "none"
+
+
+def _default_risk_tier(intent: str) -> str:
+    if intent in {"status", "weekly", "recent", "find", "show"}:
+        return "read"
+    if intent in {"done", "append", "fix"}:
+        return "mutation"
+    if intent == "clear_archive":
+        return "destructive"
+    if intent in {"confirm_pending", "cancel_pending"}:
+        return "control"
+    return "none"
+
+
+def _normalize_nl_route_payload(payload: dict[str, Any]) -> tuple[str, str | None, str, float, bool, str | None, list[str], dict[str, Any]]:
+    intent = _coerce_non_empty_str(payload.get("intent")) or "none"
+    intent = intent.lower()
+    if intent not in _NL_INTENTS:
+        intent = "none"
+
+    mapped_command = _coerce_non_empty_str(payload.get("mapped_command"))
+    if mapped_command is not None:
+        mapped_command = mapped_command.lower()
+    mapped_intent = _intent_from_mapped_command(mapped_command)
+    if intent == "none" and mapped_intent != "none":
+        intent = mapped_intent
+    canonical_command = _NL_COMMAND_FOR_INTENT.get(intent)
+    if canonical_command is not None:
+        mapped_command = canonical_command
+
+    risk_tier = _coerce_non_empty_str(payload.get("risk_tier")) or ""
+    risk_tier = risk_tier.lower()
+    if risk_tier not in {"read", "mutation", "destructive", "control", "none"}:
+        risk_tier = _default_risk_tier(intent)
+    if risk_tier == "none":
+        risk_tier = _default_risk_tier(intent)
+
+    confidence_raw = payload.get("confidence")
+    confidence = 0.0
+    if isinstance(confidence_raw, (int, float)):
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
+
+    is_ambiguous_raw = payload.get("is_ambiguous")
+    is_ambiguous = bool(is_ambiguous_raw) if isinstance(is_ambiguous_raw, bool) else False
+    clarification_question = _coerce_non_empty_str(payload.get("clarification_question"))
+    raw_options = payload.get("clarification_options")
+    clarification_options = [option.strip() for option in raw_options if isinstance(option, str) and option.strip()] if isinstance(raw_options, list) else []
+    args = payload.get("args")
+    if not isinstance(args, dict):
+        args = {}
+
+    return (
+        intent,
+        mapped_command,
+        risk_tier,
+        confidence,
+        is_ambiguous,
+        clarification_question,
+        clarification_options,
+        args,
+    )
+
+
+async def _queue_nl_mutation_confirmation(
+    *,
+    message: discord.Message,
+    raw_id: str,
+    config: dict[str, Any],
+    plan: _NLMutationPlan,
+    confidence: float,
+    source_view: str | None = None,
+) -> bool:
+    matching_config = load_matching_config(config)
+    target_resolution = _resolve_command_target(message, plan.target_token)
+    if target_resolution.reason and target_resolution.row_number is not None:
+        _log_numbered_mutation_resolution_failed(
+            raw_event_id=raw_id,
+            command=plan.command_name,
+            reason=target_resolution.reason,
+            source_view=target_resolution.source_view or source_view,
+            row_number=target_resolution.row_number,
+        )
+    if target_resolution.error:
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, target_resolution.error)
+        return True
+    target_id = target_resolution.target_id
+    if not target_id:
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, "I couldn't resolve a target for that update.")
+        return True
+
+    objects_root = config.get("paths", {}).get("objects_root", "objects")
+    target_path = find_object_path(objects_root, target_id)
+    if not target_path:
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, f"Unknown ID: {target_id}")
+        return True
+    frontmatter = load_frontmatter(target_path)
+    object_type_value = frontmatter.get("type")
+    if not isinstance(object_type_value, str) or not object_type_value.strip():
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, f"Unable to determine object type for {target_id}")
+        return True
+    object_type = object_type_value.strip()
+
+    fields = dict(plan.fields)
+    if plan.validate_fix:
+        validated, validation_error = _validate_fix_updates(object_type, fields)
+        if validation_error:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, validation_error)
+            return True
+        if validated is None:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "No valid fields provided.")
+            return True
+        fields = validated
+
+    if plan.op == "update" and object_type != "admin" and fields.get("status") == "done":
+        if target_resolution.row_number is not None:
+            _log_numbered_mutation_resolution_failed(
+                raw_event_id=raw_id,
+                command=plan.command_name,
+                reason="wrong_type",
+                source_view=target_resolution.source_view or source_view,
+                row_number=target_resolution.row_number,
+            )
+        await _swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, "Only admin items can be marked done.")
+        return True
+
+    if target_resolution.row_number is not None:
+        _log_numbered_mutation_resolved(
+            raw_event_id=raw_id,
+            command=plan.command_name,
+            source_view=target_resolution.source_view or source_view,
+            row_number=target_resolution.row_number,
+            object_id=target_id,
+        )
+
+    derived = {
+        "object_type": object_type,
+        "raw_event_id": raw_id,
+        "extracted_fields": {},
+        "proposed_operations": [
+            {
+                "op": plan.op,
+                "target_id": target_id,
+                "fields": fields,
+            }
+        ],
+    }
+    pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
+    pending_id = generate_prefixed_id("PA_")
+    now_iso = _now_iso()
+    pending = PendingAction(
+        schema_version=1,
+        pending_action_id=pending_id,
+        raw_event_id=raw_id,
+        object_type=object_type,
+        status="pending",
+        created_at=now_iso,
+        last_updated=now_iso,
+        derived=derived,
+        decision={
+            "source": "nl_command_routing",
+            "intent": plan.command_name,
+            "confidence": confidence,
+        },
+        decision_confidence=confidence,
+        last_decision_id=None,
+    )
+    write_pending_action(pending, pending_root)
+
+    index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
+    view = MutationPendingView(
+        pending_id=pending_id,
+        pending_root=pending_root,
+        objects_root=objects_root,
+        index_db=index_db,
+        author_id=message.author.id,
+        matching=matching_config,
+        affinity_key=_cursor_key(message),
+    )
+    title = _coerce_non_empty_str(frontmatter.get("title")) or target_id
+    action_phrase = "apply an update to"
+    if plan.command_name == "done":
+        action_phrase = "mark as done"
+    elif plan.command_name == "append":
+        action_phrase = "append to"
+    elif plan.command_name == "fix":
+        action_phrase = "update"
+    await _swap_reaction(message, "⏳", "❓")
+    await _send_response(
+        message,
+        "\n".join(
+            [
+                f'I think you meant to {action_phrase} "{title}"?',
+                "Confirm action or cancel to take no action.",
+            ]
+        ),
+        thread_title=title,
+        view=view,
+    )
+    return True
+
+
+async def _maybe_route_nl_command(
+    *,
+    message: discord.Message,
+    content: str,
+    raw_id: str,
+    config: dict[str, Any],
+    provider: OpenAIProvider,
+    model: str,
+) -> bool:
+    routing = load_nl_command_routing_config(config)
+    if not routing.enabled:
+        return False
+
+    llm_config = config.get("llm", {})
+    prompt_path = "config/prompts/nl_command_routing_v1.txt"
+    if isinstance(llm_config, dict):
+        configured = llm_config.get("nl_command_routing_prompt_path")
+        if isinstance(configured, str) and configured.strip():
+            prompt_path = configured
+    try:
+        prompt = load_prompt(prompt_path)
+    except OSError as exc:
+        logging.warning("nl_route_prompt_load_failed path=%s error=%s", prompt_path, exc)
+        return False
+
+    try:
+        interpretation = await interpret_text_async(
+            provider=provider,
+            text=content,
+            model=model,
+            system_prompt=prompt,
+            schema_path=_NL_INTENT_SCHEMA_PATH,
+        )
+    except InterpretationValidationError as exc:
+        logging.warning("nl_route_invalid id=%s error=%s", raw_id, exc)
+        return False
+    except Exception as exc:
+        logging.warning("nl_route_failed id=%s error=%s", raw_id, exc)
+        return False
+
+    payload = interpretation.derived if isinstance(interpretation.derived, dict) else {}
+    (
+        intent,
+        mapped_command,
+        risk_tier,
+        confidence,
+        is_ambiguous,
+        clarification_question,
+        clarification_options,
+        args,
+    ) = _normalize_nl_route_payload(payload)
+
+    if risk_tier == "read" and intent == "show":
+        show_number = _coerce_positive_int(args.get("number"))
+        show_target = _coerce_non_empty_str(args.get("target"))
+        if show_number is None and (show_target is None or not show_target.isdigit()) and _looks_like_recent_request(content, args):
+            intent = "recent"
+            mapped_command = _NL_COMMAND_FOR_INTENT["recent"]
+            risk_tier = "read"
+
+    threshold = routing.read_auto_min_confidence if risk_tier == "read" else routing.mutation_confirm_min_confidence
+    band = _confidence_band(confidence, threshold)
+
+    if intent == "none" or mapped_command is None:
+        _log_nl_route_evaluated(
+            raw_event_id=raw_id,
+            route_result="fallthrough",
+            intent=intent,
+            risk_tier=risk_tier,
+            confidence_band=band,
+            mapped_command=mapped_command,
+        )
+        return False
+
+    if intent in _NL_EXPLICIT_ONLY_INTENTS:
+        if band == "low":
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="fallthrough",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=mapped_command,
+            )
+            return False
+        _log_nl_route_blocked(raw_event_id=raw_id, intent=intent, reason="explicit_only")
+        _log_nl_route_evaluated(
+            raw_event_id=raw_id,
+            route_result="blocked_explicit_only",
+            intent=intent,
+            risk_tier=risk_tier,
+            confidence_band=band,
+            mapped_command=mapped_command,
+        )
+        await _swap_reaction(message, "⏳", "❓")
+        await _send_response(message, _explicit_only_guidance_for_intent(intent))
+        return True
+
+    if risk_tier == "read":
+        command, command_error = _build_nl_read_command(intent=intent, args=args, routing=routing)
+        if command_error or is_ambiguous:
+            if routing.clarify_on_ambiguous and band != "low":
+                clarification = _format_nl_clarification_message(
+                    question=clarification_question,
+                    options=clarification_options,
+                    fallback=command_error or "Did you want me to run a command, or save this as a note?",
+                )
+                _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
+                _log_nl_route_evaluated(
+                    raw_event_id=raw_id,
+                    route_result="clarified",
+                    intent=intent,
+                    risk_tier=risk_tier,
+                    confidence_band=band,
+                    mapped_command=mapped_command,
+                )
+                await _swap_reaction(message, "⏳", "❓")
+                await _send_response(message, clarification)
+                return True
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="fallthrough",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=mapped_command,
+            )
+            return False
+        if band == "high" and command is not None:
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="executed",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=command,
+            )
+            return await _handle_command(message, command, raw_id, config)
+        if routing.clarify_on_ambiguous and band == "medium":
+            clarification = _format_nl_clarification_message(
+                question=clarification_question,
+                options=clarification_options or [f"Run `{command}`", "Save this as a note"],
+                fallback="Did you want me to run this command or capture a note?",
+            )
+            _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options or [f"Run `{command}`", "Save this as a note"])
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="clarified",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=command,
+            )
+            await _swap_reaction(message, "⏳", "❓")
+            await _send_response(message, clarification)
+            return True
+        _log_nl_route_evaluated(
+            raw_event_id=raw_id,
+            route_result="fallthrough",
+            intent=intent,
+            risk_tier=risk_tier,
+            confidence_band=band,
+            mapped_command=command,
+        )
+        return False
+
+    if risk_tier == "mutation":
+        if not routing.allow_nl_mutations:
+            if band == "low":
+                _log_nl_route_evaluated(
+                    raw_event_id=raw_id,
+                    route_result="fallthrough",
+                    intent=intent,
+                    risk_tier=risk_tier,
+                    confidence_band=band,
+                    mapped_command=mapped_command,
+                )
+                return False
+            _log_nl_route_blocked(raw_event_id=raw_id, intent=intent, reason="mutations_disabled")
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="blocked_explicit_only",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=mapped_command,
+            )
+            await _swap_reaction(message, "⏳", "❓")
+            await _send_response(message, "Natural-language mutations are disabled. Use explicit commands like `!done`, `!append`, or `!fix`.")
+            return True
+
+        plan, plan_error = _build_nl_mutation_plan(intent=intent, args=args)
+        if plan_error or is_ambiguous:
+            if routing.clarify_on_ambiguous and band != "low":
+                clarification = _format_nl_clarification_message(
+                    question=clarification_question,
+                    options=clarification_options,
+                    fallback=plan_error or "I need more detail before applying that update.",
+                )
+                _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
+                _log_nl_route_evaluated(
+                    raw_event_id=raw_id,
+                    route_result="clarified",
+                    intent=intent,
+                    risk_tier=risk_tier,
+                    confidence_band=band,
+                    mapped_command=mapped_command,
+                )
+                await _swap_reaction(message, "⏳", "❓")
+                await _send_response(message, clarification)
+                return True
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="fallthrough",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=mapped_command,
+            )
+            return False
+        if band == "high" and plan is not None:
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="needs_confirmation",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=mapped_command,
+            )
+            return await _queue_nl_mutation_confirmation(
+                message=message,
+                raw_id=raw_id,
+                config=config,
+                plan=plan,
+                confidence=confidence,
+            )
+        if routing.clarify_on_ambiguous and band == "medium":
+            clarification = _format_nl_clarification_message(
+                question=clarification_question,
+                options=clarification_options,
+                fallback="I can apply that update, but I need a bit more detail.",
+            )
+            _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
+            _log_nl_route_evaluated(
+                raw_event_id=raw_id,
+                route_result="clarified",
+                intent=intent,
+                risk_tier=risk_tier,
+                confidence_band=band,
+                mapped_command=mapped_command,
+            )
+            await _swap_reaction(message, "⏳", "❓")
+            await _send_response(message, clarification)
+            return True
+        _log_nl_route_evaluated(
+            raw_event_id=raw_id,
+            route_result="fallthrough",
+            intent=intent,
+            risk_tier=risk_tier,
+            confidence_band=band,
+            mapped_command=mapped_command,
+        )
+        return False
+
+    _log_nl_route_evaluated(
+        raw_event_id=raw_id,
+        route_result="fallthrough",
+        intent=intent,
+        risk_tier=risk_tier,
+        confidence_band=band,
+        mapped_command=mapped_command,
+    )
+    return False
 
 
 async def _handle_message(message: discord.Message, config: dict[str, Any]) -> None:
@@ -1322,9 +2169,20 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         await _send_response(message, "No interpreter model configured.")
         return
 
-    classify_schema = Path("config/schemas/derived_event_classify_v1.json")
-
     provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+
+    nl_routed = await _maybe_route_nl_command(
+        message=message,
+        content=content,
+        raw_id=raw_id,
+        config=config,
+        provider=provider,
+        model=model,
+    )
+    if nl_routed:
+        return
+
+    classify_schema = Path("config/schemas/derived_event_classify_v1.json")
 
     classify_prompt_path = config.get("llm", {}).get("classify_prompt_path")
     extract_prompt_path = config.get("llm", {}).get("interpreter_prompt_path")
@@ -2047,9 +2905,7 @@ async def _handle_command(
             "Recent notes:\n"
             + "\n".join(surfaced.lines)
             + "\n\n"
-            + _NUMBERED_COMMAND_TIP
-            + "\n"
-            + _RECENT_LIMIT_TIP,
+            + _NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT,
         )
         return True
     if command == "!find":
