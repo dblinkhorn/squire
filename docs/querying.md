@@ -4,7 +4,7 @@
 
 Squire currently supports lexical querying via Discord commands:
 
-- `!find <query>`: runs SQLite FTS search over canonical object title/body and returns numbered results with IDs.
+- `!find <query>`: runs SQLite FTS search over canonical object title/body and returns numbered results.
 - `!show <number>`: expands one row from the latest `!recent`/`!find` cursor.
 
 This path is deterministic and local-first:

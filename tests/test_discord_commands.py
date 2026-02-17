@@ -45,6 +45,39 @@ def _button_labels(view) -> list[str]:
     return labels
 
 
+def _nl_payload(
+    *,
+    intent: str,
+    mapped_command: str | None,
+    risk_tier: str,
+    confidence: float,
+    is_ambiguous: bool = False,
+    clarification_question: str | None = None,
+    clarification_options: list[str] | None = None,
+    args: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "intent": intent,
+        "mapped_command": mapped_command,
+        "risk_tier": risk_tier,
+        "confidence": confidence,
+        "is_ambiguous": is_ambiguous,
+        "clarification_question": clarification_question,
+        "clarification_options": clarification_options or [],
+        "args": {
+            "target": None,
+            "number": None,
+            "query": None,
+            "text": None,
+            "fields": [],
+            "pending_id": None,
+            "recent_limit": None,
+            **(args or {}),
+        },
+    }
+
+
 def test_pending_action_view_shows_primary_buttons() -> None:
     async def _run() -> None:
         view = discord_bot.PendingActionView(
@@ -219,7 +252,8 @@ def test_handle_command_recent_does_not_override_digest_id_flag(monkeypatch) -> 
     assert captured["show_ids_daily_weekly"] is False
     assert "Pay rent (A_1)" in str(captured["response"])
     assert "!done <number>" in str(captured["response"])
-    assert "!recent N" in str(captured["response"])
+    assert "!recent <number>" in str(captured["response"])
+    assert "up to 50" in str(captured["response"])
 
 
 def test_handle_command_find_does_not_override_digest_id_flag(monkeypatch) -> None:
@@ -997,3 +1031,279 @@ def test_handle_message_delete_without_pending_shows_warning(monkeypatch) -> Non
 
     assert "react:⚠️" in calls
     assert any("No pending archive clear request." in call for call in calls)
+
+
+def test_nl_route_executes_read_command(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="recent",
+                mapped_command="!recent",
+                risk_tier="read",
+                confidence=0.96,
+                args={"recent_limit": 3},
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_handle_command(message, content, raw_id, config):
+        captured["command"] = content
+        return True
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_handle_command", _fake_handle_command)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("show my last 3 notes", user_id=11, channel_id=22),
+            content="show my last 3 notes",
+            raw_id="R_1",
+            config={},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is True
+    assert captured["command"] == "!recent 3"
+
+
+def test_nl_route_overrides_show_my_notes_to_recent(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="show",
+                mapped_command="!show",
+                risk_tier="read",
+                confidence=0.95,
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_handle_command(message, content, raw_id, config):
+        captured["command"] = content
+        return True
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_handle_command", _fake_handle_command)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("show me my notes", user_id=11, channel_id=22),
+            content="show me my notes",
+            raw_id="R_1",
+            config={},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is True
+    assert captured["command"] == "!recent"
+
+
+def test_nl_route_clarifies_ambiguous_read_intent(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="find",
+                mapped_command="!find",
+                risk_tier="read",
+                confidence=0.72,
+                is_ambiguous=True,
+                clarification_question="Did you mean search your notes?",
+                clarification_options=["Run `!find dentist`", "Show `!recent`", "Save as a note"],
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        calls.append(f"send:{content}")
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("show my dentist note", user_id=11, channel_id=22),
+            content="show my dentist note",
+            raw_id="R_1",
+            config={},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is True
+    assert "swap:⏳:❓" in calls
+    assert any("Did you mean search your notes?" in call for call in calls)
+    assert any("Run `!find dentist`" in call for call in calls)
+
+
+def test_nl_route_falls_through_on_low_confidence(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="status",
+                mapped_command="!status",
+                risk_tier="read",
+                confidence=0.2,
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_handle_command(message, content, raw_id, config):
+        calls.append("handle")
+        return True
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_handle_command", _fake_handle_command)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("status maybe", user_id=11, channel_id=22),
+            content="status maybe",
+            raw_id="R_1",
+            config={},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is False
+    assert calls == []
+
+
+def test_nl_route_blocks_explicit_only_intent(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="clear_archive",
+                mapped_command="!clear-archive",
+                risk_tier="destructive",
+                confidence=0.93,
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        calls.append(f"send:{content}")
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("delete everything", user_id=11, channel_id=22),
+            content="delete everything",
+            raw_id="R_1",
+            config={},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is True
+    assert "swap:⏳:❓" in calls
+    assert any("!clear-archive" in call for call in calls)
+    assert any("DELETE" in call for call in calls)
+
+
+def test_nl_route_queues_mutation_confirmation(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="done",
+                mapped_command="!done",
+                risk_tier="mutation",
+                confidence=0.91,
+                args={"number": 2},
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_queue_nl_mutation_confirmation(*, message, raw_id, config, plan, confidence, source_view=None):
+        captured["command_name"] = plan.command_name
+        captured["target_token"] = plan.target_token
+        captured["confidence"] = confidence
+        return True
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("mark item 2 done", user_id=11, channel_id=22),
+            content="mark item 2 done",
+            raw_id="R_1",
+            config={},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is True
+    assert captured["command_name"] == "done"
+    assert captured["target_token"] == "2"
+    assert captured["confidence"] == 0.91
+
+
+def test_nl_route_blocks_mutation_when_disabled(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                intent="append",
+                mapped_command="!append",
+                risk_tier="mutation",
+                confidence=0.9,
+                args={"target": "A_1", "text": "Call back tomorrow"},
+            ),
+            raw_text="{}",
+        )
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        calls.append(f"send:{content}")
+
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("append this to A_1", user_id=11, channel_id=22),
+            content="append this to A_1",
+            raw_id="R_1",
+            config={"nl_command_routing": {"allow_nl_mutations": False}},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is True
+    assert "swap:⏳:❓" in calls
+    assert any("mutations are disabled" in call.lower() for call in calls)

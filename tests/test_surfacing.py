@@ -266,8 +266,10 @@ def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:
     assert surfaced.object_ids == ["A_1", "A_3"]
     assert len(surfaced.lines) == 2
     assert surfaced.lines[0].startswith("1. Newest active")
-    assert "(A_1)" in surfaced.lines[0]
-    assert "(A_3)" in surfaced.lines[1]
+    assert "\n   • admin" in surfaced.lines[0]
+    assert "\n   • idea" in surfaced.lines[1]
+    assert "(A_1)" not in surfaced.lines[0]
+    assert "(A_3)" not in surfaced.lines[1]
 
 
 def test_build_find_list_and_item_detail(tmp_path: Path) -> None:
@@ -298,13 +300,14 @@ def test_build_find_list_and_item_detail(tmp_path: Path) -> None:
     assert surfaced.object_ids == ["ADM_DENTIST"]
     assert len(surfaced.lines) == 1
     assert surfaced.lines[0].startswith("1. Call dentist")
-    assert "(ADM_DENTIST)" in surfaced.lines[0]
+    assert "\n   • admin" in surfaced.lines[0]
+    assert "(ADM_DENTIST)" not in surfaced.lines[0]
 
     detail = build_item_detail(objects_root, surfaced.object_ids[0], config)
     assert detail is not None
     assert "**Title:** Call dentist" in detail
     assert "**Type:** admin" in detail
-    assert "(ID: ADM_DENTIST)" in detail
+    assert "(ID:" not in detail
     assert "**Notes:**" in detail
 
 

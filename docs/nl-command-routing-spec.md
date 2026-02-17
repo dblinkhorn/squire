@@ -1,196 +1,260 @@
-# Natural-Language Command Routing Spec
+# Natural-Language Routing Spec (Operation Plan Model)
 
 ## Problem
 
-Squire currently treats any non-`!` DM as capture-first input. This causes command-like natural language (for example, "show me all my notes") to flow through LLM classification/extraction and sometimes fail in apply, while adding avoidable latency.
+The current NL mutation path is too coupled to command syntax:
 
-Observed failure mode:
+- NL is interpreted into command-shaped args (`!fix field=value`, `!done 2`, etc.).
+- This causes brittle failures when user language is semantically clear but command arguments are not canonical (for example `date` vs `due_date`).
+- Safety is present, but usability is constrained by command grammar.
 
-- command-like message enters capture path
-- retrieval/decision/extraction runs
-- extracted fields may be incomplete for canonical create
-- apply fails (for example missing `title`)
+This spec defines a better architecture:
+
+- NL interpretation should produce a structured mutation plan.
+- Deterministic normalization/validation should enforce safety.
+- Confirmation should apply the plan, not a reconstructed command string.
 
 ## Goals
 
-- Route obvious natural-language command intents to existing command handlers before LLM capture.
-- Reduce latency for query-style requests by avoiding unnecessary LLM calls.
-- Prevent accidental note creation attempts for command-like input.
-- Ask concise clarification when a command intent is likely but parameters are ambiguous.
+- Keep LLM as the primary interpretive layer for user intent.
+- Remove command-string coupling for NL mutation handling.
+- Preserve deterministic safety gates and explicit-only destructive controls.
+- Support robust synonym handling (`date`, `deadline`, `move to`, etc.) through normalized field semantics.
+- Keep explicit `!` commands unchanged.
 
 ## Non-Goals
 
-- Replacing explicit `!` commands.
-- Expanding command surface beyond existing handlers.
-- Introducing broad LLM agent-style command planning.
+- Replacing explicit command handlers.
+- Adding new destructive operations.
+- Removing strict validation from mutation writes.
+
+## Invariants
+
+- Explicit `!` commands keep highest precedence.
+- `DELETE` archive confirmation flow remains unchanged.
+- `clear-archive`, `confirm`, `cancel` remain explicit-only from NL input.
+- NL mutation intents remain confirmation-first.
+- All writes continue to flow through canonical apply + index refresh + semantic sync behavior.
 
 ## Scope
 
-Applies only to inbound DM content that does not start with `!` and is not reserved confirmation text (for example `DELETE`).
+Applies to non-`!` DM messages.
 
-## Command Intents (v1)
+Read intents still map to existing command handlers (`status`, `weekly`, `recent`, `find`, `show`).
 
-Candidate command intents for routing:
+Mutation intents move to a new plan-first flow (`done`, `append`, `fix` semantics via structured plans).
 
-- `status` -> `!status`
-- `weekly` -> `!weekly`
-- `recent` -> `!recent [N]`
-- `find` -> `!find <query>`
-- `show` -> `!show <number>`
+## Architecture Overview
 
-Mutation commands (`!append`, `!done`, `!fix`, `!confirm`, `!cancel`, `!clear-archive`) are excluded from NL routing in v1 to avoid destructive ambiguity.
+### 1) NL Route Interpretation
 
-## Routing Strategy
+Run a route interpreter pass first.
+It decides one of:
 
-Use deterministic routing first; no LLM required in v1.
+- `read_command`
+- `mutation_plan`
+- `clarify`
+- `capture_fallthrough`
+- `blocked_explicit_only`
 
-### 1) Fast Intent Detection
+### 2) Read Command Handling
 
-Given normalized content:
+For `read_command`, execute existing command handlers directly.
+Keep current confidence/clarification policy.
 
-- Match known phrase patterns/synonyms per intent.
-- Extract command arguments where possible:
-  - numeric tail for recent/show (`N`, `#N`, `item N`)
-  - quoted or residual text for find query
+### 3) Mutation Plan Handling
 
-### 2) Confidence Bands
+For `mutation_plan`, do **not** build a command string.
+Use a typed plan object that contains:
 
-- High confidence:
-  - execute mapped command immediately via existing command handlers.
-- Medium confidence:
-  - ask clarification question with 2-3 options (for example "Did you mean `!recent` or `!find`?").
-- Low confidence:
-  - continue existing capture pipeline unchanged.
+- target reference
+- mutation action type
+- field changes / append text
+- confidence and ambiguity markers
 
-### 3) Precedence Rules
+### 4) Deterministic Normalization + Validation
 
-Before command routing:
+Normalize plan semantics against canonical model:
 
-- preserve existing explicit command behavior for `!...`
-- preserve `DELETE` archive-clear confirmation handling
+- target resolution (numbered cursor or explicit ID)
+- object type resolution
+- field alias normalization
+- value parsing/normalization (dates, datetimes, enums)
+- strict allowlist validation by object type
 
-After command routing:
+If normalization is incomplete or unsafe, clarify instead of writing.
 
-- if a route executes, do not invoke capture classification/decision/extraction
-- if clarification is sent, do not invoke capture classification/decision/extraction
+### 5) Confirmation + Apply
 
-## Example Phrase Map (Seed)
+High-confidence valid mutation plans create pending actions and show Confirm/Cancel buttons.
+Confirm applies the normalized plan through existing apply path.
 
-`status`:
+## Data Contracts
 
-- "status"
-- "daily digest"
-- "what's due today"
+### A) Route Output Schema (`nl_route_intent_v2`)
 
-`weekly`:
+Required top-level fields:
 
-- "weekly review"
-- "weekly status"
+- `schema_version`
+- `route` (`read_command|mutation_plan|clarify|capture_fallthrough|blocked_explicit_only`)
+- `intent`
+- `risk_tier` (`read|mutation|destructive|control|none`)
+- `confidence` (0..1)
+- `ambiguities` (array)
+- `read_command` (nullable object)
+- `mutation_plan` (nullable object)
+- `clarification` (nullable object)
 
-`recent`:
+### B) Mutation Plan Schema (`nl_mutation_plan_v1`)
 
-- "show my notes"
-- "show all my notes"
-- "recent notes"
-- "last N notes"
+Required:
 
-`find`:
+- `action_type` (`mark_done|append_body|set_fields`)
+- `target_ref`:
+  - `kind` (`row_number|object_id`)
+  - `value` (string/int)
+- `field_updates` (array of typed updates; empty unless `set_fields`)
+- `append_text` (nullable string; only for `append_body`)
+- `raw_user_phrases` (optional map for traceability)
+- `confidence` (0..1)
 
-- "find X"
-- "search for X"
-- "look up X"
+Optional:
 
-`show`:
+- `object_type_hint`
+- `requires_clarification`
+- `clarification_reason`
 
-- "show 2"
-- "open 3"
-- "show item 1"
+### C) Normalized Plan Artifact (`nl_mutation_normalized_v1`)
 
-## Clarification Behavior
+Persisted as derived artifact before pending action write.
 
-When medium confidence:
+Includes:
 
-- reply with one short question
-- provide concrete choices tied to commands
-- do not create or update any canonical objects
-- use clarification only when input is clearly command-like but ambiguous
+- `raw_event_id`
+- `plan_input`
+- `target_resolved_id`
+- `target_object_type`
+- `normalized_fields`
+- `normalization_notes`
+- `validation_outcome` (`ok|clarify|blocked`)
 
-Example:
+## Normalization Rules
 
-- Input: "show my dentist note"
-- Clarification: "Did you mean search (`!find dentist`) or recent list (`!recent`)?"
+### 1) Target Resolution
 
-When input is not confidently command-like:
+- `row_number` resolves via existing cursor context (`!recent|!find|!status|!weekly`).
+- Respect cursor expiry and thread-parent fallback behavior.
+- Out-of-range/missing cursor -> clarify with actionable guidance.
 
-- do not clarify
-- fall through to existing LLM capture/update path
+### 2) Field Alias Resolution
 
-## Telemetry and Logging
+Apply deterministic alias maps by object type before validation.
 
-Add route-stage logging with no raw message content by default:
+Examples (admin):
 
-- `nl_route_evaluated`:
-  - `raw_event_id`
-  - `route_result` (`executed`, `clarified`, `fallthrough`)
-  - `intent` (if any)
-  - `confidence_band`
-  - `mapped_command` (if executed)
-- `nl_route_clarified`:
-  - candidate intents offered
+- `date` / `deadline` / `due` -> `due_date` unless time-of-day is present
+- `time` / `at` with date/time phrase -> `due_at`
+- `task` / `title` phrase -> `title`
 
-Optional debug mode may include truncated/redacted content for troubleshooting.
+Examples (projects):
 
-## Config Additions
+- `deadline` -> `due`
 
-Add an optional `nl_command_routing` block:
+Alias resolution must be deterministic and logged.
 
-```yaml
-nl_command_routing:
-  enabled: true
-  clarify_on_ambiguous: true
-  allow_nl_mutations: false
-  max_recent_limit: 25
-```
+### 3) Value Normalization
 
-Defaults:
+- Date-like values normalize to ISO date (`YYYY-MM-DD`) when field requires date.
+- Datetime-like values normalize to ISO datetime with timezone when required.
+- Enum-like values normalize to canonical enum tokens.
+- Unknown/unparseable value -> clarify.
 
-- enabled true
-- clarification enabled
-- mutations disabled
+### 4) Canonical Validation
 
-## Failure Handling
+After normalization, reuse strict existing allowlists and validators.
+No relaxed writes are allowed.
 
-- If routed command execution fails, return existing command error response.
-- If routing parser errors, log warning and fall through to capture path.
-- Never execute destructive behavior from NL routing in v1.
+## Clarification Policy
 
-## Implementation Plan
+Send clarification (not write) when any of these are true:
 
-1. Add a routing helper in Discord bot path before capture pipeline.
-2. Implement deterministic parser + intent mapping for v1 intents.
-3. Reuse existing command handler paths (single source of truth).
-4. Add clarification responses for medium confidence.
-5. Add tests for route execution, ambiguity clarification, and fallthrough.
-6. Add telemetry logs for route outcomes.
+- intent confidence below mutation threshold
+- target ambiguous or unresolved
+- field aliases conflict (for example both `due_date` and `due_at` candidates with equal evidence)
+- value normalization fails
+- update set would violate object-type validation
+
+Clarification messages should propose 2-3 concrete options and avoid command jargon where possible.
+
+## Safety Policy
+
+- `clear_archive`, `confirm_pending`, `cancel_pending` remain blocked from NL execution.
+- NL mutation remains confirmation-first.
+- `Was this incorrect?` remains post-write recovery only.
+- No auto-apply of NL mutation plans without explicit confirmation in this phase.
+
+## Telemetry
+
+Keep existing route telemetry and add plan-stage logs:
+
+- `nl_plan_generated`
+- `nl_plan_normalized`
+- `nl_plan_clarified`
+- `nl_plan_blocked`
+- `nl_plan_pending_created`
+- `nl_plan_confirm_applied`
+
+Include reason codes for failures:
+
+- `target_missing`
+- `target_out_of_range`
+- `field_unknown`
+- `value_parse_failed`
+- `validation_failed`
+- `explicit_only`
+
+## Config
+
+Retain `nl_command_routing` settings and add:
+
+- `nl_command_routing.mutation_plan_enabled` (default `true`)
+- `nl_command_routing.plan_auto_aliasing` (default `true`)
+- `nl_command_routing.plan_trace_enabled` (default `true`)
+
+Read/mutation confidence gates remain:
+
+- `read_auto_min_confidence`
+- `mutation_confirm_min_confidence`
+
+## Migration Plan
+
+Phase 1:
+
+- Keep existing read-command routing.
+- Add new mutation plan schemas + prompt.
+- Keep old mutation command-string path behind temporary fallback flag.
+
+Phase 2:
+
+- Switch NL mutation path to plan-first normalization + pending action creation.
+- Keep fallback disabled by default.
+
+Phase 3:
+
+- Remove old mutation command-string conversion path.
+- Keep all explicit `!` commands unchanged.
 
 ## Acceptance Criteria
 
-- "show me all my notes" routes to `!recent` using the configured default recent limit and does not invoke capture LLM calls.
-- Ambiguous command-like input triggers clarification and does not create/update objects.
-- Non-command capture messages continue existing behavior unchanged.
-- Explicit `!` commands behave exactly as before.
-- Existing command tests still pass; new routing tests cover major phrase classes.
-- Routed `!recent`/`!find` responses include concise command tips footer (including `!recent N` up to 50).
+- NL mutation phrasing like `change number 2 date to feb 18` resolves to canonical due-field update path (or clear clarification), not raw-field rejection on `date`.
+- Mutation writes are never applied without confirmation.
+- Explicit-only controls remain blocked from NL.
+- Existing explicit commands continue to pass unchanged.
+- Telemetry and derived plan artifacts make route decisions auditable.
 
-## Rollout
+## Related Docs
 
-- Start with read-only query commands only.
-- Track route metrics and false-positive rate for one release window.
-- Expand phrase map based on real traffic.
-
-## Resolved Decisions
-
-1. "show me all my notes" maps to `!recent` with default limit.
-2. Clarify only when input is command-like but ambiguous; otherwise fall through to normal LLM path.
-3. Keep v1 NL routing read-only; defer NL mutation shortcuts (for example `done` patterns) to a later phase.
-4. Include concise command tips in surfaced outputs; `!recent` tip explicitly mentions `!recent N` supports up to 50.
+- `docs/commands.md`
+- `docs/data-model.md`
+- `docs/matching-spec.md`
+- `docs/nl-command-routing-implementation-plan.md`

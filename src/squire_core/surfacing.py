@@ -708,8 +708,7 @@ def _render_type_label(object_type: str) -> str:
     return mapping.get(object_type, object_type)
 
 
-def _render_list_row(index: int, item: CanonicalItem, *, include_ids: bool, tz: tzinfo, reference_date: date) -> str:
-    title = _format_title(item.title, item.object_id, include_ids)
+def _list_row_metadata(item: CanonicalItem, *, tz: tzinfo, reference_date: date) -> list[str]:
     parts: list[str] = [_render_type_label(item.object_type)]
 
     status = item.frontmatter.get("status")
@@ -734,7 +733,16 @@ def _render_list_row(index: int, item: CanonicalItem, *, include_ids: bool, tz: 
     if updated > _min_datetime(tz):
         parts.append(f"updated {_format_human_date(updated.date(), reference_date, include_relative=False)}")
 
-    return f"{index}. {title} - {', '.join(parts)}"
+    return parts
+
+
+def _render_list_row(index: int, item: CanonicalItem, *, include_ids: bool, tz: tzinfo, reference_date: date) -> str:
+    title = _format_title(item.title, item.object_id, include_ids)
+    parts = _list_row_metadata(item, tz=tz, reference_date=reference_date)
+    if not parts:
+        return f"{index}. {title}"
+    bullets = "\n".join(f"   • {part}" for part in parts)
+    return f"{index}. {title}\n{bullets}"
 
 
 def _render_find_row(
@@ -752,7 +760,7 @@ def _render_find_row(
         return base
     if len(cleaned_snippet) > 120:
         cleaned_snippet = f"{cleaned_snippet[:117].rstrip()}..."
-    return f"{base} - {cleaned_snippet}"
+    return f"{base}\n   • {cleaned_snippet}"
 
 
 def _load_body(path: Path) -> str:
@@ -954,7 +962,7 @@ def build_recent_list(
     reference_date = datetime.now(tz).date()
 
     lines = [
-        _render_list_row(index + 1, item, include_ids=True, tz=tz, reference_date=reference_date)
+        _render_list_row(index + 1, item, include_ids=False, tz=tz, reference_date=reference_date)
         for index, item in enumerate(selected)
     ]
     object_ids = [item.object_id for item in selected]
@@ -1014,7 +1022,7 @@ def build_find_list(
                 len(rows) + 1,
                 item,
                 candidate.snippet,
-                include_ids=True,
+                include_ids=False,
                 tz=tz,
                 reference_date=reference_date,
             )
@@ -1066,8 +1074,5 @@ def build_item_detail(
             lines.append("**Notes:**")
             for line in body_lines[:6]:
                 lines.append(f"- {line}")
-
-    lines.append("")
-    lines.append(f"(ID: {object_id})")
 
     return "\n".join(lines)

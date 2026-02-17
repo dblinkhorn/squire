@@ -2,7 +2,13 @@
 
 ## Capture
 
-By default, any DM to the bot is treated as an admin item. A prefix like `admin:`, `project:`, `idea:`, or `person:` tells Squire how to classify the message without inference.
+By default, non-command DMs enter capture/classify flow. A prefix like `admin:`, `project:`, `idea:`, or `person:` tells Squire how to classify the message without inference.
+
+Before capture, Squire can run natural-language command routing for command-like non-`!` messages:
+
+- read intents: `status`, `weekly`, `recent`, `find`, `show`
+- mutation intents: `done`, `append`, `fix` (confirmation-first before apply)
+- explicit-only controls remain blocked from NL execution: `clear-archive`, `confirm`, `cancel`
 
 Prefixes:
 
@@ -17,8 +23,7 @@ Prefixes:
 `!weekly` returns the weekly review sections on demand.
 `!recent [N]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest numbered list
-(`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context. Manual pull commands (`!recent`,
-`!find`, `!show`) include IDs to support intentional follow-up edits.
+(`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
 `!done <number>`, `!append <number> <text>`, and `!fix <number> ...` can resolve numbered rows from the latest
 numbered list (`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
 Scheduled/on-demand digest commands (`!status`, `!weekly`) remain list-first and avoid IDs by default.

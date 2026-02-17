@@ -37,6 +37,14 @@ _DEFAULT_MATCHING_CONFIG = {
     "candidate_limit": 5,
     "semantic_text_schema_version": 1,
 }
+_DEFAULT_NL_COMMAND_ROUTING_CONFIG = {
+    "enabled": True,
+    "clarify_on_ambiguous": True,
+    "allow_nl_mutations": True,
+    "read_auto_min_confidence": 0.85,
+    "mutation_confirm_min_confidence": 0.75,
+    "max_recent_limit": 25,
+}
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,16 @@ class MatchingConfig:
     auto_min_margin: float
     candidate_limit: int
     semantic_text_schema_version: int
+
+
+@dataclass(frozen=True)
+class NLCommandRoutingConfig:
+    enabled: bool
+    clarify_on_ambiguous: bool
+    allow_nl_mutations: bool
+    read_auto_min_confidence: float
+    mutation_confirm_min_confidence: float
+    max_recent_limit: int
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -187,4 +205,45 @@ def load_matching_config(config: dict[str, Any]) -> MatchingConfig:
         auto_min_margin=max(0.0, min(1.0, _get_float("auto_min_margin"))),
         candidate_limit=max(1, int(candidate_limit)),
         semantic_text_schema_version=max(1, _get_int("semantic_text_schema_version")),
+    )
+
+
+def load_nl_command_routing_config(config: dict[str, Any]) -> NLCommandRoutingConfig:
+    raw = config.get("nl_command_routing")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _get_bool(key: str) -> bool:
+        value = raw.get(key, _DEFAULT_NL_COMMAND_ROUTING_CONFIG[key])
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return bool(_DEFAULT_NL_COMMAND_ROUTING_CONFIG[key])
+
+    def _get_float(key: str) -> float:
+        value = raw.get(key, _DEFAULT_NL_COMMAND_ROUTING_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(_DEFAULT_NL_COMMAND_ROUTING_CONFIG[key])
+
+    def _get_int(key: str) -> int:
+        value = raw.get(key, _DEFAULT_NL_COMMAND_ROUTING_CONFIG[key])
+        if isinstance(value, (int, float)):
+            return int(value)
+        return int(_DEFAULT_NL_COMMAND_ROUTING_CONFIG[key])
+
+    return NLCommandRoutingConfig(
+        enabled=_get_bool("enabled"),
+        clarify_on_ambiguous=_get_bool("clarify_on_ambiguous"),
+        allow_nl_mutations=_get_bool("allow_nl_mutations"),
+        read_auto_min_confidence=max(0.0, min(1.0, _get_float("read_auto_min_confidence"))),
+        mutation_confirm_min_confidence=max(0.0, min(1.0, _get_float("mutation_confirm_min_confidence"))),
+        max_recent_limit=max(1, min(50, _get_int("max_recent_limit"))),
     )
