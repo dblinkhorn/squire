@@ -1224,7 +1224,7 @@ def test_nl_route_blocks_explicit_only_intent(monkeypatch) -> None:
     assert handled is True
     assert "swap:⏳:❓" in calls
     assert any("!clear-archive" in call for call in calls)
-    assert any("DELETE" in call for call in calls)
+    assert any("only be done explicitly" in call for call in calls)
 
 
 def test_nl_route_queues_mutation_confirmation(monkeypatch) -> None:
