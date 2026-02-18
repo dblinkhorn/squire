@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nl_mutation_plan_v1.json",
+  "title": "Natural Language Mutation Plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operations",
+    "raw_user_phrases",
+    "confidence",
+    "object_type_hint",
+    "requires_clarification",
+    "clarification_reason"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "operations": {
+      "type": "array",
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "action_type",
+          "target_refs",
+          "field_updates",
+          "append_text",
+          "raw_user_phrases",
+          "confidence",
+          "requires_clarification",
+          "clarification_reason"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "action_type": {
+            "type": "string",
+            "enum": ["mark_done", "append_body", "set_fields"]
+          },
+          "target_refs": {
+            "type": "array",
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "value"],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": ["row_number", "object_id"]
+                },
+                "value": {
+                  "type": ["integer", "string"]
+                }
+              }
+            }
+          },
+          "field_updates": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["value_text", "source_phrase", "field_candidates"],
+              "properties": {
+                "value_text": {
+                  "type": "string"
+                },
+                "source_phrase": {
+                  "type": ["string", "null"]
+                },
+                "field_candidates": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["primary", "alternates"],
+                  "properties": {
+                    "primary": {
+                      "type": ["object", "null"],
+                      "additionalProperties": false,
+                      "required": ["field_id", "confidence"],
+                      "properties": {
+                        "field_id": {
+                          "type": "string"
+                        },
+                        "confidence": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      }
+                    },
+                    "alternates": {
+                      "type": "array",
+                      "maxItems": 4,
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["field_id", "confidence"],
+                        "properties": {
+                          "field_id": {
+                            "type": "string"
+                          },
+                          "confidence": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "append_text": {
+            "type": ["string", "null"]
+          },
+          "raw_user_phrases": {
+            "type": ["object", "null"],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "requires_clarification": {
+            "type": "boolean"
+          },
+          "clarification_reason": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "raw_user_phrases": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "object_type_hint": {
+      "type": ["string", "null"],
+      "enum": ["admin", "projects", "people", "ideas", null]
+    },
+    "requires_clarification": {
+      "type": "boolean"
+    },
+    "clarification_reason": {
+      "type": ["string", "null"]
+    }
+  }
+}

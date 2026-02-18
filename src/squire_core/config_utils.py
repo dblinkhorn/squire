@@ -41,6 +41,7 @@ _DEFAULT_NL_COMMAND_ROUTING_CONFIG = {
     "enabled": True,
     "clarify_on_ambiguous": True,
     "allow_nl_mutations": True,
+    "plan_trace_enabled": True,
     "read_auto_min_confidence": 0.85,
     "mutation_confirm_min_confidence": 0.75,
     "max_recent_limit": 25,
@@ -81,6 +82,7 @@ class NLCommandRoutingConfig:
     enabled: bool
     clarify_on_ambiguous: bool
     allow_nl_mutations: bool
+    plan_trace_enabled: bool
     read_auto_min_confidence: float
     mutation_confirm_min_confidence: float
     max_recent_limit: int
@@ -243,6 +245,7 @@ def load_nl_command_routing_config(config: dict[str, Any]) -> NLCommandRoutingCo
         enabled=_get_bool("enabled"),
         clarify_on_ambiguous=_get_bool("clarify_on_ambiguous"),
         allow_nl_mutations=_get_bool("allow_nl_mutations"),
+        plan_trace_enabled=_get_bool("plan_trace_enabled"),
         read_auto_min_confidence=max(0.0, min(1.0, _get_float("read_auto_min_confidence"))),
         mutation_confirm_min_confidence=max(0.0, min(1.0, _get_float("mutation_confirm_min_confidence"))),
         max_recent_limit=max(1, min(50, _get_int("max_recent_limit"))),

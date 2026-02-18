@@ -22,6 +22,7 @@ class NLCommandRoutingConfigTests(unittest.TestCase):
                 enabled=True,
                 clarify_on_ambiguous=True,
                 allow_nl_mutations=True,
+                plan_trace_enabled=True,
                 read_auto_min_confidence=0.85,
                 mutation_confirm_min_confidence=0.75,
                 max_recent_limit=25,
@@ -34,6 +35,7 @@ class NLCommandRoutingConfigTests(unittest.TestCase):
                 "enabled": "false",
                 "clarify_on_ambiguous": False,
                 "allow_nl_mutations": "0",
+                "plan_trace_enabled": 0,
                 "read_auto_min_confidence": 0.92,
                 "mutation_confirm_min_confidence": 0.81,
                 "max_recent_limit": 40,
@@ -43,6 +45,7 @@ class NLCommandRoutingConfigTests(unittest.TestCase):
         self.assertFalse(routing.enabled)
         self.assertFalse(routing.clarify_on_ambiguous)
         self.assertFalse(routing.allow_nl_mutations)
+        self.assertFalse(routing.plan_trace_enabled)
         self.assertEqual(routing.read_auto_min_confidence, 0.92)
         self.assertEqual(routing.mutation_confirm_min_confidence, 0.81)
         self.assertEqual(routing.max_recent_limit, 40)

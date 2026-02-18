@@ -47,35 +47,42 @@ def _button_labels(view) -> list[str]:
 
 def _nl_payload(
     *,
+    route: str,
     intent: str,
-    mapped_command: str | None,
     risk_tier: str,
     confidence: float,
-    is_ambiguous: bool = False,
-    clarification_question: str | None = None,
-    clarification_options: list[str] | None = None,
-    args: dict[str, object] | None = None,
+    read_command: dict[str, object] | None = None,
+    mutation_plan: dict[str, object] | None = None,
+    clarification: dict[str, object] | None = None,
+    ambiguities: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
+        "route": route,
         "intent": intent,
-        "mapped_command": mapped_command,
         "risk_tier": risk_tier,
         "confidence": confidence,
-        "is_ambiguous": is_ambiguous,
-        "clarification_question": clarification_question,
-        "clarification_options": clarification_options or [],
-        "args": {
-            "target": None,
-            "number": None,
-            "query": None,
-            "text": None,
-            "fields": [],
-            "pending_id": None,
-            "recent_limit": None,
-            **(args or {}),
-        },
+        "ambiguities": ambiguities or [],
+        "read_command": read_command,
+        "mutation_plan": mutation_plan,
+        "clarification": clarification,
     }
+
+
+def test_format_apply_success_message_lists_multiple_titles(monkeypatch) -> None:
+    def _fake_load_frontmatter(path):
+        name = Path(path).name
+        if name == "a.md":
+            return {"title": "Call internet provider"}
+        if name == "b.md":
+            return {"title": "Book annual physical"}
+        return {}
+
+    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
+    message = discord_bot._format_apply_success_message(
+        written_paths=[Path("/tmp/a.md"), Path("/tmp/b.md")],
+    )
+    assert message == '✅ Applied updates to 2 notes:\n- "Call internet provider"\n- "Book annual physical"'
 
 
 def test_pending_action_view_shows_primary_buttons() -> None:
@@ -1039,11 +1046,14 @@ def test_nl_route_executes_read_command(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="read_command",
                 intent="recent",
-                mapped_command="!recent",
                 risk_tier="read",
                 confidence=0.96,
-                args={"recent_limit": 3},
+                read_command={
+                    "intent": "recent",
+                    "args": {"recent_limit": 3},
+                },
             ),
             raw_text="{}",
         )
@@ -1076,10 +1086,14 @@ def test_nl_route_overrides_show_my_notes_to_recent(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="read_command",
                 intent="show",
-                mapped_command="!show",
                 risk_tier="read",
                 confidence=0.95,
+                read_command={
+                    "intent": "show",
+                    "args": {},
+                },
             ),
             raw_text="{}",
         )
@@ -1112,13 +1126,14 @@ def test_nl_route_clarifies_ambiguous_read_intent(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="clarify",
                 intent="find",
-                mapped_command="!find",
                 risk_tier="read",
                 confidence=0.72,
-                is_ambiguous=True,
-                clarification_question="Did you mean search your notes?",
-                clarification_options=["Run `!find dentist`", "Show `!recent`", "Save as a note"],
+                clarification={
+                    "question": "Did you mean search your notes?",
+                    "options": ["Run `!find dentist`", "Show `!recent`", "Save as a note"],
+                },
             ),
             raw_text="{}",
         )
@@ -1156,10 +1171,11 @@ def test_nl_route_falls_through_on_low_confidence(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="read_command",
                 intent="status",
-                mapped_command="!status",
                 risk_tier="read",
                 confidence=0.2,
+                read_command={"intent": "status", "args": {}},
             ),
             raw_text="{}",
         )
@@ -1192,8 +1208,8 @@ def test_nl_route_blocks_explicit_only_intent(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="blocked_explicit_only",
                 intent="clear_archive",
-                mapped_command="!clear-archive",
                 risk_tier="destructive",
                 confidence=0.93,
             ),
@@ -1233,18 +1249,39 @@ def test_nl_route_queues_mutation_confirmation(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="mutation_plan",
                 intent="done",
-                mapped_command="!done",
                 risk_tier="mutation",
                 confidence=0.91,
-                args={"number": 2},
+                mutation_plan={
+                    "schema_version": 1,
+                    "operations": [
+                        {
+                            "operation_id": "op_1",
+                            "action_type": "mark_done",
+                            "target_refs": [{"kind": "row_number", "value": 2}],
+                            "field_updates": [],
+                            "append_text": None,
+                            "raw_user_phrases": {},
+                            "confidence": 0.91,
+                            "requires_clarification": False,
+                            "clarification_reason": None,
+                        }
+                    ],
+                    "raw_user_phrases": {},
+                    "confidence": 0.91,
+                    "object_type_hint": None,
+                    "requires_clarification": False,
+                    "clarification_reason": None,
+                },
             ),
             raw_text="{}",
         )
 
-    async def _fake_queue_nl_mutation_confirmation(*, message, raw_id, config, plan, confidence, source_view=None):
-        captured["command_name"] = plan.command_name
-        captured["target_token"] = plan.target_token
+    async def _fake_queue_nl_mutation_confirmation(*, message, raw_id, config, plan_input, confidence, routing, source_view=None):
+        operations = plan_input["operations"]
+        captured["action_type"] = operations[0]["action_type"]
+        captured["target_token"] = operations[0]["target_refs"][0]["target_token"]
         captured["confidence"] = confidence
         return True
 
@@ -1263,7 +1300,7 @@ def test_nl_route_queues_mutation_confirmation(monkeypatch) -> None:
     )
 
     assert handled is True
-    assert captured["command_name"] == "done"
+    assert captured["action_type"] == "mark_done"
     assert captured["target_token"] == "2"
     assert captured["confidence"] == 0.91
 
@@ -1274,11 +1311,31 @@ def test_nl_route_blocks_mutation_when_disabled(monkeypatch) -> None:
     async def _fake_interpret_text_async(*args, **kwargs):
         return SimpleNamespace(
             derived=_nl_payload(
+                route="mutation_plan",
                 intent="append",
-                mapped_command="!append",
                 risk_tier="mutation",
                 confidence=0.9,
-                args={"target": "A_1", "text": "Call back tomorrow"},
+                mutation_plan={
+                    "schema_version": 1,
+                    "operations": [
+                        {
+                            "operation_id": "op_1",
+                            "action_type": "append_body",
+                            "target_refs": [{"kind": "object_id", "value": "A_1"}],
+                            "field_updates": [],
+                            "append_text": "Call back tomorrow",
+                            "raw_user_phrases": {},
+                            "confidence": 0.9,
+                            "requires_clarification": False,
+                            "clarification_reason": None,
+                        }
+                    ],
+                    "raw_user_phrases": {},
+                    "confidence": 0.9,
+                    "object_type_hint": None,
+                    "requires_clarification": False,
+                    "clarification_reason": None,
+                },
             ),
             raw_text="{}",
         )
@@ -1307,3 +1364,39 @@ def test_nl_route_blocks_mutation_when_disabled(monkeypatch) -> None:
     assert handled is True
     assert "swap:⏳:❓" in calls
     assert any("mutations are disabled" in call.lower() for call in calls)
+
+
+def test_nl_route_uses_configured_v1_prompt_path(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_load_prompt(path):
+        captured["prompt_path"] = path
+        return "prompt"
+
+    async def _fake_interpret_text_async(*args, **kwargs):
+        return SimpleNamespace(
+            derived=_nl_payload(
+                route="capture_fallthrough",
+                intent="none",
+                risk_tier="none",
+                confidence=0.1,
+            ),
+            raw_text="{}",
+        )
+
+    monkeypatch.setattr(discord_bot, "load_prompt", _fake_load_prompt)
+    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+
+    handled = asyncio.run(
+        discord_bot._maybe_route_nl_command(
+            message=_Message("noop", user_id=11, channel_id=22),
+            content="noop",
+            raw_id="R_1",
+            config={"llm": {"nl_command_routing_prompt_path": "config/prompts/nl_command_routing_v1.txt"}},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert handled is False
+    assert captured["prompt_path"] == "config/prompts/nl_command_routing_v1.txt"

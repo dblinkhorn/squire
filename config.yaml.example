@@ -51,6 +51,7 @@ nl_command_routing:
   enabled: true
   clarify_on_ambiguous: true
   allow_nl_mutations: true
+  plan_trace_enabled: true
   read_auto_min_confidence: 0.85
   mutation_confirm_min_confidence: 0.75
   max_recent_limit: 25

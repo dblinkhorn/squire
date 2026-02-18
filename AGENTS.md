@@ -13,6 +13,35 @@ This file is the workflow entrypoint and index for agent sessions.
 - Keep docs aligned with behavior when functionality changes (`docs/` and `README.md` if user-facing).
 - For Python work, follow standard Python conventions unless project docs explicitly say otherwise.
 
+## Scope Discipline (Docs and Tests)
+
+- Distinguish functional behavior changes from low-impact, minor changes.
+- Treat these as low-impact unless requested otherwise: copy edits, minor UI/UX polish, incidental/stylistic code tweaks, and non-behavioral refactors.
+- For low-impact changes, avoid adding special documentation callouts or dedicated regression tests unless explicitly requested.
+- For low-impact changes, avoid recording "new behavior" notes in durable documentation; include only brief implementation notes if needed.
+- Add/adjust tests for low-impact text or presentation changes only when contract-critical:
+  - safety or policy language users must see exactly
+  - machine-parsed/output-contract text
+  - explicit user request to lock wording
+- Keep docs focused on semantics and behavior, not exact phrasing or presentational/incidental details, unless they are part of the contract.
+
+## Context Hygiene (`.agent/context.md`)
+
+- Purpose: leave only durable, need-to-know handoff context for future fresh-context agents.
+- Include only items that materially affect future work:
+  - unresolved decisions, known loose ends, or intentional deferrals
+  - non-obvious constraints, caveats, or gotchas
+  - behavior-impacting changes that are not yet obvious from canonical docs/code
+  - testing gaps that matter (for example skipped critical checks)
+- Do not log routine/incidental details:
+  - minor copy/UI/stylistic tweaks
+  - exhaustive file-change summaries
+  - normal “tests passed” notes unless they signal a risk or exception
+- Prefer updating or replacing existing context entries over appending duplicates.
+- Prune stale/resolved entries during each non-trivial session; delete notes that are no longer actionable or relevant.
+- If information belongs in canonical docs (`docs/`, `README.md`, config docs), move it there and remove it from `.agent/context.md`.
+- Keep entries compact and decision-focused (what matters, why it matters, what remains).
+
 ## Session Startup Checklist
 
 1. Read `README.md`.

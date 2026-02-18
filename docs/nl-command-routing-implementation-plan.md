@@ -1,112 +1,106 @@
-# NL Routing Implementation Plan (Operation Plan Model)
+# NL Routing Implementation Plan (Multi-Operation Mutation Model, Implemented)
 
 Purpose:
 
-- Provide an execution-ready plan for a new agent session with no prior context.
-- Implement NL mutation handling via structured operation plans (not command-string conversion).
+- Preserve the execution-ready plan used to implement multi-operation NL mutation routing.
+- Document expected behavior for maintenance and regression checks.
+
+Status:
+
+- Implemented on 2026-02-18.
 
 ## 1) Starting Context
 
 Assume current runtime:
 
-- NL routing exists in `src/squire_core/discord_bot.py`.
-- Read intents route to command handlers.
-- Mutation intents currently convert to command-like structures and then validate.
-- Explicit command flows (`!done`, `!append`, `!fix`, `!confirm`, `!cancel`, `!clear-archive`) are implemented and must remain stable.
+- NL routing entrypoint exists in `src/squire_core/discord_bot.py`.
+- At planning time, route schema/prompt supported single-operation mutation plans.
+- Pending-action confirm/apply pipeline is implemented and must be reused.
+- Explicit command flows (`!done`, `!append`, `!fix`, `!confirm`, `!cancel`, `!clear-archive`) are stable.
 
 Do not change:
 
 - Explicit command syntax/behavior.
 - Archive clear `!clear-archive` + `DELETE` safety.
-- Pending-action core model (`events/pending` JSON shape) unless explicitly versioned.
+- Confirmation-first mutation policy.
 
 ## 2) Deliverables
 
 Required deliverables:
 
-1. New schemas:
-   - `config/schemas/nl_route_intent_v2.json`
+1. Schema updates:
+   - `config/schemas/nl_route_intent_v1.json`
    - `config/schemas/nl_mutation_plan_v1.json`
    - `config/schemas/nl_mutation_normalized_v1.json`
-2. New/updated prompt:
-   - `config/prompts/nl_command_routing_v2.txt`
-3. Runtime implementation in:
+2. Prompt update:
+   - `config/prompts/nl_command_routing_v1.txt`
+3. Runtime implementation:
    - `src/squire_core/discord_bot.py`
-   - optional helper extraction into `src/squire_core/nl_planner.py` (recommended)
-4. Config plumbing:
-   - `src/squire_core/config_utils.py`
-   - `config.yaml.example`
-   - `docs/configuration.md`
-5. Test coverage:
-   - route behavior tests
-   - normalization tests
-   - clarification/blocking tests
-   - regression tests for explicit commands unchanged
-6. Docs updates:
-   - `docs/nl-command-routing-spec.md` (already updated)
-   - `docs/commands.md`
+   - optional helper extraction into `src/squire_core/nl_planner.py`
+4. Clarification runtime state:
+   - in-memory (or equivalent runtime state) clarification context keyed by user+channel with TTL.
+5. Tests:
+   - route parsing and multi-operation interpretation
+   - normalization and conflict handling
+   - clarification scope enforcement and one-turn behavior
+   - regressions for explicit command stability
+6. Docs:
+   - `docs/nl-command-routing-spec.md`
+   - `docs/commands.md` (if user-visible behavior text changes)
 
 ## 3) High-Level Architecture
 
-Implement two-stage NL handling:
+Two-stage NL handling:
 
 1. Route stage:
-   - decides `read_command | mutation_plan | clarify | capture_fallthrough | blocked_explicit_only`
+   - `read_command | mutation_plan | clarify | capture_fallthrough | blocked_explicit_only`
 2. Mutation-plan stage:
-   - normalize + validate typed plan
-   - create pending action with normalized derived operation
-   - show confirm/cancel
+   - normalize/validate each operation
+   - set operation statuses (`resolved|unresolved|cancelled_unresolved`)
+   - clarification pass for unresolved operations (max one turn)
+   - create pending action from resolved operations only
 
-Read intents should remain direct command execution.
+Execution boundary:
+
+- LLM interpretation drives plan proposal.
+- Runtime is final authority for target/field/value validation.
+- Reuse existing pending-action + apply/index-refresh path.
+- Do not reuse capture/create decision prompts for mutation routing.
 
 ## 4) Detailed Work Breakdown
 
-### Step A: Config + Feature Flags
+### Step A: Schema + Prompt Upgrade
 
 Files:
 
-- `src/squire_core/config_utils.py`
-- `config.yaml.example`
-- `docs/configuration.md`
-
-Tasks:
-
-- Add config keys under `nl_command_routing`:
-  - `mutation_plan_enabled` (default true)
-  - `plan_auto_aliasing` (default true)
-  - `plan_trace_enabled` (default true)
-- Keep existing keys and defaults.
-
-Acceptance check:
-
-- New config keys load with defaults when missing.
-- Invalid types clamp/fallback safely.
-
-### Step B: Schema and Prompt Upgrade
-
-Files:
-
-- `config/schemas/nl_route_intent_v2.json`
+- `config/schemas/nl_route_intent_v1.json`
 - `config/schemas/nl_mutation_plan_v1.json`
 - `config/schemas/nl_mutation_normalized_v1.json`
-- `config/prompts/nl_command_routing_v2.txt`
+- `config/prompts/nl_command_routing_v1.txt`
 
 Tasks:
 
-- Create strict schemas with `additionalProperties=false`.
-- Route schema includes nullable `read_command`, `mutation_plan`, `clarification`.
-- Mutation plan schema includes action type, target ref, field updates, append text, confidence, ambiguity flags.
-- Prompt must instruct:
-  - do not output command strings for mutation operations
-  - prefer semantic field intent (`due`, `priority`, `status`) over raw command args
-  - output `clarify` when uncertain
+- Move mutation payload to operation model:
+  - `mutation_plan.operations[]`
+  - per operation: `operation_id`, `action_type`, `target_refs[]`, action payload, confidence, clarification flags.
+- Ensure strict schema compatibility with OpenAI response-format requirements:
+  - object `required` arrays include every property key.
+  - nullable/default placeholder fields explicitly represented.
+- Prompt must include:
+  - clear distinction between multi-target single action vs multiple distinct actions
+  - examples for conjunctions (`and`, commas, ranges, mixed actions)
+  - strict output-shape placeholder discipline
+  - clarification-scope behavior (unresolved operations only)
 
 Acceptance check:
 
-- Schema validation catches malformed model output.
-- Prompt examples include ambiguous and synonym-heavy cases.
+- Schema validation catches malformed outputs.
+- Prompt examples include:
+  - `mark 1 and 2 done`
+  - `mark 1 done, append "x" to 2`
+  - ambiguous mixed-field update requiring clarification.
 
-### Step C: Route Interpreter Refactor
+### Step B: Route Interpreter Refactor
 
 Files:
 
@@ -114,53 +108,16 @@ Files:
 
 Tasks:
 
-- Replace/extend route parsing to consume `nl_route_intent_v2`.
-- Keep explicit-only blocking for:
-  - `clear_archive`
-  - `confirm_pending`
-  - `cancel_pending`
-- Preserve read command behavior.
+- Consume `nl_route_intent_v1`.
+- Preserve existing read-command behavior and explicit-only blocking.
+- Route mutation plans into new multi-operation normalizer path.
 
 Acceptance check:
 
-- Existing read route tests still pass.
-- Explicit-only intents remain blocked from NL.
+- Existing read intent tests still pass.
+- Explicit-only intents remain blocked.
 
-### Step D: Mutation Plan Normalization Layer
-
-Files:
-
-- `src/squire_core/discord_bot.py` or new helper module
-
-Tasks:
-
-- Implement deterministic normalizer:
-  1. resolve target ID from `row_number|object_id`
-  2. load target object type/frontmatter
-  3. apply field alias map by object type
-  4. normalize values:
-     - date -> ISO date
-     - datetime -> ISO datetime (+timezone when required)
-     - enum -> canonical enum token
-  5. validate against existing `_validate_fix_updates` and command-type rules
-- On failure, return structured clarification reason.
-- If `plan_trace_enabled`, write derived normalization artifact (`nl_mutation_normalized_v1`).
-
-Minimum alias map v1:
-
-- Admin:
-  - `date`, `deadline`, `due` -> `due_date` (unless explicit time present)
-  - `time` with date intent -> `due_at`
-  - `name`, `task` -> `title`
-- Projects:
-  - `deadline`, `date` -> `due`
-
-Acceptance check:
-
-- `change number 2 date to feb 18` normalizes to `due_date=YYYY-MM-DD` for admin target.
-- Unknown fields clarify instead of hard-failing with raw field name errors.
-
-### Step E: Pending Action Construction from Normalized Plan
+### Step C: Multi-Operation Normalization Layer
 
 Files:
 
@@ -168,35 +125,26 @@ Files:
 
 Tasks:
 
-- Build derived payload from normalized plan:
-  - `proposed_operations` with canonical fields
-- Write pending action.
-- Reuse confirmation UI (`Confirm` / `Cancel`) with improved copy.
+- For each operation:
+  1. resolve each target ref (`row_number|object_id`)
+  2. resolve object type
+  3. resolve field via LLM-provided candidates with deterministic due-date/due-at disambiguation
+  4. normalize values (enum/date/datetime)
+  5. validate against strict allowlists
+- Assign per-operation status:
+  - `resolved`
+  - `unresolved`
+  - `cancelled_unresolved` (after failed clarification turn)
+- Detect and mark conflicts (`operation_conflict`) for same target+field conflicting writes.
+- Produce normalized artifact (`nl_mutation_normalized_v1`) with per-operation reason codes.
 
 Acceptance check:
 
-- No write occurs until confirm.
-- Confirm applies normalized operation through existing apply + refresh path.
+- Multi-target single-action mutation normalizes to multiple concrete operations.
+- Mixed-action request normalizes into separate operation groups.
+- Conflict cases are deterministically marked unresolved.
 
-### Step F: Clarification Responses
-
-Files:
-
-- `src/squire_core/discord_bot.py`
-
-Tasks:
-
-- Map normalization failure reasons to user-friendly clarification prompts.
-- Include concrete options when possible.
-- Keep concise, avoid internal terminology.
-
-Reason mapping examples:
-
-- `target_missing` -> ask for row number or rerun list
-- `field_ambiguous` -> ask whether date vs datetime
-- `value_parse_failed` -> ask for explicit date format
-
-### Step G: Telemetry
+### Step D: Clarification Context + State Machine
 
 Files:
 
@@ -204,14 +152,73 @@ Files:
 
 Tasks:
 
-- Emit:
-  - `nl_plan_generated`
-  - `nl_plan_normalized`
-  - `nl_plan_clarified`
-  - `nl_plan_blocked`
-  - `nl_plan_pending_created`
-  - `nl_plan_confirm_applied`
-- Include reason codes and route outcome.
+- Add clarification context store keyed by `(user_id, channel_id)` with TTL.
+- Store immutable plan snapshot + unresolved operation descriptors.
+- Intercept next user message when context is active:
+  - treat as clarification delta for unresolved operations only
+  - reject out-of-scope additions/rewrites
+- Enforce one-turn clarification policy:
+  - `max_turns = 1`
+  - unresolved after this turn -> `cancelled_unresolved`
+- On out-of-scope clarification, return required copy:
+  - `Before I can proceed with any other actions, I need clarification on the unresolved parts of the previous request. You may cancel your last action if you'd like to take a new action now.`
+  - include unresolved summary line.
+
+Acceptance check:
+
+- Clarification reply updates unresolved operations only.
+- Out-of-scope reply is hard-blocked with required copy.
+- No second clarification turn is allowed.
+
+### Step E: Confirmation + Apply Semantics
+
+Files:
+
+- `src/squire_core/discord_bot.py`
+
+Tasks:
+
+- After clarification pass:
+  - if no resolved operations remain: cancel flow and send deterministic no-apply response.
+  - if resolved operations remain: ask for confirm/cancel and apply resolved operations only.
+- Reuse existing pending-action view and apply path.
+- Keep explicit confirmation requirement.
+
+Acceptance check:
+
+- Partial apply is confirm-gated.
+- Unresolved/cancelled operations are explicitly listed before confirmation.
+
+### Step F: Telemetry and Reason Codes
+
+Files:
+
+- `src/squire_core/discord_bot.py`
+
+Tasks:
+
+- Emit existing NL plan telemetry plus:
+  - `nl_plan_unresolved_cancelled`
+  - `nl_clarification_scope_blocked`
+- Attach operation-level reason codes in trace logs/artifacts.
+
+Reason codes to support:
+
+- `target_missing`
+- `target_no_cursor`
+- `target_expired`
+- `target_out_of_range`
+- `target_unknown_id`
+- `target_wrong_type`
+- `field_unknown`
+- `field_ambiguous`
+- `value_parse_failed`
+- `validation_failed`
+- `operation_conflict`
+- `out_of_scope_clarification`
+- `clarification_insufficient`
+- `clarification_timeout`
+- `explicit_only`
 
 ## 5) Test Plan (Required)
 
@@ -219,56 +226,60 @@ Add/extend tests in:
 
 - `tests/test_discord_commands.py`
 - `tests/test_nl_command_routing_config.py`
-- new: `tests/test_nl_mutation_normalization.py`
+- `tests/test_nl_mutation_normalization.py`
+- new: `tests/test_nl_multi_operation_clarification.py`
 
 Must-cover scenarios:
 
-1. Read route unchanged:
-   - `show me my notes` -> recent flow behavior.
-2. Mutation plan success:
-   - `mark 1 done` -> pending action created.
-3. Alias normalization:
-   - `change number 2 date to feb 18` -> due field normalized.
-4. Value normalization:
-   - date and datetime parsing paths.
-5. Clarification path:
-   - ambiguous field target.
-6. Explicit-only blocking:
-   - archive/confirm/cancel from NL.
-7. Regression:
-   - explicit `!fix` validation unchanged.
+1. Multi-target same action:
+   - `mark 1 and 2 done` -> one plan operation, two targets, confirmation flow.
+2. Multi-action mixed request:
+   - `mark 1 done, append "x" to 2` -> two operations.
+3. Range handling:
+   - `mark 1-3 done` -> expanded target refs and validated.
+4. Partial legality:
+   - one target valid admin, one wrong type -> unresolved reason and partial confirm path.
+5. Conflict handling:
+   - conflicting field writes on same target -> unresolved conflict.
+6. Clarification success:
+   - unresolved op clarified in one turn -> status moves to resolved.
+7. Clarification failure:
+   - unresolved remains unclear after one turn -> `cancelled_unresolved`.
+8. Out-of-scope clarification reply:
+   - blocked with required copy + unresolved summary.
+9. No resolved operations remain:
+   - flow cancels without writes.
+10. Explicit command regressions unchanged.
 
 ## 6) Validation Commands
 
 Run at minimum:
 
-1. `.venv/bin/python -m pytest -q tests/test_discord_commands.py tests/test_nl_command_routing_config.py`
+1. `.venv/bin/python -m pytest -q tests/test_discord_commands.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py tests/test_nl_multi_operation_clarification.py`
 2. `.venv/bin/python -m pytest -q tests/test_surfacing.py tests/test_discord_schedule.py`
 3. `.venv/bin/python -m py_compile src/squire_core/discord_bot.py src/squire_core/config_utils.py`
 
-If any tests fail, fix before handoff.
+If tests fail, fix before handoff.
 
 ## 7) Rollout Strategy
 
-Phase gate recommendations:
-
-1. Ship read-route behavior unchanged.
-2. Ship mutation plan engine behind `mutation_plan_enabled=true` default.
-3. Keep temporary fallback path for one release window (optional).
-4. Remove fallback after telemetry shows stable normalization/clarification rates.
+- This behavior is default-on once implemented (no new feature flag).
+- Keep existing route confidence thresholds.
+- Remove legacy single-operation-only assumptions in prompt/schema/runtime.
 
 ## 8) Handoff Checklist
 
 Before handoff, ensure:
 
-- schemas and prompt committed
-- config docs and example updated
-- telemetry logs verified in local run
+- new schemas and prompt committed
+- runtime state-machine behavior implemented and tested
+- required out-of-scope block message exactly matches spec
+- operation statuses and reason codes are persisted in normalized trace artifact
 - tests passing for touched areas
 - `.agent/context.md` updated with summary + test results
 
 ## 9) Out-of-Scope Follow-ups
 
-- Auto-apply NL mutations without confirmation.
-- Multi-target NL mutation in one utterance.
-- Undo/revert transaction system.
+- Auto-apply without confirmation.
+- Undo/revert transaction framework.
+- Persisting clarification context to durable storage across restarts.

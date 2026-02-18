@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nl_mutation_normalized_v1.json",
+  "title": "NL Mutation Normalized Artifact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "raw_event_id",
+    "plan_input",
+    "operations",
+    "summary",
+    "validation_outcome"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "raw_event_id": {
+      "type": "string"
+    },
+    "plan_input": {
+      "type": "object"
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation_id",
+          "action_type",
+          "target_ref",
+          "target_token",
+          "target_resolved_id",
+          "target_object_type",
+          "op_status",
+          "reason_code",
+          "normalization_notes",
+          "normalized_fields",
+          "proposed_operation"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "action_type": {
+            "type": ["string", "null"]
+          },
+          "target_ref": {
+            "type": ["object", "null"]
+          },
+          "target_token": {
+            "type": ["string", "null"]
+          },
+          "target_resolved_id": {
+            "type": ["string", "null"]
+          },
+          "target_object_type": {
+            "type": ["string", "null"],
+            "enum": ["admin", "projects", "people", "ideas", null]
+          },
+          "op_status": {
+            "type": "string",
+            "enum": ["resolved", "unresolved", "cancelled_unresolved"]
+          },
+          "reason_code": {
+            "type": ["string", "null"]
+          },
+          "normalization_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "normalized_fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "proposed_operation": {
+            "type": ["object", "null"]
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_operations",
+        "resolved_count",
+        "unresolved_count",
+        "cancelled_unresolved_count"
+      ],
+      "properties": {
+        "total_operations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resolved_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unresolved_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cancelled_unresolved_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "validation_outcome": {
+      "type": "string",
+      "enum": ["ok", "clarify", "partial", "blocked"]
+    }
+  }
+}

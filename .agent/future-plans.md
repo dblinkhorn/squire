@@ -25,3 +25,9 @@ Purpose:
 
 - Formal provider interfaces for alternate ingest channels and model backends.
 - Clear plugin boundaries for extension without changing core runtime modules.
+
+## Routing Hardening Ideas
+
+- If natural-language mutation requests become too large/noisy in practice, add deterministic plan-size guardrails:
+  - max operations per plan
+  - max targets per operation
