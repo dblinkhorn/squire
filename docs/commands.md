@@ -7,7 +7,8 @@ By default, non-command DMs enter capture/classify flow. A prefix like `admin:`,
 Before capture, Squire can run natural-language command routing for command-like non-`!` messages:
 
 - read intents: `status`, `weekly`, `recent`, `find`, `show`
-- mutation intents: `done`, `append`, `fix` (confirmation-first before apply)
+- mutation intents: `done`, `append`, `fix` (confirmation-first before apply; supports multi-operation + multi-target NL requests)
+- unresolved mutation parts run a one-turn clarification flow scoped only to unresolved operations
 - explicit-only controls remain blocked from NL execution: `clear-archive`, `confirm`, `cancel`
 
 Prefixes:

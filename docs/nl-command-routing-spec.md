@@ -1,55 +1,56 @@
-# Natural-Language Routing Spec (Operation Plan Model)
+# Natural-Language Routing Spec (Multi-Operation Mutation Model)
 
 ## Problem
 
-The current NL mutation path is too coupled to command syntax:
+Earlier NL mutation implementations were single-operation and did not reliably handle:
 
-- NL is interpreted into command-shaped args (`!fix field=value`, `!done 2`, etc.).
-- This causes brittle failures when user language is semantically clear but command arguments are not canonical (for example `date` vs `due_date`).
-- Safety is present, but usability is constrained by command grammar.
+- multi-target phrasing (`mark 1 and 2 done`)
+- multi-action phrasing (`mark 1 done, append "x" to 2`)
+- clarification continuation in natural language without falling into capture flow
 
-This spec defines a better architecture:
-
-- NL interpretation should produce a structured mutation plan.
-- Deterministic normalization/validation should enforce safety.
-- Confirmation should apply the plan, not a reconstructed command string.
+This creates brittle behavior where valid user intent can be partially interpreted, then lost.
 
 ## Goals
 
-- Keep LLM as the primary interpretive layer for user intent.
-- Remove command-string coupling for NL mutation handling.
-- Preserve deterministic safety gates and explicit-only destructive controls.
-- Support robust synonym handling (`date`, `deadline`, `move to`, etc.) through normalized field semantics.
-- Keep explicit `!` commands unchanged.
+- Keep LLM as the primary interpretation layer for NL command intent.
+- Support multi-operation and multi-target NL mutation requests.
+- Preserve deterministic safety/validation as final authority before writes.
+- Keep explicit `!` command behavior unchanged.
+- Keep mutation writes confirmation-first.
+- Support NL clarification continuation with strict scope controls.
 
 ## Non-Goals
 
 - Replacing explicit command handlers.
-- Adding new destructive operations.
-- Removing strict validation from mutation writes.
+- Auto-applying NL mutations without confirmation.
+- Allowing clarification turns to expand or rewrite the original plan scope.
 
 ## Invariants
 
 - Explicit `!` commands keep highest precedence.
-- `DELETE` archive confirmation flow remains unchanged.
-- `clear-archive`, `confirm`, `cancel` remain explicit-only from NL input.
-- NL mutation intents remain confirmation-first.
-- All writes continue to flow through canonical apply + index refresh + semantic sync behavior.
+- `clear-archive`, `confirm`, and `cancel` remain explicit-only from NL input.
+- Mutation writes are never applied without explicit confirmation.
+- Runtime validators remain authoritative for allowed fields/value formats.
+- Clarification flow is immutable-scope: unresolved parts only.
 
 ## Scope
 
-Applies to non-`!` DM messages.
+Applies to non-`!` DM messages routed through NL command routing.
 
-Read intents still map to existing command handlers (`status`, `weekly`, `recent`, `find`, `show`).
+Read intents:
 
-Mutation intents move to a new plan-first flow (`done`, `append`, `fix` semantics via structured plans).
+- `status`, `weekly`, `recent`, `find`, `show`
+
+Mutation intents:
+
+- `done`, `append`, `fix`
+- now interpreted as one or more structured operations
 
 ## Architecture Overview
 
-### 1) NL Route Interpretation
+### 1) Route Interpretation
 
-Run a route interpreter pass first.
-It decides one of:
+Route output decides:
 
 - `read_command`
 - `mutation_plan`
@@ -57,145 +58,238 @@ It decides one of:
 - `capture_fallthrough`
 - `blocked_explicit_only`
 
-### 2) Read Command Handling
+### 2) Mutation Plan Model
 
-For `read_command`, execute existing command handlers directly.
-Keep current confidence/clarification policy.
+For `mutation_plan`, model output is operation-based (no command strings):
 
-### 3) Mutation Plan Handling
+- `mutation_plan.operations[]`
+- each operation can target one or many references (`target_refs[]`)
 
-For `mutation_plan`, do **not** build a command string.
-Use a typed plan object that contains:
+Runtime normalizes each operation independently, assigns status, and only allows resolved operations to proceed.
 
-- target reference
-- mutation action type
-- field changes / append text
-- confidence and ambiguity markers
+### 3) Clarification State Machine
 
-### 4) Deterministic Normalization + Validation
+When any operation is unresolved:
 
-Normalize plan semantics against canonical model:
+1. freeze original plan snapshot (immutable scope)
+2. ask one clarification question covering unresolved operations only
+3. interpret user clarification reply as a delta against unresolved operations only
+4. if still unresolved after this single turn, mark those operations `cancelled_unresolved`
+5. show summary and ask user to confirm resolved operations only
 
-- target resolution (numbered cursor or explicit ID)
-- object type resolution
-- field alias normalization
-- value parsing/normalization (dates, datetimes, enums)
-- strict allowlist validation by object type
+If no operations are resolved, cancel entire plan and do not apply anything.
 
-If normalization is incomplete or unsafe, clarify instead of writing.
+### 4) Interpretation Boundary (LLM vs Runtime)
 
-### 5) Confirmation + Apply
-
-High-confidence valid mutation plans create pending actions and show Confirm/Cancel buttons.
-Confirm applies the normalized plan through existing apply path.
+- LLM handles semantic interpretation and plan proposal.
+- Runtime is final authority for:
+  - target resolution
+  - field resolution
+  - value normalization
+  - allowlist/type validation
+  - operation status assignment
 
 ## Data Contracts
 
-### A) Route Output Schema (`nl_route_intent_v2`)
+## A) Route Schema (`nl_route_intent_v1`)
 
 Required top-level fields:
 
 - `schema_version`
-- `route` (`read_command|mutation_plan|clarify|capture_fallthrough|blocked_explicit_only`)
+- `route`
 - `intent`
-- `risk_tier` (`read|mutation|destructive|control|none`)
-- `confidence` (0..1)
-- `ambiguities` (array)
-- `read_command` (nullable object)
-- `mutation_plan` (nullable object)
-- `clarification` (nullable object)
+- `risk_tier`
+- `confidence`
+- `ambiguities`
+- `read_command` (nullable)
+- `mutation_plan` (nullable)
+- `clarification` (nullable)
 
-### B) Mutation Plan Schema (`nl_mutation_plan_v1`)
+`route` values:
+
+- `read_command|mutation_plan|clarify|capture_fallthrough|blocked_explicit_only`
+
+## B) Mutation Plan Schema (`nl_mutation_plan_v1`)
 
 Required:
 
+- `operations` (array, min 1)
+- `confidence` (overall plan confidence)
+
+Each operation requires:
+
+- `operation_id` (stable identifier in this plan, e.g. `op_1`)
 - `action_type` (`mark_done|append_body|set_fields`)
-- `target_ref`:
-  - `kind` (`row_number|object_id`)
-  - `value` (string/int)
-- `field_updates` (array of typed updates; empty unless `set_fields`)
-- `append_text` (nullable string; only for `append_body`)
-- `raw_user_phrases` (optional map for traceability)
-- `confidence` (0..1)
+- `target_refs` (array, min 1)
+  - each target ref:
+    - `kind` (`row_number|object_id`)
+    - `value` (string/int)
+- `append_text` (nullable; used by `append_body`)
+- `field_updates` (array; used by `set_fields`)
+  - each update:
+    - `value_text`
+    - `source_phrase` (nullable)
+    - `field_candidates`:
+      - `primary` (`field_id`, `confidence`) nullable
+      - `alternates[]` (`field_id`, `confidence`)
+- `confidence` (per-operation confidence)
+- `requires_clarification` (bool)
+- `clarification_reason` (nullable string)
 
-Optional:
+## C) Normalized Plan Artifact (`nl_mutation_normalized_v1`)
 
-- `object_type_hint`
-- `requires_clarification`
-- `clarification_reason`
-
-### C) Normalized Plan Artifact (`nl_mutation_normalized_v1`)
-
-Persisted as derived artifact before pending action write.
+Persist before pending-action creation.
 
 Includes:
 
 - `raw_event_id`
 - `plan_input`
-- `target_resolved_id`
-- `target_object_type`
-- `normalized_fields`
-- `normalization_notes`
-- `validation_outcome` (`ok|clarify|blocked`)
+- `operations[]` with normalization outcome:
+  - `operation_id`
+  - `action_type`
+  - `target_ref`
+  - `target_token`
+  - `target_resolved_id`
+  - `target_object_type`
+  - `op_status` (`resolved|unresolved|cancelled_unresolved`)
+  - `reason_code` (nullable)
+  - `normalization_notes[]`
+  - `normalized_fields`
+  - `proposed_operation` (nullable concrete canonical op)
+- `summary`:
+  - `total_operations`
+  - `resolved_count`
+  - `unresolved_count`
+  - `cancelled_unresolved_count`
+- `validation_outcome` (`ok|clarify|partial|blocked`)
+
+## D) Clarification Context (Ephemeral Runtime State)
+
+Store per user+channel with TTL:
+
+- `raw_event_id`
+- immutable `base_plan_input` snapshot
+- `unresolved_scope` keyed by operation ID (action/reason/target details)
+- `expires_at`
+
+This context is checked before normal NL routing/capture for the next user reply.
+The clarification context is consumed on that reply, enforcing the single-turn clarification policy.
 
 ## Normalization Rules
 
 ### 1) Target Resolution
 
-- `row_number` resolves via existing cursor context (`!recent|!find|!status|!weekly`).
-- Respect cursor expiry and thread-parent fallback behavior.
-- Out-of-range/missing cursor -> clarify with actionable guidance.
+For each `target_ref`:
 
-### 2) Field Alias Resolution
+- `row_number`: resolve via existing numbered cursor behavior
+- `object_id`: resolve direct canonical object lookup
 
-Apply deterministic alias maps by object type before validation.
+Failure reasons include:
 
-Examples (admin):
+- missing cursor
+- expired cursor
+- out-of-range row number
+- unknown object ID
 
-- `date` / `deadline` / `due` -> `due_date` unless time-of-day is present
-- `time` / `at` with date/time phrase -> `due_at`
-- `task` / `title` phrase -> `title`
+### 2) Field Resolution
 
-Examples (projects):
+Use LLM candidate fields, then deterministic runtime resolution:
 
-- `deadline` -> `due`
-
-Alias resolution must be deterministic and logged.
+1. accept canonical `primary.field_id` if valid for object type
+2. evaluate alternates
+3. if both `due_date` and `due_at` are viable, choose by time-hint in `value_text`
+4. if multiple non-compatible candidates remain, mark unresolved (`field_ambiguous`)
 
 ### 3) Value Normalization
 
-- Date-like values normalize to ISO date (`YYYY-MM-DD`) when field requires date.
-- Datetime-like values normalize to ISO datetime with timezone when required.
-- Enum-like values normalize to canonical enum tokens.
-- Unknown/unparseable value -> clarify.
+- date-like -> ISO date (`YYYY-MM-DD`)
+- datetime-like -> ISO datetime with timezone where required
+- enum-like -> canonical enum token
+- parse/format failures -> unresolved
 
-### 4) Canonical Validation
+### 4) Validation
 
-After normalization, reuse strict existing allowlists and validators.
-No relaxed writes are allowed.
+Apply existing strict validators and allowlists.
+Never bypass validation based on model confidence.
 
-## Clarification Policy
+## Multi-Operation Semantics
 
-Send clarification (not write) when any of these are true:
+### 1) Execution Ordering
 
-- intent confidence below mutation threshold
-- target ambiguous or unresolved
-- field aliases conflict (for example both `due_date` and `due_at` candidates with equal evidence)
-- value normalization fails
-- update set would violate object-type validation
+- Resolved operations are applied in original operation order.
 
-Clarification messages should propose 2-3 concrete options and avoid command jargon where possible.
+### 2) Conflicts
+
+If multiple resolved operations conflict on the same target+field in one plan:
+
+- mark conflicting operations unresolved with `reason_code=operation_conflict`
+- include in clarification (single turn policy)
+- if still unresolved after clarification, mark `cancelled_unresolved`
+
+### 3) Limits
+
+Runtime should enforce hard caps (deterministic guardrails), for example:
+
+- max operations per plan
+- max targets per operation
+
+Ranges (`1-5`) are interpreted by the LLM into explicit `target_refs`; runtime validates each target deterministically.
+
+## Clarification Policy (Strict)
+
+### 1) Single Clarification Turn
+
+- Exactly one clarification reply is allowed (`max_turns=1`).
+- Remaining unresolved operations after this turn become `cancelled_unresolved`.
+
+### 2) Immutable Scope
+
+During clarification, hard-block out-of-scope replies that add/change unrelated actions.
+
+Required user-facing message:
+
+`Before I can proceed with any other actions, I need clarification on the unresolved parts of the previous request. You may cancel your last action if you'd like to take a new action now.`
+
+Also include a concise unresolved summary line.
+
+### 3) Final Confirmation
+
+After clarification pass:
+
+- if `resolved_count == 0`: cancel entire plan, no apply
+- if `resolved_count > 0`: ask for confirmation to apply resolved operations only
+- unresolved/cancelled operations are listed explicitly
+
+## Reason Codes
+
+Use reason codes for telemetry/artifacts and user-facing mapping:
+
+- `target_missing`
+- `target_no_cursor`
+- `target_expired`
+- `target_out_of_range`
+- `target_unknown_id`
+- `target_wrong_type`
+- `field_unknown`
+- `field_ambiguous`
+- `value_parse_failed`
+- `validation_failed`
+- `operation_conflict`
+- `out_of_scope_clarification`
+- `clarification_insufficient`
+- `clarification_timeout`
+- `explicit_only`
 
 ## Safety Policy
 
-- `clear_archive`, `confirm_pending`, `cancel_pending` remain blocked from NL execution.
-- NL mutation remains confirmation-first.
-- `Was this incorrect?` remains post-write recovery only.
-- No auto-apply of NL mutation plans without explicit confirmation in this phase.
+- Explicit-only controls remain blocked from NL execution.
+- No mutation writes without confirmation.
+- Clarification cannot expand plan scope.
+- Partial apply requires explicit confirmation after unresolved cancellation.
 
 ## Telemetry
 
-Keep existing route telemetry and add plan-stage logs:
+Retain existing route telemetry and add/extend:
 
 - `nl_plan_generated`
 - `nl_plan_normalized`
@@ -203,58 +297,29 @@ Keep existing route telemetry and add plan-stage logs:
 - `nl_plan_blocked`
 - `nl_plan_pending_created`
 - `nl_plan_confirm_applied`
+- `nl_plan_unresolved_cancelled`
+- `nl_clarification_scope_blocked`
 
-Include reason codes for failures:
-
-- `target_missing`
-- `target_out_of_range`
-- `field_unknown`
-- `value_parse_failed`
-- `validation_failed`
-- `explicit_only`
+Each event should include operation-level reason codes where applicable.
 
 ## Config
 
-Retain `nl_command_routing` settings and add:
+This behavior is the default once shipped.
 
-- `nl_command_routing.mutation_plan_enabled` (default `true`)
-- `nl_command_routing.plan_auto_aliasing` (default `true`)
-- `nl_command_routing.plan_trace_enabled` (default `true`)
-
-Read/mutation confidence gates remain:
-
-- `read_auto_min_confidence`
-- `mutation_confirm_min_confidence`
-
-## Migration Plan
-
-Phase 1:
-
-- Keep existing read-command routing.
-- Add new mutation plan schemas + prompt.
-- Keep old mutation command-string path behind temporary fallback flag.
-
-Phase 2:
-
-- Switch NL mutation path to plan-first normalization + pending action creation.
-- Keep fallback disabled by default.
-
-Phase 3:
-
-- Remove old mutation command-string conversion path.
-- Keep all explicit `!` commands unchanged.
+No separate feature flag for multi-operation clarification mode should be required.
+Existing NL routing config remains for confidence gates and trace behavior.
 
 ## Acceptance Criteria
 
-- NL mutation phrasing like `change number 2 date to feb 18` resolves to canonical due-field update path (or clear clarification), not raw-field rejection on `date`.
-- Mutation writes are never applied without confirmation.
-- Explicit-only controls remain blocked from NL.
-- Existing explicit commands continue to pass unchanged.
-- Telemetry and derived plan artifacts make route decisions auditable.
+- `mark 1 and 2 done` is interpreted as one operation with two targets and reaches confirmation (when both valid admin targets).
+- `mark 1 done, append "hello" to 2` is interpreted as two operations and reaches confirmation for resolved operations.
+- Out-of-scope clarification reply is hard-blocked with required message and unresolved summary.
+- After one clarification turn, still-unresolved operations become `cancelled_unresolved`.
+- Resolved operations are never applied without explicit user confirmation.
+- Existing explicit commands continue to behave unchanged.
 
 ## Related Docs
 
 - `docs/commands.md`
 - `docs/data-model.md`
-- `docs/matching-spec.md`
 - `docs/nl-command-routing-implementation-plan.md`

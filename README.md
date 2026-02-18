@@ -38,7 +38,8 @@ Core commands:
 Natural-language routing:
 
 - Non-`!` command-like DMs can route to known commands (`status`, `weekly`, `recent`, `find`, `show`, `done`, `append`, `fix`) before capture.
-- NL mutation intents (`done`/`append`/`fix`) use confirmation-first buttons before applying writes.
+- Natural-language mutation intents (`done`/`append`/`fix`) support multi-operation + multi-target requests and stay confirmation-first before applying writes.
+- When part of a natural-language mutation plan is unresolved, Squire runs a one-turn clarification flow scoped only to unresolved operations.
 - Destructive/control actions remain explicit-only: `!clear-archive` + `DELETE`, `!confirm <pending_id>`, `!cancel <pending_id>`.
 
 When Squire proposes updates to an existing note, Discord actions can present `Confirm`, `Create New`, and `Cancel` buttons.

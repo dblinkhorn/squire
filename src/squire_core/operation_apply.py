@@ -111,12 +111,16 @@ def apply_operations(
     if derived_schema_path is not None:
         validate_json(load_json_schema(derived_schema_path), derived)
 
-    object_type = derived["object_type"]
+    default_object_type = derived["object_type"]
     raw_event_id = derived.get("raw_event_id")
     ops = derived.get("proposed_operations", [])
     written: list[Path] = []
 
     for op in ops:
+        op_object_type = op.get("object_type", default_object_type)
+        if not isinstance(op_object_type, str) or not op_object_type.strip():
+            raise ValueError("Operation object_type must be a non-empty string")
+        object_type = op_object_type.strip()
         action = op.get("op")
         if action not in {"create", "append", "update"}:
             raise ValueError(f"Unsupported operation: {action}")

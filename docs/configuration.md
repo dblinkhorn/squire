@@ -56,6 +56,7 @@ Natural-language command routing settings in `config.yaml`:
 - `nl_command_routing.enabled`: enable pre-capture NL routing for command-like DMs.
 - `nl_command_routing.clarify_on_ambiguous`: ask a clarification question on medium-confidence ambiguous command intents.
 - `nl_command_routing.allow_nl_mutations`: allow NL mutation intents (`done`/`append`/`fix`) with confirmation-first behavior.
+- `nl_command_routing.plan_trace_enabled`: write normalized mutation trace artifacts under `events_derived`.
 - `nl_command_routing.read_auto_min_confidence`: minimum confidence to auto-execute NL read intents.
 - `nl_command_routing.mutation_confirm_min_confidence`: minimum confidence to open NL mutation confirmation flow.
 - `nl_command_routing.max_recent_limit`: max `N` used when NL routing maps to `!recent N`.
