@@ -10,9 +10,13 @@ You send quick notes in a DM, and Squire turns them into structured notes you ca
 - Captures notes from Discord DMs
 - Organizes notes into four groups: tasks, projects, people, and ideas
 - Sends daily and weekly review messages
+- Supports configurable pre-due reminders for timed admin items (`due_at`)
 - Lets you search and inspect notes with simple commands
+- Allows you to make updates and edits to notes using natural language
 - Uses conservative matching and confirmation gates to reduce accidental edits
 - Stores your data on your own machine
+
+For surfacing details (daily digest, weekly review, due-time reminders), see [`docs/surfacing.md`](docs/surfacing.md).
 
 ## How It Works
 
@@ -36,22 +40,14 @@ Core commands:
 - `!confirm <pending_id>` / `!cancel <pending_id>` - approve or cancel a suggested change
 - `!clear-archive` then `DELETE` - clear archive data (keeps `.git`)
 
-Natural-language routing:
-
-- Non-`!` command-like DMs can route to known commands (`status`, `weekly`, `recent`, `find`, `show`, `done`, `append`, `fix`) before capture.
-- Natural-language mutation intents (`done`/`append`/`fix`) support multi-operation + multi-target requests and stay confirmation-first before applying writes.
-- When part of a natural-language mutation plan is unresolved, Squire runs a one-turn clarification flow scoped only to unresolved operations.
-- Destructive/control actions remain explicit-only: `!clear-archive` + `DELETE`, `!confirm <pending_id>`, `!cancel <pending_id>`.
-
-When Squire proposes updates to an existing note, Discord actions can present `Confirm`, `Create New`, and `Cancel` buttons.
-If an update is auto-applied, Squire also provides a `Was this incorrect?` button with `!fix`/`!append` fallback.
-
 Optional prefixes when capturing:
 
 - `admin:` (tasks/commitments)
 - `project:`
 - `person:`
 - `idea:`
+
+For complete command semantics, see [`docs/commands.md`](docs/commands.md).
 
 ## Run with Docker (Recommended)
 
@@ -123,6 +119,8 @@ Common target examples:
 - Repo default (`docker-compose.yml`): `http://squire-core:8080/health`
 - Same Docker network: `http://<container-name>:<health-port>/health`
 - From another machine/network: `http://<host-ip-or-dns>:<health-port>/health`
+
+For deployment/runtime behavior, see [`docs/deployment.md`](docs/deployment.md).
 
 ## Logging Behavior
 
@@ -204,10 +202,11 @@ Common settings include AI model/prompt paths, data storage location (`archive_r
 Matching defaults also include hybrid lexical + semantic retrieval for safer update/append routing.
 To disable semantic scoring and run lexical-only matching, set `matching.semantic_weight: 0`.
 
+For full configuration reference, see [`docs/configuration.md`](docs/configuration.md).
+
 Start with:
 
 - `config.yaml.example`
-- `docs/configuration.md`
 
 ## Tests
 
@@ -239,10 +238,14 @@ docker compose pull
 docker compose up -d
 ```
 
-## More Docs
+## More Docs! More Docs! More Docs!
 
-- `docs/commands.md`
-- `docs/configuration.md`
-- `docs/deployment.md`
-- `docs/architecture.md`
-- `docs/data-model.md`
+- [`docs/commands.md`](docs/commands.md)
+- [`docs/configuration.md`](docs/configuration.md)
+- [`docs/deployment.md`](docs/deployment.md)
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/data-model.md`](docs/data-model.md)
+- [`docs/modules.md`](docs/modules.md)
+- [`docs/querying.md`](docs/querying.md)
+- [`docs/surfacing.md`](docs/surfacing.md)
+- [`docs/extensibility.md`](docs/extensibility.md)

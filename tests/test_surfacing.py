@@ -6,11 +6,14 @@ from pathlib import Path
 from squire_core.canonical_store import CanonicalObject, write_canonical_object
 from squire_core.indexer import rebuild_index
 from squire_core.surfacing import (
+    DueTimeReminderEvent,
     build_daily_digest,
+    build_due_time_reminder_events,
     build_find_list,
     build_item_detail,
     build_recent_list,
     build_weekly_review,
+    render_due_time_reminder_message,
 )
 
 
@@ -209,6 +212,163 @@ def test_daily_digest_can_include_ids(tmp_path: Path) -> None:
     digest = build_daily_digest(objects_root, config, now=now)
     due_today = next(section for section in digest.sections if section.title == "Admin due today")
     assert any("ADM900" in line for line in due_today.lines)
+
+
+def test_build_due_time_reminder_events_filters_and_offsets(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 12, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_OPEN",
+                object_type="admin",
+                title="Open admin",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Open admin",
+            "due_at": "2026-01-22T15:00:00+00:00",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_BLOCKED",
+                object_type="admin",
+                title="Blocked admin",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "blocked",
+            "next_action": "Blocked admin",
+            "due_at": "2026-01-22T12:30:00+00:00",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_DONE",
+                object_type="admin",
+                title="Done admin",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "done",
+            "next_action": "Done admin",
+            "due_at": "2026-01-22T13:00:00+00:00",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_DATE_ONLY",
+                object_type="admin",
+                title="Date only",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Date only",
+            "due_date": "2026-01-22",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_ARCHIVED",
+                object_type="admin",
+                title="Archived admin",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+                archived=True,
+            ),
+            "status": "open",
+            "next_action": "Archived admin",
+            "due_at": "2026-01-22T14:00:00+00:00",
+        },
+    )
+
+    events = build_due_time_reminder_events(
+        objects_root,
+        {"timezone": "UTC"},
+        offsets_minutes=[120, 15, 120, -4, "bad", "15"],
+        now=now,
+        late_grace_minutes=10,
+        horizon_hours=36,
+    )
+
+    assert [(event.object_id, event.offset_minutes, event.fire_at.isoformat()) for event in events] == [
+        ("ADM_BLOCKED", 15, "2026-01-22T12:15:00+00:00"),
+        ("ADM_OPEN", 120, "2026-01-22T13:00:00+00:00"),
+        ("ADM_OPEN", 15, "2026-01-22T14:45:00+00:00"),
+    ]
+
+
+def test_build_due_time_reminder_events_cross_day_offset(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 21, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_CROSS_DAY",
+                object_type="admin",
+                title="Cross-day admin",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Cross-day admin",
+            "due_at": "2026-01-23T00:30:00+00:00",
+        },
+    )
+
+    events = build_due_time_reminder_events(
+        objects_root,
+        {"timezone": "UTC"},
+        offsets_minutes=[120],
+        now=now,
+        late_grace_minutes=10,
+        horizon_hours=36,
+    )
+
+    assert len(events) == 1
+    assert events[0].object_id == "ADM_CROSS_DAY"
+    assert events[0].fire_at == datetime(2026, 1, 22, 22, 30, tzinfo=timezone.utc)
+
+
+def test_render_due_time_reminder_message_formats_relative_times() -> None:
+    now = datetime(2026, 1, 22, 13, 0, tzinfo=timezone.utc)
+    events = [
+        DueTimeReminderEvent(
+            object_id="ADM_A",
+            title="Call vet",
+            due_at=datetime(2026, 1, 22, 15, 0, tzinfo=timezone.utc),
+            offset_minutes=120,
+            fire_at=datetime(2026, 1, 22, 13, 0, tzinfo=timezone.utc),
+        ),
+        DueTimeReminderEvent(
+            object_id="ADM_B",
+            title="Submit report",
+            due_at=datetime(2026, 1, 22, 13, 15, tzinfo=timezone.utc),
+            offset_minutes=15,
+            fire_at=datetime(2026, 1, 22, 13, 0, tzinfo=timezone.utc),
+        ),
+    ]
+
+    rendered = render_due_time_reminder_message(events, {"timezone": "UTC"}, now=now)
+
+    assert rendered.startswith("⏰ **Upcoming due reminders** · Thu Jan 22")
+    assert "• Submit report - due Thu Jan 22 at 1:15 PM (in 15 minutes)" in rendered
+    assert "• Call vet - due Thu Jan 22 at 3:00 PM (in 2 hours)" in rendered
 
 
 def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import json
 import logging
 import os
@@ -48,13 +49,16 @@ from squire_core.canonical_store import find_object_path, load_frontmatter
 from squire_core.surfacing import (
     DailyDigest,
     DigestSection,
+    DueTimeReminderEvent,
     WeeklyReview,
     build_daily_digest,
+    build_due_time_reminder_events,
     build_find_list,
     build_item_detail,
     build_recent_list,
     build_weekly_review,
     load_surfacing_config,
+    render_due_time_reminder_message,
 )
 from squire_core.test_seed import SeedStats, ensure_test_safe_archive_root, seed_test_canonical_objects
 from squire_core.timezone_utils import (
@@ -77,6 +81,13 @@ _SELECT_DESCRIPTION_LIMIT = 100
 _ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS = 120
 _DEFAULT_HEALTH_HOST = "0.0.0.0"
 _DEFAULT_HEALTH_PORT = 8080
+_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY = "_due_time_reminder_notify"
+_DUE_TIME_REMINDER_LEDGER_FILENAME = "due_time_reminder_sent_ledger_v1.json"
+_DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS = 48
+_DUE_TIME_REMINDER_HORIZON_HOURS = 36
+_DUE_TIME_REMINDER_EMPTY_QUEUE_WAIT_SECONDS = 300
+_DUE_TIME_REMINDER_DEFAULT_OFFSETS_MINUTES = (90, 15)
+_DUE_TIME_REMINDER_ALLOWED_STATUSES = {"open", "blocked"}
 _PENDING_CONTROLS_INSTRUCTION = (
     "Use the buttons below to confirm which note should be updated, choose to create a new note, or cancel (do nothing):"
 )
@@ -347,6 +358,30 @@ class _NLClarificationContext:
 _NL_CLARIFICATION_CONTEXTS: dict[tuple[int, int], _NLClarificationContext] = {}
 
 
+@dataclass(frozen=True)
+class _DueTimeReminderScheduleConfig:
+    offsets_minutes: tuple[int, ...]
+    late_grace_minutes: int
+    reconcile_minutes: int
+    channel_id: int | None
+    user_id: int | None
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.offsets_minutes)
+
+
+@dataclass(frozen=True)
+class _DueTimeReminderSentLedgerEntry:
+    key: str
+    object_id: str
+    due_at: datetime
+    offset_minutes: int
+    fire_at: datetime
+    sent_at: datetime
+    expires_at: datetime
+
+
 class _MaxLevelFilter(logging.Filter):
     def __init__(self, max_level: int) -> None:
         super().__init__()
@@ -519,6 +554,194 @@ def _next_weekly_run(now: datetime, target_day: int, target_time: time) -> datet
     if candidate <= now:
         candidate = candidate + timedelta(days=7)
     return candidate
+
+
+def _next_midnight_run(now: datetime) -> datetime:
+    candidate = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _parse_due_time_reminder_offsets(value: Any) -> tuple[int, ...]:
+    if not isinstance(value, list):
+        return ()
+    offsets: set[int] = set()
+    for item in value:
+        parsed: int | None = None
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            parsed = item
+        elif isinstance(item, float) and item.is_integer():
+            parsed = int(item)
+        elif isinstance(item, str):
+            trimmed = item.strip()
+            if trimmed.isdigit():
+                parsed = int(trimmed)
+        if parsed is None or parsed <= 0:
+            continue
+        offsets.add(parsed)
+    return tuple(sorted(offsets, reverse=True))
+
+
+def _parse_non_negative_int(value: Any, fallback: int) -> int:
+    parsed = _coerce_int(value)
+    if parsed is None or parsed < 0:
+        return fallback
+    return parsed
+
+
+def _parse_minimum_int(value: Any, *, fallback: int, minimum: int) -> int:
+    parsed = _coerce_int(value)
+    if parsed is None or parsed < minimum:
+        return fallback
+    return parsed
+
+
+def _load_due_time_reminder_schedule_config(schedule: dict[str, Any]) -> _DueTimeReminderScheduleConfig:
+    if "due_time_reminder_offsets_minutes" in schedule:
+        offsets = _parse_due_time_reminder_offsets(schedule.get("due_time_reminder_offsets_minutes"))
+    else:
+        offsets = _DUE_TIME_REMINDER_DEFAULT_OFFSETS_MINUTES
+    return _DueTimeReminderScheduleConfig(
+        offsets_minutes=offsets,
+        late_grace_minutes=_parse_non_negative_int(schedule.get("due_time_reminder_late_grace_minutes"), 10),
+        reconcile_minutes=_parse_minimum_int(
+            schedule.get("due_time_reminder_reconcile_minutes"),
+            fallback=60,
+            minimum=1,
+        ),
+        channel_id=_coerce_int(schedule.get("due_time_reminder_channel_id")),
+        user_id=_coerce_int(schedule.get("due_time_reminder_user_id")),
+    )
+
+
+def _due_time_reminder_key(event: DueTimeReminderEvent) -> str:
+    return f"{event.object_id}|{event.due_at.isoformat()}|{event.offset_minutes}"
+
+
+def _due_time_reminder_ledger_path(config: dict[str, Any]) -> Path:
+    events_derived = config.get("paths", {}).get("events_derived", "events/derived")
+    return Path(str(events_derived)) / "runtime" / _DUE_TIME_REMINDER_LEDGER_FILENAME
+
+
+def _coerce_timezone_datetime(value: Any, tz: tzinfo) -> datetime | None:
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        try:
+            dt = datetime.fromisoformat(trimmed)
+        except ValueError:
+            return None
+    else:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=tz)
+    return dt.astimezone(tz)
+
+
+def _serialize_due_time_reminder_ledger_entries(
+    entries: dict[str, _DueTimeReminderSentLedgerEntry],
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    payload_entries = []
+    for key in sorted(entries):
+        entry = entries[key]
+        payload_entries.append(
+            {
+                "key": entry.key,
+                "object_id": entry.object_id,
+                "due_at": entry.due_at.isoformat(),
+                "offset_minutes": entry.offset_minutes,
+                "fire_at": entry.fire_at.isoformat(),
+                "sent_at": entry.sent_at.isoformat(),
+                "expires_at": entry.expires_at.isoformat(),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "updated_at": now.isoformat(),
+        "entries": payload_entries,
+    }
+
+
+def _load_due_time_reminder_ledger_entries(
+    path: Path,
+    *,
+    now: datetime,
+) -> dict[str, _DueTimeReminderSentLedgerEntry]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.warning("due_time_reminder_ledger_load_failed error=%s", exc)
+        return {}
+    entries_raw = payload.get("entries")
+    if not isinstance(entries_raw, list):
+        return {}
+    entries: dict[str, _DueTimeReminderSentLedgerEntry] = {}
+    for raw_entry in entries_raw:
+        if not isinstance(raw_entry, dict):
+            continue
+        key = raw_entry.get("key")
+        object_id = raw_entry.get("object_id")
+        due_at_raw = raw_entry.get("due_at")
+        fire_at_raw = raw_entry.get("fire_at")
+        sent_at_raw = raw_entry.get("sent_at")
+        expires_at_raw = raw_entry.get("expires_at")
+        offset_raw = raw_entry.get("offset_minutes")
+        if not isinstance(key, str) or not isinstance(object_id, str):
+            continue
+        due_at = _coerce_timezone_datetime(due_at_raw, timezone.utc)
+        fire_at = _coerce_timezone_datetime(fire_at_raw, timezone.utc)
+        sent_at = _coerce_timezone_datetime(sent_at_raw, timezone.utc)
+        expires_at = _coerce_timezone_datetime(expires_at_raw, timezone.utc)
+        offset = _coerce_int(offset_raw)
+        if due_at is None or fire_at is None or sent_at is None or expires_at is None or offset is None:
+            continue
+        if expires_at <= now:
+            continue
+        entries[key] = _DueTimeReminderSentLedgerEntry(
+            key=key,
+            object_id=object_id,
+            due_at=due_at,
+            offset_minutes=offset,
+            fire_at=fire_at,
+            sent_at=sent_at,
+            expires_at=expires_at,
+        )
+    return entries
+
+
+def _flush_due_time_reminder_ledger_entries(
+    path: Path,
+    *,
+    entries: dict[str, _DueTimeReminderSentLedgerEntry],
+    now: datetime,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _serialize_due_time_reminder_ledger_entries(entries, now=now)
+    tmp_path = path.parent / f"{path.name}.tmp"
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def _notify_due_time_reminder_schedule_changed(config: dict[str, Any], *, clear_state: bool = False) -> None:
+    callback = config.get(_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY)
+    if not callable(callback):
+        return
+    try:
+        callback(clear_state=clear_state)
+    except TypeError:
+        callback()
+    except Exception as exc:
+        logging.warning("due_time_reminder_schedule_notify_failed error=%s", exc)
 
 
 def _parse_positive_int(value: str) -> int | None:
@@ -1998,6 +2221,7 @@ class PendingActionView(discord.ui.View):
         default_target_id: str | None,
         matching: MatchingConfig | None,
         affinity_key: tuple[int, int],
+        on_canonical_change: Callable[[], None] | None = None,
         confirm_action: str | None = None,
         selected_target_id: str | None = None,
     ) -> None:
@@ -2012,6 +2236,7 @@ class PendingActionView(discord.ui.View):
         self._default_target_id = default_target_id
         self._matching = matching
         self._affinity_key = affinity_key
+        self._on_canonical_change = on_canonical_change
         self._candidates = [candidate for candidate in candidates if isinstance(candidate, dict)]
         self._confirm_action = confirm_action
 
@@ -2089,6 +2314,7 @@ class PendingActionView(discord.ui.View):
             default_target_id=self._default_target_id,
             matching=self._matching,
             affinity_key=self._affinity_key,
+            on_canonical_change=self._on_canonical_change,
             confirm_action=confirm_action,
             selected_target_id=self.selected_target_id,
         )
@@ -2169,6 +2395,8 @@ class PendingActionView(discord.ui.View):
             await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
             return
         await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
+        if self._on_canonical_change:
+            self._on_canonical_change()
         if self._matching:
             touched_ids = _extract_target_ids_from_derived(derived)
             _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
@@ -2205,6 +2433,8 @@ class PendingActionView(discord.ui.View):
             await interaction.response.send_message("Failed to create a new item. Check logs for details.")
             return
         await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
+        if self._on_canonical_change:
+            self._on_canonical_change()
         if self._matching:
             touched_ids = _extract_ids_from_written_paths(result.written_paths)
             _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
@@ -2243,6 +2473,7 @@ class MutationPendingView(discord.ui.View):
         author_id: int,
         matching: MatchingConfig | None,
         affinity_key: tuple[int, int],
+        on_canonical_change: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
         self.pending_id = pending_id
@@ -2252,6 +2483,7 @@ class MutationPendingView(discord.ui.View):
         self.author_id = author_id
         self._matching = matching
         self._affinity_key = affinity_key
+        self._on_canonical_change = on_canonical_change
 
     def is_author(self, interaction: discord.Interaction) -> bool:
         user = interaction.user
@@ -2287,6 +2519,8 @@ class MutationPendingView(discord.ui.View):
             await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
             return
         await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
+        if self._on_canonical_change:
+            self._on_canonical_change()
         if self._matching:
             touched_ids = _extract_target_ids_from_derived(pending.derived)
             touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
@@ -2864,6 +3098,7 @@ async def _queue_nl_mutation_confirmation(
         author_id=message.author.id,
         matching=matching_config,
         affinity_key=_cursor_key(message),
+        on_canonical_change=lambda: _notify_due_time_reminder_schedule_changed(config),
     )
     lines: list[str] = []
     if len(resolved_entries) == 1:
@@ -3726,6 +3961,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
                 default_target_id=default_target_id,
                 matching=matching_config,
                 affinity_key=_cursor_key(message),
+                on_canonical_change=lambda: _notify_due_time_reminder_schedule_changed(config),
             )
         await _swap_reaction(message, "⏳", "❓")
         await _send_response(
@@ -3760,6 +3996,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
         config.get("paths", {}).get("index_db", "index/sb.sqlite"),
         matching=matching_config,
     )
+    _notify_due_time_reminder_schedule_changed(config)
     touched_ids = _extract_target_ids_from_derived(effective_derived)
     touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
     _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
@@ -4359,6 +4596,7 @@ async def _handle_command(
             await _send_response(message, "Failed to apply pending action. Check logs for details.")
             return True
         await _refresh_index_async(objects_root, index_db, matching=matching_config)
+        _notify_due_time_reminder_schedule_changed(config)
         touched_ids = _extract_target_ids_from_derived(pending.derived)
         touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
         _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
@@ -4529,6 +4767,7 @@ async def _apply_command_operation(
         config.get("paths", {}).get("index_db", "index/sb.sqlite"),
         matching=matching_config,
     )
+    _notify_due_time_reminder_schedule_changed(config)
     touched_ids = _extract_target_ids_from_derived(derived)
     touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
     _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
@@ -4562,6 +4801,7 @@ async def _handle_archive_clear_confirmation(message: discord.Message, config: d
     _RESULT_CURSORS.clear()
     _MATCHING_AFFINITY.clear()
     _NL_CLARIFICATION_CONTEXTS.clear()
+    _notify_due_time_reminder_schedule_changed(config, clear_state=True)
     await _safe_add_reaction(message, "✅")
     await _send_response(message, f"Archive cleared. Removed {removed} top-level entries from `{archive_root}`.")
     return True
@@ -4579,11 +4819,22 @@ class SquireBot(discord.Client):
         self._weekly_review_time = _parse_daily_digest_time(schedule.get("weekly_review_time"))
         self._digest_channel_id = _coerce_int(schedule.get("daily_digest_channel_id"))
         self._digest_user_id = _coerce_int(schedule.get("daily_digest_user_id"))
+        self._due_time_reminder_schedule = _load_due_time_reminder_schedule_config(schedule)
+        self._due_time_reminder_ledger_path = _due_time_reminder_ledger_path(config)
         self._last_dm_channel_id: int | None = None
         self._last_dm_user_id: int | None = None
         self._timezone = resolve_timezone(config.get("timezone"))
         self._digest_task: asyncio.Task | None = None
         self._weekly_review_task: asyncio.Task | None = None
+        self._due_time_reminder_task: asyncio.Task | None = None
+        self._due_time_reminder_midnight_task: asyncio.Task | None = None
+        self._due_time_reminder_reconcile_task: asyncio.Task | None = None
+        self._due_time_reminder_schedule_changed = asyncio.Event()
+        self._due_time_reminder_state_lock = asyncio.Lock()
+        self._due_time_reminder_heap: list[tuple[datetime, datetime, str, int, DueTimeReminderEvent]] = []
+        self._due_time_reminder_sent_ledger: dict[str, _DueTimeReminderSentLedgerEntry] = {}
+        self._due_time_reminder_reset_requested = False
+        self._config[_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY] = self._on_due_time_reminder_schedule_changed
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user}")
@@ -4591,12 +4842,309 @@ class SquireBot(discord.Client):
             self._digest_task = asyncio.create_task(self._daily_digest_loop())
         if self._weekly_review_day is not None and self._weekly_review_time and self._weekly_review_task is None:
             self._weekly_review_task = asyncio.create_task(self._weekly_review_loop())
+        if self._due_time_reminder_schedule.enabled and self._due_time_reminder_task is None:
+            self._due_time_reminder_task = asyncio.create_task(self._due_time_reminder_loop())
+            self._due_time_reminder_midnight_task = asyncio.create_task(self._due_time_reminder_midnight_loop())
+            self._due_time_reminder_reconcile_task = asyncio.create_task(self._due_time_reminder_reconcile_loop())
 
     async def on_message(self, message: discord.Message) -> None:
         if not message.author.bot and isinstance(message.channel, discord.DMChannel):
             self._last_dm_channel_id = message.channel.id
             self._last_dm_user_id = message.author.id
         await _handle_message(message, self._config)
+
+    def _on_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
+        if not self._due_time_reminder_schedule.enabled:
+            return
+        if clear_state:
+            self._due_time_reminder_reset_requested = True
+        self._due_time_reminder_schedule_changed.set()
+
+    @staticmethod
+    def _due_time_reminder_heap_item(
+        event: DueTimeReminderEvent,
+    ) -> tuple[datetime, datetime, str, int, DueTimeReminderEvent]:
+        return (event.fire_at, event.due_at, event.object_id, event.offset_minutes, event)
+
+    def _prune_due_time_reminder_sent_ledger(self, *, now: datetime) -> bool:
+        expired_keys = [key for key, entry in self._due_time_reminder_sent_ledger.items() if entry.expires_at <= now]
+        for key in expired_keys:
+            self._due_time_reminder_sent_ledger.pop(key, None)
+        return bool(expired_keys)
+
+    async def _load_due_time_reminder_sent_ledger(self) -> None:
+        now = datetime.now(timezone.utc)
+        loaded = await asyncio.to_thread(
+            _load_due_time_reminder_ledger_entries,
+            self._due_time_reminder_ledger_path,
+            now=now,
+        )
+        async with self._due_time_reminder_state_lock:
+            self._due_time_reminder_sent_ledger = loaded
+
+    async def _flush_due_time_reminder_sent_ledger(self) -> None:
+        now = datetime.now(timezone.utc)
+        async with self._due_time_reminder_state_lock:
+            entries = dict(self._due_time_reminder_sent_ledger)
+        try:
+            await asyncio.to_thread(
+                _flush_due_time_reminder_ledger_entries,
+                self._due_time_reminder_ledger_path,
+                entries=entries,
+                now=now,
+            )
+        except Exception as exc:
+            logging.warning("due_time_reminder_ledger_flush_failed error=%s", exc)
+
+    async def _rebuild_due_time_reminder_schedule(self, *, source: str) -> int:
+        now = datetime.now(self._timezone)
+        events = await asyncio.to_thread(
+            build_due_time_reminder_events,
+            self._config.get("paths", {}).get("objects_root", "objects"),
+            self._config,
+            offsets_minutes=list(self._due_time_reminder_schedule.offsets_minutes),
+            now=now,
+            late_grace_minutes=self._due_time_reminder_schedule.late_grace_minutes,
+            horizon_hours=_DUE_TIME_REMINDER_HORIZON_HOURS,
+        )
+        heap_items = [self._due_time_reminder_heap_item(event) for event in events]
+        heapq.heapify(heap_items)
+        async with self._due_time_reminder_state_lock:
+            self._due_time_reminder_heap = heap_items
+        logging.info(
+            "due_time_reminder_schedule_built count=%s horizon_hours=%s source=%s",
+            len(events),
+            _DUE_TIME_REMINDER_HORIZON_HOURS,
+            source,
+        )
+        return len(events)
+
+    async def _peek_due_time_reminder_fire_at(self) -> datetime | None:
+        async with self._due_time_reminder_state_lock:
+            if not self._due_time_reminder_heap:
+                return None
+            return self._due_time_reminder_heap[0][0]
+
+    async def _push_due_time_reminder_events(self, events: list[DueTimeReminderEvent]) -> None:
+        if not events:
+            return
+        async with self._due_time_reminder_state_lock:
+            for event in events:
+                heapq.heappush(self._due_time_reminder_heap, self._due_time_reminder_heap_item(event))
+
+    async def _pop_due_time_reminder_due_events(self, *, now: datetime) -> list[DueTimeReminderEvent]:
+        events: list[DueTimeReminderEvent] = []
+        async with self._due_time_reminder_state_lock:
+            while self._due_time_reminder_heap and self._due_time_reminder_heap[0][0] <= now:
+                events.append(heapq.heappop(self._due_time_reminder_heap)[4])
+            self._prune_due_time_reminder_sent_ledger(now=now.astimezone(timezone.utc))
+        return events
+
+    async def _resolve_due_time_reminder_channel(self) -> discord.abc.Messageable | None:
+        channel_id = self._due_time_reminder_schedule.channel_id
+        if channel_id:
+            channel = self.get_channel(channel_id)
+            if channel and isinstance(channel, discord.abc.Messageable):
+                return channel
+            try:
+                fetched = await self.fetch_channel(channel_id)
+                if isinstance(fetched, discord.abc.Messageable):
+                    return fetched
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logging.warning("due_time_reminder_channel_unavailable id=%s", channel_id)
+                return None
+        user_id = self._due_time_reminder_schedule.user_id
+        if user_id:
+            user = self.get_user(user_id)
+            if not user:
+                try:
+                    user = await self.fetch_user(user_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logging.warning("due_time_reminder_user_unavailable id=%s", user_id)
+                    user = None
+            if user:
+                if user.dm_channel:
+                    return user.dm_channel
+                try:
+                    return await user.create_dm()
+                except (discord.HTTPException, discord.Forbidden):
+                    logging.warning("due_time_reminder_dm_create_failed user=%s", user_id)
+                    return None
+        return await self._resolve_digest_channel()
+
+    def _due_time_reminder_is_stale(self, event: DueTimeReminderEvent, *, now: datetime) -> bool:
+        grace = timedelta(minutes=self._due_time_reminder_schedule.late_grace_minutes)
+        return now - event.fire_at > grace
+
+    def _due_time_reminder_recheck_event(self, event: DueTimeReminderEvent) -> tuple[bool, str | None]:
+        objects_root = self._config.get("paths", {}).get("objects_root", "objects")
+        path = find_object_path(objects_root, event.object_id)
+        if not path:
+            return False, "missing_object"
+        try:
+            frontmatter = load_frontmatter(path)
+        except Exception:
+            return False, "ineligible"
+        status_value = str(frontmatter.get("status") or "").strip().lower()
+        if status_value not in _DUE_TIME_REMINDER_ALLOWED_STATUSES:
+            return False, "ineligible"
+        archived_value = frontmatter.get("archived")
+        archived = False
+        if isinstance(archived_value, bool):
+            archived = archived_value
+        elif isinstance(archived_value, str):
+            archived = archived_value.strip().lower() in {"1", "true", "yes", "y"}
+        if archived:
+            return False, "ineligible"
+        due_at = _coerce_timezone_datetime(frontmatter.get("due_at"), self._timezone)
+        if due_at is None:
+            return False, "ineligible"
+        if due_at != event.due_at:
+            return False, "ineligible"
+        return True, None
+
+    async def _dispatch_due_time_reminders(self) -> None:
+        now = datetime.now(self._timezone)
+        due_events = await self._pop_due_time_reminder_due_events(now=now)
+        if not due_events:
+            return
+
+        async with self._due_time_reminder_state_lock:
+            active_sent_keys = set(self._due_time_reminder_sent_ledger.keys())
+
+        sendable: list[DueTimeReminderEvent] = []
+        for event in due_events:
+            if self._due_time_reminder_is_stale(event, now=now):
+                logging.info("due_time_reminder_event_skipped reason=stale")
+                continue
+            key = _due_time_reminder_key(event)
+            if key in active_sent_keys:
+                logging.info("due_time_reminder_event_skipped reason=duplicate")
+                continue
+            eligible, reason = self._due_time_reminder_recheck_event(event)
+            if not eligible:
+                logging.info("due_time_reminder_event_skipped reason=%s", reason or "ineligible")
+                continue
+            sendable.append(event)
+
+        if not sendable:
+            return
+
+        channel = await self._resolve_due_time_reminder_channel()
+        if not channel:
+            logging.warning("due_time_reminder_skipped reason=no_channel")
+            await self._push_due_time_reminder_events(sendable)
+            return
+
+        content = render_due_time_reminder_message(sendable, self._config, now=now)
+        if not content:
+            return
+
+        try:
+            await channel.send(content=content)
+        except (discord.HTTPException, discord.Forbidden) as exc:
+            logging.warning("due_time_reminder_send_failed error=%s", exc)
+            await self._push_due_time_reminder_events(sendable)
+            return
+
+        sent_at = datetime.now(timezone.utc)
+        expires_at = sent_at + timedelta(hours=_DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS)
+        async with self._due_time_reminder_state_lock:
+            for event in sendable:
+                key = _due_time_reminder_key(event)
+                self._due_time_reminder_sent_ledger[key] = _DueTimeReminderSentLedgerEntry(
+                    key=key,
+                    object_id=event.object_id,
+                    due_at=event.due_at.astimezone(timezone.utc),
+                    offset_minutes=event.offset_minutes,
+                    fire_at=event.fire_at.astimezone(timezone.utc),
+                    sent_at=sent_at,
+                    expires_at=expires_at,
+                )
+                logging.info(
+                    "due_time_reminder_event_dispatched object_id=%s due_at=%s offset=%s",
+                    event.object_id,
+                    event.due_at.isoformat(),
+                    event.offset_minutes,
+                )
+            self._prune_due_time_reminder_sent_ledger(now=sent_at)
+        await self._flush_due_time_reminder_sent_ledger()
+
+    async def _due_time_reminder_loop(self) -> None:
+        try:
+            await self._load_due_time_reminder_sent_ledger()
+            await self._rebuild_due_time_reminder_schedule(source="startup")
+        except Exception:
+            logging.exception("due_time_reminder_startup_failed")
+        while not self.is_closed():
+            if self._due_time_reminder_schedule_changed.is_set():
+                self._due_time_reminder_schedule_changed.clear()
+                if self._due_time_reminder_reset_requested:
+                    async with self._due_time_reminder_state_lock:
+                        self._due_time_reminder_heap.clear()
+                        self._due_time_reminder_sent_ledger.clear()
+                    self._due_time_reminder_reset_requested = False
+                    await self._flush_due_time_reminder_sent_ledger()
+                try:
+                    await self._rebuild_due_time_reminder_schedule(source="event")
+                except Exception:
+                    logging.exception("due_time_reminder_rebuild_failed source=event")
+                continue
+
+            next_fire = await self._peek_due_time_reminder_fire_at()
+            if next_fire is None:
+                delay = float(_DUE_TIME_REMINDER_EMPTY_QUEUE_WAIT_SECONDS)
+            else:
+                delay = max(0.0, (next_fire - datetime.now(self._timezone)).total_seconds())
+            try:
+                await asyncio.wait_for(self._due_time_reminder_schedule_changed.wait(), timeout=delay)
+                self._due_time_reminder_schedule_changed.clear()
+                logging.info("due_time_reminder_wake reason=schedule_changed")
+                if self._due_time_reminder_reset_requested:
+                    async with self._due_time_reminder_state_lock:
+                        self._due_time_reminder_heap.clear()
+                        self._due_time_reminder_sent_ledger.clear()
+                    self._due_time_reminder_reset_requested = False
+                    await self._flush_due_time_reminder_sent_ledger()
+                try:
+                    await self._rebuild_due_time_reminder_schedule(source="event")
+                except Exception:
+                    logging.exception("due_time_reminder_rebuild_failed source=event")
+                continue
+            except asyncio.TimeoutError:
+                logging.info("due_time_reminder_wake reason=timeout")
+            try:
+                await self._dispatch_due_time_reminders()
+            except Exception:
+                logging.exception("due_time_reminder_dispatch_failed")
+
+    async def _due_time_reminder_midnight_loop(self) -> None:
+        while not self.is_closed():
+            now = datetime.now(self._timezone)
+            target = _next_midnight_run(now)
+            delay = (target - now).total_seconds()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            try:
+                await self._rebuild_due_time_reminder_schedule(source="midnight")
+            except Exception:
+                logging.exception("due_time_reminder_rebuild_failed source=midnight")
+
+    async def _due_time_reminder_reconcile_loop(self) -> None:
+        interval_seconds = max(1, self._due_time_reminder_schedule.reconcile_minutes) * 60
+        while not self.is_closed():
+            await asyncio.sleep(interval_seconds)
+            try:
+                count = await self._rebuild_due_time_reminder_schedule(source="reconcile")
+            except Exception:
+                logging.exception("due_time_reminder_rebuild_failed source=reconcile")
+                continue
+            now_utc = datetime.now(timezone.utc)
+            async with self._due_time_reminder_state_lock:
+                pruned = self._prune_due_time_reminder_sent_ledger(now=now_utc)
+            if pruned:
+                await self._flush_due_time_reminder_sent_ledger()
+            logging.info("due_time_reminder_reconcile_completed count=%s", count)
 
     async def _resolve_digest_channel(self) -> discord.abc.Messageable | None:
         if self._digest_channel_id:

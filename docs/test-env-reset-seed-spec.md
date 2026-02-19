@@ -82,6 +82,8 @@ Required coverage:
   - overdue open,
   - due today open,
   - due soon open,
+  - timed (`due_at`) open,
+  - timed (`due_at`) blocked,
   - blocked,
   - done (with `completed_at`).
 - Projects:

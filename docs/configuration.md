@@ -119,11 +119,16 @@ The scheduler supports:
 - `schedule.daily_digest_time`: local-time daily digest send time (`HH:MM`).
 - `schedule.weekly_review_day`: weekly review day (`MON`..`SUN`).
 - `schedule.weekly_review_time`: local-time weekly review send time (`HH:MM`).
+- `schedule.due_time_reminder_offsets_minutes`: list of reminder offsets (minutes before `admin.due_at`), e.g. `[120, 15]`. If omitted, defaults to `[90, 15]`; set `[]` to disable due-time reminders.
+- `schedule.due_time_reminder_late_grace_minutes`: skip stale reminders older than this many minutes past their fire time (default `10`).
+- `schedule.due_time_reminder_reconcile_minutes`: full reminder schedule reconcile interval in minutes (default `60`).
 
 Both schedules use one shared destination and one of the following optional destination keys:
 
 - `schedule.daily_digest_channel_id`: Discord channel ID to post the digest.
 - `schedule.daily_digest_user_id`: Discord user ID to DM the digest.
+- `schedule.due_time_reminder_channel_id`: optional channel override for due-time reminders.
+- `schedule.due_time_reminder_user_id`: optional user DM override for due-time reminders.
 
 If neither destination is configured, the bot falls back to the last DM channel it received and logs a warning if no
 channel is available.

@@ -60,6 +60,11 @@ schedule:
   daily_digest_time: "09:00"
   weekly_review_day: "SUN"
   weekly_review_time: "10:00"
+  due_time_reminder_offsets_minutes: [90, 15] # Defaults/fallback to [90, 15] when unset; set [] to disable reminders.
+  due_time_reminder_late_grace_minutes: 10 # Skip stale reminders older than this grace window.
+  due_time_reminder_reconcile_minutes: 60 # Full reminder schedule rebuild interval to catch out-of-band edits.
+  # due_time_reminder_channel_id: 123456789012345678
+  # due_time_reminder_user_id: 123456789012345678
   # daily_digest_channel_id: 123456789012345678
   # daily_digest_user_id: 123456789012345678
 
