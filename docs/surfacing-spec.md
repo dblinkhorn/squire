@@ -74,7 +74,7 @@ Rules:
 ### Commands
 
 - `!status`: returns the same sectioned digest view used for daily push.
-- `!recent [N]`: returns recent notes as numbered rows with IDs.
+- `!recent [number]`: returns recent notes as numbered rows with IDs.
 - `!find <query>`: returns ranked matches as numbered rows with IDs.
 - `!show <number>`: expands the selected row from the last `!recent` or `!find` result set and includes the ID.
 

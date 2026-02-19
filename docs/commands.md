@@ -22,7 +22,8 @@ Prefixes:
 
 `!status` returns the daily digest (admin overdue/today/soon sections, project attention, and people follow-ups).
 `!weekly` returns the weekly review sections on demand.
-`!recent [N]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
+`!help [command]` returns a compact command summary, or detailed usage for a specific command.
+`!recent [number]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest numbered list
 (`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
 `!done <number>`, `!append <number> <text>`, and `!fix <number> ...` can resolve numbered rows from the latest
@@ -30,20 +31,21 @@ numbered list (`!recent`, `!find`, `!status`, or `!weekly`) in the same channel 
 Scheduled/on-demand digest commands (`!status`, `!weekly`) remain list-first and avoid IDs by default.
 Scheduled/on-demand digest commands are currently read-only; explicit `done`/`edit` action buttons are deferred and
 text commands remain the mutation path.
-`!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix field=value
-[field=value…]` modifies frontmatter fields from a strict per-type allowlist with value validation (for example enum-only status values and ISO date/time checks). For values with spaces, quote them (for example `next_action="Call dentist tomorrow at 4pm"`). `!confirm <pending_id>` applies a pending action,
+`!done` sets an admin item status to done and sets completed_at. `!append` appends text to the body and updates updated_at. `!fix <id|number> <field=value>
+[field=value ...]` modifies frontmatter fields from a strict per-type allowlist with value validation (for example enum-only status values and ISO date/time checks). For values containing spaces, quote them (for example `next_action="Call dentist tomorrow at 4pm"`). `!confirm <pending_id>` applies a pending action,
 and `!cancel <pending_id>` dismisses it. `!clear-archive` starts a destructive archive reset flow and requires a separate `DELETE` confirmation message within a short TTL before data is removed.
 
 The following commands are currently implemented:
 
 - `!status`
 - `!weekly`
-- `!recent [N]`
+- `!help [command]`
+- `!recent [number]`
 - `!find <query>`
 - `!show <number>`
 - `!append <id|number> <text>`
 - `!done <id|number>`
-- `!fix <id|number> field=value [field=value…]`
+- `!fix <id|number> <field=value> [field=value ...]`
 - `!confirm <pending_id>`
 - `!cancel <pending_id>`
 - `!clear-archive` (requires follow-up `DELETE` confirmation)
@@ -82,4 +84,4 @@ Explicit commands remain available for precision:
 
 - `!append <id|number> …` (force append)
 - `!done <id|number>` (mark admin done)
-- `!fix <id|number> field=value` (field updates)
+- `!fix <id|number> <field=value>` (field updates)
