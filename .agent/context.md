@@ -40,6 +40,20 @@
 - `SQUIRE_ENV=test` runs destructive reset + deterministic seed + index rebuild.
 - Guardrails require a test-safe archive path.
 - `test_archive_root` can override `archive_root` only in test mode.
+- Test seed now includes two `admin` notes with `due_at` (`TEST_ADMIN_DUE_AT_OPEN`, `TEST_ADMIN_DUE_AT_BLOCKED`) so reminder scheduling can be smoke-tested immediately.
+
+### Due-Time Reminders
+
+- Optional due-time reminders are implemented for `admin` items with `due_at` only.
+- Eligibility is strict: `status in {open, blocked}` and `archived != true`; `due_date`-only items are excluded.
+- Scheduling model is event-driven + reconcile:
+  - startup queue build
+  - local-midnight queue rebuild
+  - event-driven queue rebuild after canonical write paths (`!done`/`!append`/`!fix`, confirm/apply flows, mutation buttons)
+  - periodic full reconcile (`schedule.due_time_reminder_reconcile_minutes`, default `60`)
+- Runtime sleeps until next fire time (no per-minute scan loop) and uses dedupe persistence across restarts via:
+  - `paths.events_derived/runtime/due_time_reminder_sent_ledger_v1.json`
+- If `schedule.due_time_reminder_offsets_minutes` is omitted, runtime defaults to offsets `(90, 15)`; set explicit `[]` to disable reminders.
 
 ## Natural-Language Routing (Current Contract)
 
@@ -83,6 +97,7 @@
 - Clarification context is in-memory runtime state and does not persist across process restarts.
 - Plan-size guardrails (max operations per plan / max targets per operation) are intentionally deferred for now.
   - Track this in `.agent/future-plans.md` under routing hardening.
+- Due-time reminder scheduler assumes single-process runtime ownership of queue/ledger writes.
 
 ## Canonical References
 

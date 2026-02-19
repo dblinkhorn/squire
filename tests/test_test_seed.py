@@ -47,7 +47,7 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
         now=now,
     )
 
-    assert stats.admin_count == 5
+    assert stats.admin_count == 7
     assert stats.projects_count == 3
     assert stats.people_count == 2
     assert stats.ideas_count == 2
@@ -55,12 +55,24 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
     overdue = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_OVERDUE_OPEN"))
     due_today = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DUE_TODAY_OPEN"))
     due_soon = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DUE_SOON_OPEN"))
+    due_at_open = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DUE_AT_OPEN"))
+    due_at_blocked = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DUE_AT_BLOCKED"))
     done_admin = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DONE"))
     stale_project = load_frontmatter(_object_path(objects_root, "projects", "TEST_PROJECT_STALE"))
     overdue_person = load_frontmatter(_object_path(objects_root, "people", "TEST_PERSON_OVERDUE"))
     done_idea = load_frontmatter(_object_path(objects_root, "ideas", "TEST_IDEA_DONE_RECENT"))
 
-    for frontmatter in (overdue, due_today, due_soon, done_admin, stale_project, overdue_person, done_idea):
+    for frontmatter in (
+        overdue,
+        due_today,
+        due_soon,
+        due_at_open,
+        due_at_blocked,
+        done_admin,
+        stale_project,
+        overdue_person,
+        done_idea,
+    ):
         assert isinstance(frontmatter.get("id"), str)
         assert isinstance(frontmatter.get("type"), str)
         assert isinstance(frontmatter.get("title"), str)
@@ -76,7 +88,13 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
     today = now.date().isoformat()
     assert due_today["due_date"] == today
     assert due_soon["due_date"] == (now.date() + timedelta(days=1)).isoformat()
+    due_at_open_value = datetime.fromisoformat(str(due_at_open["due_at"]))
+    due_at_blocked_value = datetime.fromisoformat(str(due_at_blocked["due_at"]))
+    assert due_at_open_value == now + timedelta(hours=4)
+    assert due_at_blocked_value == now + timedelta(hours=20)
     assert overdue["status"] == "open"
+    assert due_at_open["status"] == "open"
+    assert due_at_blocked["status"] == "blocked"
     assert done_admin["status"] == "done"
     assert "completed_at" in done_admin
     assert stale_project["status"] == "in_progress"

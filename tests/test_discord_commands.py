@@ -128,6 +128,7 @@ def test_pending_action_view_shows_confirmation_buttons() -> None:
 
 def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
     calls: list[str] = []
+    reminder_calls: list[bool] = []
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -173,7 +174,8 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
             "objects_root": "/tmp/objects",
             "index_db": "/tmp/index.sqlite",
             "pending_actions": "/tmp/pending",
-        }
+        },
+        discord_bot._DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY: lambda *, clear_state=False: reminder_calls.append(clear_state),
     }
 
     handled = asyncio.run(discord_bot._handle_command(_Message("!confirm PA_1"), "!confirm PA_1", "R_1", config))
@@ -182,6 +184,7 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
     assert "status:confirmed" in calls
     assert "refresh:/tmp/objects:/tmp/index.sqlite" in calls
     assert any(call.startswith("send:Applied pending action PA_1.") for call in calls)
+    assert reminder_calls == [False]
 
 
 def test_handle_command_fix_parses_quoted_values(monkeypatch) -> None:
@@ -1052,6 +1055,7 @@ def test_handle_command_clear_archive_starts_confirmation(monkeypatch) -> None:
 
 def test_handle_message_delete_clears_archive_when_pending(monkeypatch, tmp_path: Path) -> None:
     calls: list[str] = []
+    reminder_calls: list[bool] = []
     discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
 
     archive_root = tmp_path / "archive"
@@ -1072,7 +1076,10 @@ def test_handle_message_delete_clears_archive_when_pending(monkeypatch, tmp_path
     message = _Message("DELETE", user_id=100, channel_id=200)
     discord_bot._start_archive_clear_confirmation(message)
 
-    handled_config = {"archive_root": str(archive_root)}
+    handled_config = {
+        "archive_root": str(archive_root),
+        discord_bot._DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY: lambda *, clear_state=False: reminder_calls.append(clear_state),
+    }
     asyncio.run(discord_bot._handle_message(message, handled_config))
 
     assert (archive_root / ".git").exists()
@@ -1081,6 +1088,7 @@ def test_handle_message_delete_clears_archive_when_pending(monkeypatch, tmp_path
     assert "react:✅" in calls
     assert any("Archive cleared. Removed 2 top-level entries" in call for call in calls)
     assert discord_bot._archive_clear_key(message) not in discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS
+    assert reminder_calls == [True]
 
 
 def test_handle_message_delete_without_pending_shows_warning(monkeypatch) -> None:

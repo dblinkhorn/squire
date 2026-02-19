@@ -8,6 +8,10 @@ Sections are list-only and do not include suggested next actions. Digests includ
 emoji-prefixed section headers, and human-readable date rendering with near-term relative labels.
 Daily digest empty sections are shown as `All clear` for predictable scanning.
 
+Due-time reminders can also surface open/blocked admin items with `due_at` at configured pre-due offsets.
+The default offsets are `90` and `15` minutes when the key is omitted; set `schedule.due_time_reminder_offsets_minutes: []`
+to disable. These reminders are separate from the daily digest and are intended for time-specific nudges throughout the day.
+
 Weekly review is also supported on a separate weekly schedule. It includes completed notes this week, open unscheduled
 admin items, blocked/stale projects, people overdue for contact, and optional recently updated ideas.
 The `Completed this week` section is omitted when empty; other weekly sections still use `All clear` when applicable.

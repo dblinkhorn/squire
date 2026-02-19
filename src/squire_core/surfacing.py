@@ -99,6 +99,15 @@ class SurfacedList:
     object_ids: list[str]
 
 
+@dataclass(frozen=True)
+class DueTimeReminderEvent:
+    object_id: str
+    title: str
+    due_at: datetime
+    offset_minutes: int
+    fire_at: datetime
+
+
 _DEFAULT_SURFACING_CONFIG = {
     "admin": {"due_soon_days": 1},
     "projects": {"stale_days": 14, "blocked_limit": 3},
@@ -763,12 +772,123 @@ def _render_find_row(
     return f"{base}\n   • {cleaned_snippet}"
 
 
+def _normalize_positive_int_list(values: Iterable[Any]) -> list[int]:
+    normalized: set[int] = set()
+    for value in values:
+        parsed: int | None = None
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, float) and value.is_integer():
+            parsed = int(value)
+        elif isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed.isdigit():
+                parsed = int(trimmed)
+        if parsed is None or parsed <= 0:
+            continue
+        normalized.add(parsed)
+    return sorted(normalized, reverse=True)
+
+
+def _format_relative_duration(target: datetime, reference: datetime) -> str:
+    delta_seconds = int((target - reference).total_seconds())
+    if delta_seconds <= 0:
+        return "now"
+    total_minutes = (delta_seconds + 59) // 60
+    if total_minutes < 60:
+        unit = "minute" if total_minutes == 1 else "minutes"
+        return f"in {total_minutes} {unit}"
+    hours, minutes = divmod(total_minutes, 60)
+    hour_unit = "hour" if hours == 1 else "hours"
+    if minutes == 0:
+        return f"in {hours} {hour_unit}"
+    minute_unit = "minute" if minutes == 1 else "minutes"
+    return f"in {hours} {hour_unit} {minutes} {minute_unit}"
+
+
 def _load_body(path: Path) -> str:
     content = path.read_text(encoding="utf-8")
     parts = content.split("---", 2)
     if len(parts) == 3:
         return parts[2].strip()
     return content.strip()
+
+
+def build_due_time_reminder_events(
+    objects_root: str | Path,
+    config: dict[str, Any],
+    *,
+    offsets_minutes: list[int] | tuple[int, ...],
+    now: datetime | None = None,
+    late_grace_minutes: int = 10,
+    horizon_hours: int = 36,
+) -> list[DueTimeReminderEvent]:
+    tz = resolve_timezone(config.get("timezone"))
+    if now is None:
+        now = datetime.now(tz)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=tz)
+    else:
+        now = now.astimezone(tz)
+
+    offsets = _normalize_positive_int_list(offsets_minutes)
+    if not offsets:
+        return []
+
+    grace_minutes = max(0, int(late_grace_minutes))
+    horizon = max(1, int(horizon_hours))
+    window_start = now - timedelta(minutes=grace_minutes)
+    window_end = now + timedelta(hours=horizon)
+
+    events: list[DueTimeReminderEvent] = []
+    items = _load_items(objects_root)
+    admin_items = _admin_entries(items, tz)
+    for entry in admin_items:
+        status = entry.status.strip().lower()
+        if status not in {"open", "blocked"}:
+            continue
+        if entry.due_at is None:
+            continue
+        for offset in offsets:
+            fire_at = entry.due_at - timedelta(minutes=offset)
+            if fire_at < window_start or fire_at > window_end:
+                continue
+            events.append(
+                DueTimeReminderEvent(
+                    object_id=entry.object_id,
+                    title=entry.title,
+                    due_at=entry.due_at,
+                    offset_minutes=offset,
+                    fire_at=fire_at,
+                )
+            )
+    events.sort(key=lambda item: (item.fire_at, item.due_at, item.object_id, item.offset_minutes))
+    return events
+
+
+def render_due_time_reminder_message(
+    events: list[DueTimeReminderEvent],
+    config: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> str:
+    if not events:
+        return ""
+    tz = resolve_timezone(config.get("timezone"))
+    if now is None:
+        now = datetime.now(tz)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=tz)
+    else:
+        now = now.astimezone(tz)
+    sorted_events = sorted(events, key=lambda item: (item.due_at, item.object_id, item.offset_minutes))
+    header_date = _format_human_date(now.date(), now.date(), include_relative=False)
+    lines = [f"⏰ **Upcoming due reminders** · {header_date}"]
+    for event in sorted_events:
+        due_rendered = _format_human_datetime(event.due_at, now.date(), include_relative=False)
+        relative = _format_relative_duration(event.due_at, now)
+        lines.append(f"• {event.title} - due {due_rendered} ({relative})")
+    return "\n".join(lines)
 
 
 def build_daily_digest(
