@@ -231,6 +231,69 @@ def test_handle_command_fix_parses_quoted_values(monkeypatch) -> None:
     }
 
 
+def test_handle_command_help_sends_help_message(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        captured["reaction"] = (remove_emoji, add_emoji)
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+
+    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    handled = asyncio.run(discord_bot._handle_command(_Message("!help"), "!help", "R_1", config))
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "✅")
+    assert captured["response"] == discord_bot._HELP_COPY
+    assert "\n- `!status` - show daily digest" in str(captured["response"])
+
+
+def test_handle_command_help_topic_sends_detail(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        captured["reaction"] = (remove_emoji, add_emoji)
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+
+    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    handled = asyncio.run(discord_bot._handle_command(_Message("!help done"), "!help done", "R_1", config))
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "✅")
+    assert captured["response"] == discord_bot._HELP_DETAILS["done"]
+    assert "`!done <id|number>`" in str(captured["response"])
+    assert "\n- " not in str(captured["response"])
+
+
+def test_handle_command_help_unknown_topic_warns(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        captured["reaction"] = (remove_emoji, add_emoji)
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+
+    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    handled = asyncio.run(discord_bot._handle_command(_Message("!help nope"), "!help nope", "R_1", config))
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "⚠️")
+    assert captured["response"] == "Unknown command `nope`. Run `!help` for a command list."
+
+
 def test_handle_command_recent_does_not_override_digest_id_flag(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

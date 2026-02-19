@@ -86,6 +86,86 @@ _NUMBERED_COMMAND_TIP = (
 _NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT = (
     "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value` · `!recent <number>` (up to 50)"
 )
+_NUMBERED_LIST_ACTION_HELP_COPY = (
+    "After this command shows a numbered list, you can use those numbers to take action on items (for example: "
+    "`!show 2`, `!append 2 <text>`, `!fix 2 field=value`, or `!done 2` for admin items)."
+)
+_HELP_COPY = (
+    "Available commands:\n"
+    "- `!help [command]` - show this list or command details\n"
+    "- `!status` - show daily digest\n"
+    "- `!weekly` - show weekly review\n"
+    "- `!recent [number]` - list recent notes\n"
+    "- `!find <query>` - search notes\n"
+    "- `!show <number>` - open one result\n"
+    "- `!append <id|number> <text>` - append note text\n"
+    "- `!done <id|number>` - mark admin done\n"
+    "- `!fix <id|number> <field=value> [field=value ...]` - edit note fields\n"
+    "- `!confirm <pending_id>` - apply pending change\n"
+    "- `!cancel <pending_id>` - cancel pending change\n"
+    "- `!clear-archive` then `DELETE` - clear archive data\n"
+    "Tip: run `!help <command>` for more details."
+)
+_HELP_DETAILS = {
+    "help": (
+        "`!help [command]`\n"
+        "Shows the command list. Add a command name for a more detailed description of that command."
+    ),
+    "status": (
+        "`!status`\n"
+        "Shows your daily digest.\n"
+        + _NUMBERED_LIST_ACTION_HELP_COPY
+    ),
+    "weekly": (
+        "`!weekly`\n"
+        "Shows your weekly review.\n"
+        + _NUMBERED_LIST_ACTION_HELP_COPY
+    ),
+    "recent": (
+        "`!recent [number]`\n"
+        "Lists your recent notes. Use `!recent [number]` to show your most recent notes (up to 50).\n"
+        + _NUMBERED_LIST_ACTION_HELP_COPY
+    ),
+    "find": (
+        "`!find <query>`\n"
+        "Searches your notes by title and body.\n"
+        + _NUMBERED_LIST_ACTION_HELP_COPY
+    ),
+    "show": (
+        "`!show <number>`\n"
+        "Opens details for one item from your latest numbered list (for example, after `!recent`, `!find`, "
+        "`!status`, or `!weekly`)."
+    ),
+    "append": (
+        "`!append <id|number> <text>`\n"
+        "Appends text to an existing note body. The target can be an ID or a row number from your latest numbered "
+        "list (for example, after `!recent`, `!find`, `!status`, or `!weekly`)."
+    ),
+    "done": (
+        "`!done <id|number>`\n"
+        "Marks an admin item as done. This sets `status=done` and records `completed_at`. The target can be an ID "
+        "or a row number from your latest numbered list (for example, after `!recent`, `!find`, `!status`, or "
+        "`!weekly`)."
+    ),
+    "fix": (
+        "`!fix <id|number> <field=value> [field=value ...]`\n"
+        "Updates allowed fields on an existing note. Quote values containing spaces (for example "
+        "`next_action=\"Call dentist\"`). The target can be an ID or a row number from your latest numbered list "
+        "(for example, after `!recent`, `!find`, `!status`, or `!weekly`)."
+    ),
+    "confirm": (
+        "`!confirm <pending_id>`\n"
+        "Confirms and applies a pending note update."
+    ),
+    "cancel": (
+        "`!cancel <pending_id>`\n"
+        "Cancels a pending note update without applying changes."
+    ),
+    "clear-archive": (
+        "`!clear-archive`\n"
+        "Starts the destructive archive reset flow. You will lose all notes. Confirm with 'DELETE'."
+    ),
+}
 _NL_ROUTE_MEDIUM_CONFIDENCE = 0.5
 _NL_INTENT_SCHEMA_PATH = Path("config/schemas/nl_route_intent_v1.json")
 _NL_MUTATION_NORMALIZED_SCHEMA_PATH = Path("config/schemas/nl_mutation_normalized_v1.json")
@@ -449,6 +529,16 @@ def _parse_positive_int(value: str) -> int | None:
     if parsed <= 0:
         return None
     return parsed
+
+
+def _normalize_help_topic(value: str) -> str:
+    topic = value.strip().lower()
+    if topic.startswith("!"):
+        topic = topic[1:]
+    topic = topic.replace("_", "-")
+    if topic == "cleararchive":
+        return "clear-archive"
+    return topic
 
 
 def _coerce_non_empty_str(value: Any) -> str | None:
@@ -1168,7 +1258,7 @@ def _clarification_for_plan_reason(reason_code: str, *, object_type: str | None 
         suffix = f" for {object_type}" if object_type else ""
         return (
             f"I couldn't determine a valid field{suffix}.",
-            ["Tell me the exact field name", "Use a due/date phrasing", "Use `!fix <id|number> field=value`"],
+            ["Tell me the exact field name", "Use a due/date phrasing", "Use `!fix <id|number> <field=value>`"],
         )
     if reason_code == "value_parse_failed":
         return (
@@ -3994,17 +4084,35 @@ async def _handle_command(
         await _swap_reaction(message, "⏳", "✅")
         await _send_response(message, rendered)
         return True
+    if command == "!help":
+        if len(parts) > 2:
+            await _swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "Usage: !help [command]")
+            return True
+        if len(parts) == 2:
+            topic = _normalize_help_topic(parts[1])
+            help_detail = _HELP_DETAILS.get(topic)
+            if help_detail is None:
+                await _swap_reaction(message, "⏳", "⚠️")
+                await _send_response(message, f"Unknown command `{parts[1]}`. Run `!help` for a command list.")
+                return True
+            await _swap_reaction(message, "⏳", "✅")
+            await _send_response(message, help_detail)
+            return True
+        await _swap_reaction(message, "⏳", "✅")
+        await _send_response(message, _HELP_COPY)
+        return True
     if command == "!recent":
         limit: int | None = None
         if len(parts) > 2:
             await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !recent [N]")
+            await _send_response(message, "Usage: !recent [number]")
             return True
         if len(parts) == 2:
             parsed = _parse_positive_int(parts[1])
             if parsed is None:
                 await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, "Usage: !recent [N]")
+                await _send_response(message, "Usage: !recent [number]")
                 return True
             limit = parsed
         surfaced = build_recent_list(objects_root, config, limit=limit)
@@ -4148,11 +4256,11 @@ async def _handle_command(
             fix_parts = shlex.split(content)
         except ValueError:
             await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Invalid !fix syntax. Quote values with spaces.")
+            await _send_response(message, "Invalid !fix syntax. Quote values containing spaces.")
             return True
         if len(fix_parts) < 3:
             await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !fix <id|number> field=value [field=value...]")
+            await _send_response(message, "Usage: !fix <id|number> <field=value> [field=value ...]")
             return True
         target_resolution = _resolve_command_target(message, fix_parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
@@ -4170,13 +4278,13 @@ async def _handle_command(
         target_id = target_resolution.target_id
         if not target_id:
             await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !fix <id|number> field=value [field=value...]")
+            await _send_response(message, "Usage: !fix <id|number> <field=value> [field=value ...]")
             return True
         updates: dict[str, Any] = {}
         for token in fix_parts[2:]:
             if "=" not in token:
                 await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, "Invalid !fix syntax. Use field=value and quote values with spaces.")
+                await _send_response(message, "Invalid !fix syntax. Use field=value and quote values containing spaces.")
                 return True
             key, value = token.split("=", 1)
             key = key.strip()
