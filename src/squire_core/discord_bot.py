@@ -89,8 +89,32 @@ from squire_core.transport.reminders import (
     serialize_due_time_reminder_ledger_entries as _serialize_due_time_reminder_ledger_entries,
 )
 from squire_core.transport.state import (
+    AffinityTouch as _AffinityTouch,
+    ARCHIVE_CLEAR_CONFIRMATIONS as _ARCHIVE_CLEAR_CONFIRMATIONS,
+    ArchiveClearConfirmation as _ArchiveClearConfirmation,
+    clear_nl_clarification_context as _state_clear_nl_clarification_context,
+    CommandTargetResolution as _CommandTargetResolution,
+    consume_archive_clear_confirmation as _state_consume_archive_clear_confirmation,
     DueTimeReminderScheduleConfig as _DueTimeReminderScheduleConfig,
     DueTimeReminderSentLedgerEntry as _DueTimeReminderSentLedgerEntry,
+    get_nl_clarification_context as _state_get_nl_clarification_context,
+    load_affinity_scores as _state_load_affinity_scores,
+    MATCHING_AFFINITY as _MATCHING_AFFINITY,
+    NLClarificationContext as _NLClarificationContext,
+    NL_CLARIFICATION_CONTEXTS as _NL_CLARIFICATION_CONTEXTS,
+    prune_archive_clear_confirmations as _state_prune_archive_clear_confirmations,
+    prune_nl_clarification_contexts as _state_prune_nl_clarification_contexts,
+    prune_result_cursors as _state_prune_result_cursors,
+    record_affinity_touches as _state_record_affinity_touches,
+    render_numbered_daily_digest_for_command as _state_render_numbered_daily_digest_for_command,
+    render_numbered_weekly_review_for_command as _state_render_numbered_weekly_review_for_command,
+    resolve_result_cursor as _state_resolve_result_cursor,
+    resolve_result_cursor_with_reason as _state_resolve_result_cursor_with_reason,
+    RESULT_CURSORS as _RESULT_CURSORS,
+    ResultCursor as _ResultCursor,
+    store_archive_clear_confirmation as _state_store_archive_clear_confirmation,
+    store_nl_clarification_context as _state_store_nl_clarification_context,
+    store_result_cursor as _state_store_result_cursor,
 )
 
 _SCHEMA_MAP = {
@@ -325,22 +349,6 @@ _FIX_DATETIME_FIELDS = {
 
 
 @dataclass(frozen=True)
-class _ResultCursor:
-    object_ids: list[str]
-    expires_at: datetime
-    source_view: str = "unknown"
-
-
-@dataclass(frozen=True)
-class _CommandTargetResolution:
-    target_id: str | None
-    error: str | None
-    reason: str | None
-    row_number: int | None
-    source_view: str | None
-
-
-@dataclass(frozen=True)
 class _NLRouteIntentV1:
     route: str
     intent: str
@@ -350,37 +358,6 @@ class _NLRouteIntentV1:
     read_command: dict[str, Any] | None
     mutation_plan: dict[str, Any] | None
     clarification: dict[str, Any] | None
-
-
-_RESULT_CURSORS: dict[tuple[int, int], _ResultCursor] = {}
-
-
-@dataclass(frozen=True)
-class _AffinityTouch:
-    object_id: str
-    touched_at: datetime
-
-
-_MATCHING_AFFINITY: dict[tuple[int, int], list[_AffinityTouch]] = {}
-
-
-@dataclass(frozen=True)
-class _ArchiveClearConfirmation:
-    expires_at: datetime
-
-
-_ARCHIVE_CLEAR_CONFIRMATIONS: dict[tuple[int, int], _ArchiveClearConfirmation] = {}
-
-
-@dataclass(frozen=True)
-class _NLClarificationContext:
-    raw_event_id: str
-    expires_at: datetime
-    unresolved_scope: dict[str, dict[str, Any]]
-    base_plan_input: dict[str, Any]
-
-
-_NL_CLARIFICATION_CONTEXTS: dict[tuple[int, int], _NLClarificationContext] = {}
 
 
 def _coerce_int(value: Any) -> int | None:
@@ -1249,33 +1226,22 @@ def _archive_clear_key(message: discord.Message) -> tuple[int, int]:
 
 
 def _prune_archive_clear_confirmations(now: datetime | None = None) -> None:
-    current = now or datetime.now(timezone.utc)
-    expired = [key for key, value in _ARCHIVE_CLEAR_CONFIRMATIONS.items() if value.expires_at <= current]
-    for key in expired:
-        _ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
+    _state_prune_archive_clear_confirmations(now=now)
 
 
 def _start_archive_clear_confirmation(message: discord.Message) -> None:
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS)
-    _ARCHIVE_CLEAR_CONFIRMATIONS[_archive_clear_key(message)] = _ArchiveClearConfirmation(expires_at=expires_at)
-    _prune_archive_clear_confirmations()
+    _state_store_archive_clear_confirmation(
+        _archive_clear_key(message),
+        ttl_seconds=_ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS,
+    )
 
 
 def _consume_archive_clear_confirmation(message: discord.Message) -> bool:
-    _prune_archive_clear_confirmations()
-    key = _archive_clear_key(message)
-    confirmation = _ARCHIVE_CLEAR_CONFIRMATIONS.get(key)
-    if confirmation is None:
-        return False
-    _ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
-    return True
+    return _state_consume_archive_clear_confirmation(_archive_clear_key(message))
 
 
 def _prune_result_cursors(now: datetime | None = None) -> None:
-    current = now or datetime.now(timezone.utc)
-    expired = [key for key, value in _RESULT_CURSORS.items() if value.expires_at <= current]
-    for key in expired:
-        _RESULT_CURSORS.pop(key, None)
+    _state_prune_result_cursors(now=now)
 
 
 def _record_affinity_touches(
@@ -1285,22 +1251,7 @@ def _record_affinity_touches(
     matching: MatchingConfig,
     now: datetime | None = None,
 ) -> None:
-    current = now or datetime.now(timezone.utc)
-    ttl = timedelta(days=max(1, matching.affinity_ttl_days))
-    cutoff = current - ttl
-    touches = [touch for touch in _MATCHING_AFFINITY.get(key, []) if touch.touched_at >= cutoff]
-    for object_id in object_ids:
-        if not isinstance(object_id, str):
-            continue
-        value = object_id.strip()
-        if not value:
-            continue
-        touches.append(_AffinityTouch(object_id=value, touched_at=current))
-    if not touches:
-        _MATCHING_AFFINITY.pop(key, None)
-        return
-    touches = touches[-matching.affinity_recent_ids_per_thread :]
-    _MATCHING_AFFINITY[key] = touches
+    _state_record_affinity_touches(key, object_ids, matching=matching, now=now)
 
 
 def _load_affinity_scores(
@@ -1309,23 +1260,7 @@ def _load_affinity_scores(
     matching: MatchingConfig,
     now: datetime | None = None,
 ) -> dict[str, float]:
-    current = now or datetime.now(timezone.utc)
-    ttl = timedelta(days=max(1, matching.affinity_ttl_days))
-    cutoff = current - ttl
-    touches = [touch for touch in _MATCHING_AFFINITY.get(key, []) if touch.touched_at >= cutoff]
-    if not touches:
-        _MATCHING_AFFINITY.pop(key, None)
-        return {}
-    _MATCHING_AFFINITY[key] = touches[-matching.affinity_recent_ids_per_thread :]
-    scores: dict[str, float] = {}
-    for touch in _MATCHING_AFFINITY[key]:
-        age = max(0.0, (current - touch.touched_at).total_seconds())
-        ttl_seconds = max(1.0, ttl.total_seconds())
-        decayed = max(0.0, 1.0 - (age / ttl_seconds))
-        existing = scores.get(touch.object_id, 0.0)
-        if decayed > existing:
-            scores[touch.object_id] = decayed
-    return scores
+    return _state_load_affinity_scores(key, matching=matching, now=now)
 
 
 def _store_result_cursor(
@@ -1336,50 +1271,32 @@ def _store_result_cursor(
     source_view: str = "unknown",
 ) -> None:
     surfacing = load_surfacing_config(config)
-    ttl_minutes = max(1, surfacing.pull_cursor_ttl_minutes)
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
-    _RESULT_CURSORS[_cursor_key(message)] = _ResultCursor(
-        object_ids=list(object_ids),
-        expires_at=expires_at,
+    _state_store_result_cursor(
+        _cursor_key(message),
+        object_ids,
+        ttl_minutes=surfacing.pull_cursor_ttl_minutes,
         source_view=source_view,
     )
-    _prune_result_cursors()
 
 
 def _resolve_result_cursor(message: discord.Message, number: int) -> str | None:
-    object_id, _, _ = _resolve_result_cursor_with_reason(message, number)
-    return object_id
+    parent_key = _parent_cursor_key(message)
+    fallback_keys: tuple[tuple[int, int], ...] = ()
+    if parent_key is not None:
+        fallback_keys = (parent_key,)
+    return _state_resolve_result_cursor(_cursor_key(message), number, fallback_keys=fallback_keys)
 
 
 def _resolve_result_cursor_with_reason(message: discord.Message, number: int) -> tuple[str | None, str | None, str | None]:
-    current = datetime.now(timezone.utc)
-    keys = [_cursor_key(message)]
     parent_key = _parent_cursor_key(message)
+    fallback_keys: tuple[tuple[int, int], ...] = ()
     if parent_key is not None:
-        keys.append(parent_key)
-
-    cursor: _ResultCursor | None = None
-    saw_expired = False
-    for key in keys:
-        candidate = _RESULT_CURSORS.get(key)
-        if candidate is None:
-            continue
-        if candidate.expires_at <= current:
-            saw_expired = True
-            _RESULT_CURSORS.pop(key, None)
-            continue
-        cursor = candidate
-        break
-
-    _prune_result_cursors(current)
-    if cursor is None:
-        if saw_expired:
-            return None, "expired", None
-        return None, "missing", None
-    index = number - 1
-    if index < 0 or index >= len(cursor.object_ids):
-        return None, "out_of_range", cursor.source_view
-    return cursor.object_ids[index], None, cursor.source_view
+        fallback_keys = (parent_key,)
+    return _state_resolve_result_cursor_with_reason(
+        _cursor_key(message),
+        number,
+        fallback_keys=fallback_keys,
+    )
 
 
 def _log_numbered_mutation_resolved(
@@ -1464,21 +1381,11 @@ def _resolve_command_target(message: discord.Message, target_token: str) -> _Com
 
 
 def _prune_nl_clarification_contexts(now: datetime | None = None) -> None:
-    current = now or datetime.now(timezone.utc)
-    expired_keys = [key for key, value in _NL_CLARIFICATION_CONTEXTS.items() if value.expires_at <= current]
-    for key in expired_keys:
-        _NL_CLARIFICATION_CONTEXTS.pop(key, None)
+    _state_prune_nl_clarification_contexts(now=now)
 
 
 def _load_nl_clarification_context(message: discord.Message) -> _NLClarificationContext | None:
-    key = _cursor_key(message)
-    context = _NL_CLARIFICATION_CONTEXTS.get(key)
-    if context is None:
-        return None
-    if context.expires_at <= datetime.now(timezone.utc):
-        _NL_CLARIFICATION_CONTEXTS.pop(key, None)
-        return None
-    return context
+    return _state_get_nl_clarification_context(_cursor_key(message))
 
 
 def _store_nl_clarification_context(
@@ -1488,18 +1395,17 @@ def _store_nl_clarification_context(
     unresolved_scope: dict[str, dict[str, Any]],
     base_plan_input: dict[str, Any],
 ) -> None:
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=_NL_CLARIFICATION_TTL_SECONDS)
-    _NL_CLARIFICATION_CONTEXTS[_cursor_key(message)] = _NLClarificationContext(
+    _state_store_nl_clarification_context(
+        _cursor_key(message),
         raw_event_id=raw_event_id,
-        expires_at=expires_at,
         unresolved_scope=unresolved_scope,
         base_plan_input=base_plan_input,
+        ttl_seconds=_NL_CLARIFICATION_TTL_SECONDS,
     )
-    _prune_nl_clarification_contexts()
 
 
 def _clear_nl_clarification_context(message: discord.Message) -> None:
-    _NL_CLARIFICATION_CONTEXTS.pop(_cursor_key(message), None)
+    _state_clear_nl_clarification_context(_cursor_key(message))
 
 
 def _map_target_resolution_reason_to_plan_reason(reason: str | None) -> str:
@@ -1522,113 +1428,18 @@ def _summarize_unresolved_scope(unresolved_scope: dict[str, dict[str, Any]]) -> 
     return "Unresolved operations: " + ", ".join(parts)
 
 
-def _number_sections_for_cursor(sections: list[DigestSection]) -> tuple[list[DigestSection], list[str]]:
-    next_number = 1
-    cursor_object_ids: list[str] = []
-    numbered_sections: list[DigestSection] = []
-
-    for section in sections:
-        numbered_lines: list[str] = []
-        numbered_object_ids: list[str] = []
-        for index, line in enumerate(section.lines):
-            object_id: str | None = None
-            if index < len(section.object_ids):
-                candidate = section.object_ids[index]
-                if isinstance(candidate, str) and candidate.strip():
-                    object_id = candidate
-            if object_id is None:
-                numbered_lines.append(line)
-                continue
-            numbered_lines.append(_format_numbered_row(section.title, line, next_number))
-            numbered_object_ids.append(object_id)
-            cursor_object_ids.append(object_id)
-            next_number += 1
-        numbered_sections.append(
-            DigestSection(
-                title=section.title,
-                lines=numbered_lines,
-                object_ids=numbered_object_ids,
-            )
-        )
-
-    return numbered_sections, cursor_object_ids
-
-
-def _format_numbered_row(section_title: str, line: str, number: int) -> str:
-    parsed = _split_section_row_metadata(section_title, line)
-    if parsed is None:
-        return f"{number}. {line}"
-    title, metadata = parsed
-    if not metadata:
-        return f"{number}. {title}"
-    bullet_lines = "\n".join(f"   • {item}" for item in metadata)
-    return f"{number}. {title}\n{bullet_lines}"
-
-
-def _split_section_row_metadata(section_title: str, line: str) -> tuple[str, list[str]] | None:
-    value = line.strip()
-    if not value:
-        return None
-
-    section_markers: dict[str, list[str]] = {
-        "Admin overdue": [" - due "],
-        "Admin due today": [" - due "],
-        "Admin due soon": [" - due "],
-        "Projects needing attention": [" - blocked", " - stale "],
-        "People to follow up": [" - next contact "],
-        "Completed this week": [" - "],
-        "Open admin without due dates": [" - "],
-        "Blocked or stale projects": [" - blocked", " - stale "],
-        "People overdue for contact": [" - next contact "],
-        "Ideas updated recently": [" - updated "],
-    }
-
-    markers = section_markers.get(section_title, [" - "])
-    for marker in markers:
-        index = value.find(marker)
-        if index <= 0:
-            continue
-        title = value[:index].strip()
-        metadata_value = value[index + 3 :].strip()
-        if not title or not metadata_value:
-            continue
-        metadata = _split_metadata_items(section_title, metadata_value)
-        return title, metadata
-
-    return None
-
-
-def _split_metadata_items(section_title: str, metadata_value: str) -> list[str]:
-    multi_item_sections = {"Completed this week", "Open admin without due dates"}
-    if section_title not in multi_item_sections:
-        return [metadata_value]
-    return [part.strip() for part in metadata_value.split(",") if part.strip()]
-
-
 def _render_numbered_daily_digest_for_command(digest: Any) -> tuple[str, list[str]]:
-    if not isinstance(digest, DailyDigest):
-        render = getattr(digest, "render", None)
-        if callable(render):
-            return str(render()), []
-        return "", []
-    sections, object_ids = _number_sections_for_cursor(digest.sections)
-    rendered = DailyDigest(generated_at=digest.generated_at, sections=sections).render()
-    if object_ids:
-        rendered = f"{rendered}\n\n{_NUMBERED_COMMAND_TIP}"
-    return rendered, object_ids
+    return _state_render_numbered_daily_digest_for_command(
+        digest,
+        numbered_command_tip=_NUMBERED_COMMAND_TIP,
+    )
 
 
 def _render_numbered_weekly_review_for_command(review: Any) -> tuple[str, list[str]]:
-    if not isinstance(review, WeeklyReview):
-        render = getattr(review, "render", None)
-        if callable(render):
-            return str(render()), []
-        return "", []
-    sections, object_ids = _number_sections_for_cursor(review.sections)
-    rendered = WeeklyReview(generated_at=review.generated_at, sections=sections).render()
-    if object_ids:
-        rendered = f"{rendered}\n\n{_NUMBERED_COMMAND_TIP}"
-    return rendered, object_ids
+    return _state_render_numbered_weekly_review_for_command(
+        review,
+        numbered_command_tip=_NUMBERED_COMMAND_TIP,
+    )
 
 
 def _truncate_text(value: str | None, limit: int) -> str:
