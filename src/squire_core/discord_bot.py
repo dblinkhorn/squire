@@ -7,12 +7,8 @@ import logging
 import os
 import re
 import shlex
-import shutil
-import sys
-import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
 
@@ -60,12 +56,41 @@ from squire_core.surfacing import (
     load_surfacing_config,
     render_due_time_reminder_message,
 )
-from squire_core.test_seed import SeedStats, ensure_test_safe_archive_root, seed_test_canonical_objects
 from squire_core.timezone_utils import (
     format_reference_date,
     format_reference_time,
     format_reference_weekday,
     resolve_timezone,
+)
+from squire_core.transport.bootstrap import (
+    apply_test_archive_root_override as _apply_test_archive_root_override,
+    clear_archive_contents as _clear_archive_contents,
+    configure_logging as _configure_logging,
+    next_daily_run as _next_daily_run,
+    next_midnight_run as _next_midnight_run,
+    next_weekly_run as _next_weekly_run,
+    parse_daily_digest_time as _parse_daily_digest_time,
+    parse_weekly_review_day as _parse_weekly_review_day,
+    run_test_mode_reset_seed as _run_test_mode_reset_seed,
+)
+from squire_core.transport.health import (
+    HealthServer as _HealthServer,
+    parse_health_port as _parse_health_port,
+    start_health_server as _start_health_server,
+)
+from squire_core.transport.reminders import (
+    due_time_reminder_key as _due_time_reminder_key,
+    due_time_reminder_ledger_path as _due_time_reminder_ledger_path,
+    flush_due_time_reminder_ledger_entries as _flush_due_time_reminder_ledger_entries,
+    load_due_time_reminder_ledger_entries as _load_due_time_reminder_ledger_entries,
+    load_due_time_reminder_schedule_config as _load_due_time_reminder_schedule_config,
+    notify_due_time_reminder_schedule_changed as _notify_due_time_reminder_schedule_changed,
+    parse_due_time_reminder_offsets as _parse_due_time_reminder_offsets,
+    serialize_due_time_reminder_ledger_entries as _serialize_due_time_reminder_ledger_entries,
+)
+from squire_core.transport.state import (
+    DueTimeReminderScheduleConfig as _DueTimeReminderScheduleConfig,
+    DueTimeReminderSentLedgerEntry as _DueTimeReminderSentLedgerEntry,
 )
 
 _SCHEMA_MAP = {
@@ -358,147 +383,6 @@ class _NLClarificationContext:
 _NL_CLARIFICATION_CONTEXTS: dict[tuple[int, int], _NLClarificationContext] = {}
 
 
-@dataclass(frozen=True)
-class _DueTimeReminderScheduleConfig:
-    offsets_minutes: tuple[int, ...]
-    late_grace_minutes: int
-    reconcile_minutes: int
-    channel_id: int | None
-    user_id: int | None
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.offsets_minutes)
-
-
-@dataclass(frozen=True)
-class _DueTimeReminderSentLedgerEntry:
-    key: str
-    object_id: str
-    due_at: datetime
-    offset_minutes: int
-    fire_at: datetime
-    sent_at: datetime
-    expires_at: datetime
-
-
-class _MaxLevelFilter(logging.Filter):
-    def __init__(self, max_level: int) -> None:
-        super().__init__()
-        self._max_level = max_level
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        return record.levelno < self._max_level
-
-
-def _configure_logging() -> None:
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-
-    stdout_handler = logging.StreamHandler(stream=sys.stdout)
-    stdout_handler.setLevel(logging.INFO)
-    stdout_handler.addFilter(_MaxLevelFilter(logging.ERROR))
-    stdout_handler.setFormatter(formatter)
-
-    stderr_handler = logging.StreamHandler(stream=sys.stderr)
-    stderr_handler.setLevel(logging.ERROR)
-    stderr_handler.setFormatter(formatter)
-
-    root.addHandler(stdout_handler)
-    root.addHandler(stderr_handler)
-
-
-class _HealthRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:  # noqa: N802
-        path = self.path.split("?", 1)[0].split("#", 1)[0]
-        if path not in ("/health", "/health/"):
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-
-        payload = b'{"status":"ok"}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def log_message(self, format: str, *args: object) -> None:
-        # Keep health probe noise out of default stderr logging.
-        logging.debug("health_http %s", format % args)
-
-
-class _HealthServer:
-    def __init__(self, host: str, port: int) -> None:
-        self._server = ThreadingHTTPServer((host, port), _HealthRequestHandler)
-        self._server.daemon_threads = True
-        self._thread = threading.Thread(
-            target=self._server.serve_forever,
-            name="squire-health-server",
-            daemon=True,
-        )
-
-    @property
-    def port(self) -> int:
-        return int(self._server.server_port)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=2.0)
-
-
-def _parse_health_port(value: str | None) -> int | None:
-    if value is None:
-        return _DEFAULT_HEALTH_PORT
-
-    trimmed = value.strip()
-    if not trimmed:
-        return _DEFAULT_HEALTH_PORT
-    if not trimmed.isdigit():
-        raise ValueError("HEALTH_PORT must be an integer between 0 and 65535.")
-
-    parsed = int(trimmed)
-    if parsed > 65535:
-        raise ValueError("HEALTH_PORT must be between 0 and 65535.")
-    if parsed == 0:
-        return None
-    return parsed
-
-
-def _start_health_server() -> _HealthServer | None:
-    host = os.getenv("HEALTH_HOST", _DEFAULT_HEALTH_HOST).strip() or _DEFAULT_HEALTH_HOST
-    try:
-        port = _parse_health_port(os.getenv("HEALTH_PORT"))
-    except ValueError as exc:
-        logging.error("health_server_disabled reason=invalid_port error=%s", exc)
-        return None
-
-    if port is None:
-        logging.info("health_server_disabled reason=port_zero")
-        return None
-
-    try:
-        server = _HealthServer(host, port)
-    except OSError as exc:
-        logging.error("health_server_start_failed host=%s port=%s error=%s", host, port, exc)
-        return None
-
-    server.start()
-    logging.info("health_server_started host=%s port=%s", host, server.port)
-    return server
-
-
 def _coerce_int(value: Any) -> int | None:
     if isinstance(value, int):
         return value
@@ -507,241 +391,6 @@ def _coerce_int(value: Any) -> int | None:
         if trimmed.isdigit():
             return int(trimmed)
     return None
-
-
-def _parse_daily_digest_time(value: Any) -> time | None:
-    if not value:
-        return None
-    if isinstance(value, time):
-        return value
-    if not isinstance(value, str):
-        value = str(value)
-    parts = value.strip().split(":")
-    if len(parts) < 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
-    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-        return None
-    return time(hour=hour, minute=minute)
-
-
-def _next_daily_run(now: datetime, target: time) -> datetime:
-    candidate = now.replace(hour=target.hour, minute=target.minute, second=0, microsecond=0)
-    if candidate <= now:
-        candidate = candidate + timedelta(days=1)
-    return candidate
-
-
-def _parse_weekly_review_day(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, int):
-        if 0 <= value <= 6:
-            return value
-        return None
-    label = str(value).strip().upper()
-    return _WEEKDAY_MAP.get(label)
-
-
-def _next_weekly_run(now: datetime, target_day: int, target_time: time) -> datetime:
-    days_ahead = (target_day - now.weekday()) % 7
-    candidate = now.replace(hour=target_time.hour, minute=target_time.minute, second=0, microsecond=0)
-    candidate = candidate + timedelta(days=days_ahead)
-    if candidate <= now:
-        candidate = candidate + timedelta(days=7)
-    return candidate
-
-
-def _next_midnight_run(now: datetime) -> datetime:
-    candidate = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if candidate <= now:
-        candidate = candidate + timedelta(days=1)
-    return candidate
-
-
-def _parse_due_time_reminder_offsets(value: Any) -> tuple[int, ...]:
-    if not isinstance(value, list):
-        return ()
-    offsets: set[int] = set()
-    for item in value:
-        parsed: int | None = None
-        if isinstance(item, bool):
-            continue
-        if isinstance(item, int):
-            parsed = item
-        elif isinstance(item, float) and item.is_integer():
-            parsed = int(item)
-        elif isinstance(item, str):
-            trimmed = item.strip()
-            if trimmed.isdigit():
-                parsed = int(trimmed)
-        if parsed is None or parsed <= 0:
-            continue
-        offsets.add(parsed)
-    return tuple(sorted(offsets, reverse=True))
-
-
-def _parse_non_negative_int(value: Any, fallback: int) -> int:
-    parsed = _coerce_int(value)
-    if parsed is None or parsed < 0:
-        return fallback
-    return parsed
-
-
-def _parse_minimum_int(value: Any, *, fallback: int, minimum: int) -> int:
-    parsed = _coerce_int(value)
-    if parsed is None or parsed < minimum:
-        return fallback
-    return parsed
-
-
-def _load_due_time_reminder_schedule_config(schedule: dict[str, Any]) -> _DueTimeReminderScheduleConfig:
-    if "due_time_reminder_offsets_minutes" in schedule:
-        offsets = _parse_due_time_reminder_offsets(schedule.get("due_time_reminder_offsets_minutes"))
-    else:
-        offsets = _DUE_TIME_REMINDER_DEFAULT_OFFSETS_MINUTES
-    return _DueTimeReminderScheduleConfig(
-        offsets_minutes=offsets,
-        late_grace_minutes=_parse_non_negative_int(schedule.get("due_time_reminder_late_grace_minutes"), 10),
-        reconcile_minutes=_parse_minimum_int(
-            schedule.get("due_time_reminder_reconcile_minutes"),
-            fallback=60,
-            minimum=1,
-        ),
-        channel_id=_coerce_int(schedule.get("due_time_reminder_channel_id")),
-        user_id=_coerce_int(schedule.get("due_time_reminder_user_id")),
-    )
-
-
-def _due_time_reminder_key(event: DueTimeReminderEvent) -> str:
-    return f"{event.object_id}|{event.due_at.isoformat()}|{event.offset_minutes}"
-
-
-def _due_time_reminder_ledger_path(config: dict[str, Any]) -> Path:
-    events_derived = config.get("paths", {}).get("events_derived", "events/derived")
-    return Path(str(events_derived)) / "runtime" / _DUE_TIME_REMINDER_LEDGER_FILENAME
-
-
-def _coerce_timezone_datetime(value: Any, tz: tzinfo) -> datetime | None:
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, str):
-        trimmed = value.strip()
-        if not trimmed:
-            return None
-        try:
-            dt = datetime.fromisoformat(trimmed)
-        except ValueError:
-            return None
-    else:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=tz)
-    return dt.astimezone(tz)
-
-
-def _serialize_due_time_reminder_ledger_entries(
-    entries: dict[str, _DueTimeReminderSentLedgerEntry],
-    *,
-    now: datetime,
-) -> dict[str, Any]:
-    payload_entries = []
-    for key in sorted(entries):
-        entry = entries[key]
-        payload_entries.append(
-            {
-                "key": entry.key,
-                "object_id": entry.object_id,
-                "due_at": entry.due_at.isoformat(),
-                "offset_minutes": entry.offset_minutes,
-                "fire_at": entry.fire_at.isoformat(),
-                "sent_at": entry.sent_at.isoformat(),
-                "expires_at": entry.expires_at.isoformat(),
-            }
-        )
-    return {
-        "schema_version": 1,
-        "updated_at": now.isoformat(),
-        "entries": payload_entries,
-    }
-
-
-def _load_due_time_reminder_ledger_entries(
-    path: Path,
-    *,
-    now: datetime,
-) -> dict[str, _DueTimeReminderSentLedgerEntry]:
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logging.warning("due_time_reminder_ledger_load_failed error=%s", exc)
-        return {}
-    entries_raw = payload.get("entries")
-    if not isinstance(entries_raw, list):
-        return {}
-    entries: dict[str, _DueTimeReminderSentLedgerEntry] = {}
-    for raw_entry in entries_raw:
-        if not isinstance(raw_entry, dict):
-            continue
-        key = raw_entry.get("key")
-        object_id = raw_entry.get("object_id")
-        due_at_raw = raw_entry.get("due_at")
-        fire_at_raw = raw_entry.get("fire_at")
-        sent_at_raw = raw_entry.get("sent_at")
-        expires_at_raw = raw_entry.get("expires_at")
-        offset_raw = raw_entry.get("offset_minutes")
-        if not isinstance(key, str) or not isinstance(object_id, str):
-            continue
-        due_at = _coerce_timezone_datetime(due_at_raw, timezone.utc)
-        fire_at = _coerce_timezone_datetime(fire_at_raw, timezone.utc)
-        sent_at = _coerce_timezone_datetime(sent_at_raw, timezone.utc)
-        expires_at = _coerce_timezone_datetime(expires_at_raw, timezone.utc)
-        offset = _coerce_int(offset_raw)
-        if due_at is None or fire_at is None or sent_at is None or expires_at is None or offset is None:
-            continue
-        if expires_at <= now:
-            continue
-        entries[key] = _DueTimeReminderSentLedgerEntry(
-            key=key,
-            object_id=object_id,
-            due_at=due_at,
-            offset_minutes=offset,
-            fire_at=fire_at,
-            sent_at=sent_at,
-            expires_at=expires_at,
-        )
-    return entries
-
-
-def _flush_due_time_reminder_ledger_entries(
-    path: Path,
-    *,
-    entries: dict[str, _DueTimeReminderSentLedgerEntry],
-    now: datetime,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _serialize_due_time_reminder_ledger_entries(entries, now=now)
-    tmp_path = path.parent / f"{path.name}.tmp"
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=False), encoding="utf-8")
-    tmp_path.replace(path)
-
-
-def _notify_due_time_reminder_schedule_changed(config: dict[str, Any], *, clear_state: bool = False) -> None:
-    callback = config.get(_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY)
-    if not callable(callback):
-        return
-    try:
-        callback(clear_state=clear_state)
-    except TypeError:
-        callback()
-    except Exception as exc:
-        logging.warning("due_time_reminder_schedule_notify_failed error=%s", exc)
 
 
 def _parse_positive_int(value: str) -> int | None:
@@ -1620,110 +1269,6 @@ def _consume_archive_clear_confirmation(message: discord.Message) -> bool:
         return False
     _ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
     return True
-
-
-def _clear_archive_contents(archive_root: str | Path) -> int:
-    root = Path(archive_root).expanduser()
-    if not root.exists():
-        raise ValueError(f"archive_root does not exist: {root}")
-    if not root.is_dir():
-        raise ValueError(f"archive_root is not a directory: {root}")
-
-    removed = 0
-    for child in root.iterdir():
-        if child.name == ".git":
-            continue
-        if child.is_dir() and not child.is_symlink():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
-        removed += 1
-    return removed
-
-
-def _run_test_mode_reset_seed(
-    config: dict[str, Any],
-    *,
-    env_value: str | None = None,
-    now: datetime | None = None,
-) -> SeedStats | None:
-    raw_env = env_value if env_value is not None else os.getenv("SQUIRE_ENV")
-    if str(raw_env or "").strip().lower() != "test":
-        return None
-
-    archive_root = config.get("archive_root")
-    if not isinstance(archive_root, str) or not archive_root.strip():
-        raise ValueError("archive_root is not configured.")
-
-    paths = config.get("paths")
-    if not isinstance(paths, dict):
-        raise ValueError("paths are not configured.")
-    objects_root = paths.get("objects_root")
-    index_db = paths.get("index_db")
-    if not isinstance(objects_root, str) or not objects_root.strip():
-        raise ValueError("paths.objects_root is not configured.")
-    if not isinstance(index_db, str) or not index_db.strip():
-        raise ValueError("paths.index_db is not configured.")
-
-    root = ensure_test_safe_archive_root(archive_root)
-    root.mkdir(parents=True, exist_ok=True)
-    logging.info("test_mode_startup_enabled archive_root=%s", root)
-
-    removed = _clear_archive_contents(root)
-    logging.info("test_mode_reset_completed removed_entries=%s", removed)
-
-    stats = seed_test_canonical_objects(
-        objects_root=objects_root,
-        schema_path=Path("config/schemas/canonical_object_v1.json"),
-        now=now,
-    )
-    logging.info(
-        "test_mode_seed_completed admin=%s projects=%s people=%s ideas=%s",
-        stats.admin_count,
-        stats.projects_count,
-        stats.people_count,
-        stats.ideas_count,
-    )
-
-    rebuild_index(objects_root, index_db)
-    logging.info("test_mode_rebuild_index_completed")
-    return stats
-
-
-def _apply_test_archive_root_override(
-    config: dict[str, Any],
-    *,
-    env_value: str | None = None,
-) -> dict[str, Any]:
-    raw_env = env_value if env_value is not None else os.getenv("SQUIRE_ENV")
-    if str(raw_env or "").strip().lower() != "test":
-        return config
-
-    override = config.get("test_archive_root")
-    if not isinstance(override, str) or not override.strip():
-        return config
-
-    updated = dict(config)
-    updated["archive_root"] = override.strip()
-
-    paths = config.get("paths")
-    if isinstance(paths, dict):
-        relative_paths: dict[str, Any] = {}
-        for key, value in paths.items():
-            candidate = Path(str(value)).expanduser()
-            if not candidate.is_absolute():
-                relative_paths[str(key)] = value
-        if relative_paths:
-            updated["paths"] = relative_paths
-        else:
-            updated.pop("paths", None)
-
-    logging.info(
-        "test_mode_archive_root_override enabled=true archive_root=%s test_archive_root=%s",
-        config.get("archive_root"),
-        override.strip(),
-    )
-    return updated
 
 
 def _prune_result_cursors(now: datetime | None = None) -> None:

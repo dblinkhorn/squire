@@ -94,16 +94,23 @@
 
 ## Multi-Transport Refactor (Current Decisions)
 
-- Stage 0 scaffolding is complete with no runtime rewiring:
+- Stage 0 scaffolding is complete:
   - `src/squire_core/transport/{__init__.py,contracts.py,state.py,bootstrap.py,health.py,commands.py,routing.py,reminders.py}`
   - `src/squire_core/transport/discord/{__init__.py,adapter.py,views.py,scheduler.py}`
   - `src/squire_core/transport/slack/{__init__.py,adapter.py,scheduler.py}`
+- Stage 1 helper extraction is complete:
+  - implemented health helpers in `src/squire_core/transport/health.py`
+  - implemented bootstrap/time-parse/test-mode helpers in `src/squire_core/transport/bootstrap.py`
+  - implemented due-time reminder schedule/ledger helpers in `src/squire_core/transport/reminders.py`
+  - `src/squire_core/discord_bot.py` now imports these helpers as compatibility shims (behavior preserved).
 - `discord_bot.py` is intentionally retained as a temporary compatibility shim during staged extraction; target end-state removes it after entrypoint/test migration.
 - Final runtime composition-root direction is `python -m squire_core.runtime` (`src/squire_core/runtime.py`) after cutover stage.
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
-- Stage 0 validation:
+- Stage 1 validation:
   - `.venv/bin/python -m py_compile $(rg --files src/squire_core/transport)` passed.
-  - focused suites passed except known environment-restricted socket-bind failures in `tests/test_health_server.py`.
+  - `.venv/bin/python -m pytest -q tests/test_discord_schedule.py tests/test_test_mode_startup.py` passed (`20 passed`).
+  - `.venv/bin/python -m pytest -q tests/test_discord_commands.py` passed (`37 passed`).
+  - `tests/test_health_server.py` still has known environment-restricted socket-bind failures in this sandbox (parse-only health tests pass).
 
 ## Known Constraints and Loose Ends
 
