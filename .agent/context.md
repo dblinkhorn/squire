@@ -103,6 +103,10 @@
   - implemented bootstrap/time-parse/test-mode helpers in `src/squire_core/transport/bootstrap.py`
   - implemented due-time reminder schedule/ledger helpers in `src/squire_core/transport/reminders.py`
   - `src/squire_core/discord_bot.py` now imports these helpers as compatibility shims (behavior preserved).
+- Stage 2 shared state extraction is complete:
+  - cursor/affinity/clarification/archive-clear helper logic moved into `src/squire_core/transport/state.py`
+  - transport state now provides explicit get/store/prune APIs plus numbered digest/review rendering helpers
+  - `src/squire_core/discord_bot.py` delegates to transport-state helpers while retaining compatibility wrappers and thread-parent cursor fallback semantics.
 - `discord_bot.py` is intentionally retained as a temporary compatibility shim during staged extraction; target end-state removes it after entrypoint/test migration.
 - Final runtime composition-root direction is `python -m squire_core.runtime` (`src/squire_core/runtime.py`) after cutover stage.
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
@@ -111,6 +115,10 @@
   - `.venv/bin/python -m pytest -q tests/test_discord_schedule.py tests/test_test_mode_startup.py` passed (`20 passed`).
   - `.venv/bin/python -m pytest -q tests/test_discord_commands.py` passed (`37 passed`).
   - `tests/test_health_server.py` still has known environment-restricted socket-bind failures in this sandbox (parse-only health tests pass).
+- Stage 2 validation:
+  - `.venv/bin/python -m py_compile src/squire_core/transport/state.py src/squire_core/discord_bot.py` passed.
+  - `.venv/bin/python -m pytest -q tests/test_surfacing_cursor.py tests/test_discord_commands.py tests/test_nl_multi_operation_clarification.py` passed (`42 passed`).
+  - `.venv/bin/python -m pytest -q` passed except the same known environment-restricted `tests/test_health_server.py` socket-bind failures (`2 failed`, `116 passed`).
 
 ## Known Constraints and Loose Ends
 
