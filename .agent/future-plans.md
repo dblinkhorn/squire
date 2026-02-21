@@ -15,6 +15,13 @@ Purpose:
 
 - Potential follow-on commands: `!due [days]`, `!archive`, `!help`, `!rebuild-index`.
 - Optional Discord bulk-maintenance controls on surfaced lists (for example multi-select done flow).
+- UX gap to address: users can naturally ask to "archive number X", but there is no item-level archive command yet, and NL phrasing can be misread as destructive global `clear-archive`.
+- Proposed fix path:
+  - add `!archive <id|number>` for all object types (`archived=true`) to remove items from normal surfacing
+  - expand `!done <id|number>` beyond admin where type semantics are clear (`projects -> completed`, `ideas -> done`)
+  - keep `people` out of `!done`; use `!archive` or explicit `!fix`
+  - add symmetry commands `!reopen`/`!unarchive`
+  - add NL guardrail so item-targeted "archive <number>" requests never map to global `clear_archive`
 
 ## Integration Ideas
 

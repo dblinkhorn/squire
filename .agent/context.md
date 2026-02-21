@@ -92,6 +92,19 @@
   - `mutation_plan_enabled`
   - `plan_auto_aliasing`
 
+## Multi-Transport Refactor (Current Decisions)
+
+- Stage 0 scaffolding is complete with no runtime rewiring:
+  - `src/squire_core/transport/{__init__.py,contracts.py,state.py,bootstrap.py,health.py,commands.py,routing.py,reminders.py}`
+  - `src/squire_core/transport/discord/{__init__.py,adapter.py,views.py,scheduler.py}`
+  - `src/squire_core/transport/slack/{__init__.py,adapter.py,scheduler.py}`
+- `discord_bot.py` is intentionally retained as a temporary compatibility shim during staged extraction; target end-state removes it after entrypoint/test migration.
+- Final runtime composition-root direction is `python -m squire_core.runtime` (`src/squire_core/runtime.py`) after cutover stage.
+- Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
+- Stage 0 validation:
+  - `.venv/bin/python -m py_compile $(rg --files src/squire_core/transport)` passed.
+  - focused suites passed except known environment-restricted socket-bind failures in `tests/test_health_server.py`.
+
 ## Known Constraints and Loose Ends
 
 - Clarification context is in-memory runtime state and does not persist across process restarts.
