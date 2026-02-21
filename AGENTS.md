@@ -13,6 +13,14 @@ This file is the workflow entrypoint and index for agent sessions.
 - Keep docs aligned with behavior when functionality changes (`docs/` and `README.md` if user-facing).
 - For Python work, follow standard Python conventions unless project docs explicitly say otherwise.
 
+## Transport Refactor Intent
+
+- During the multi-transport refactor, keep shared runtime/application modules transport-agnostic.
+- Prefer limiting SDK imports (`discord.py`, Slack SDK, etc.) to transport adapter modules.
+- This is currently a design intention and review guideline, not a strict CI import-boundary gate.
+- Treat `/Users/dblinkhorn/squire/src/squire_core/discord_bot.py` as a temporary compatibility shim during staged extraction; target end-state removes it after adapter/runtime migration is complete.
+- Runtime entrypoint direction for multi-transport support is `/Users/dblinkhorn/squire/src/squire_core/runtime.py` (typically invoked as `python -m squire_core.runtime`).
+
 ## Scope Discipline (Docs and Tests)
 
 - Distinguish functional behavior changes from low-impact, minor changes.

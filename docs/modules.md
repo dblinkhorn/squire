@@ -30,6 +30,27 @@ The index is rebuildable from canonical objects and is not authoritative state.
 The surfacer provides push (scheduled daily/weekly digest/review) and pull (interactive commands), with configurable
 ID visibility for scheduled outputs and ID-inclusive manual pull lists. It is read-only and does not mutate canonical state.
 
+## Shared Transport Runtime (Refactor Direction)
+
+The approved refactor direction introduces shared modules for transport-agnostic runtime behavior (for example command
+orchestration, NL routing/normalization, cursor/clarification state handling, and reminder scheduling helpers).
+
+These modules are intended to be reused across Discord, Slack, and future interfaces.
+
+## Transport Adapters (Refactor Direction)
+
+Adapters are responsible for platform-specific concerns only:
+
+1. event ingestion and platform identity/channel resolution
+2. platform message send/edit/reaction/action mechanics
+3. platform UI components and scheduler loop wiring
+
+Design intent:
+
+1. keep transport SDK imports in adapter modules
+2. keep shared runtime logic transport-neutral
+3. use adapter-to-shared contracts instead of passing SDK-native objects into shared layers
+
 ## Optional Providers
 
 Current runtime ships with Discord ingest and OpenAI model provider integration. Additional providers or ingest
