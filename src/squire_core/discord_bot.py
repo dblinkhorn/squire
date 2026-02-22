@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import heapq
 import json
 import logging
 import os
@@ -9,7 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Any, Awaitable, Callable, cast
+from typing import Any, Callable
 
 import discord
 from dotenv import load_dotenv
@@ -23,7 +22,7 @@ from squire_core.config_utils import (
     load_nl_command_routing_config,
     normalize_archive_config,
 )
-from squire_core.decision_flow import DecisionRouting, apply_decision_to_derived, evaluate_decision
+from squire_core.decision_flow import apply_decision_to_derived, evaluate_decision
 from squire_core.derived_event_store import write_derived_event
 from squire_core.id_utils import generate_prefixed_id
 from squire_core.indexer import rebuild_index
@@ -74,6 +73,17 @@ from squire_core.transport.bootstrap import (
 )
 from squire_core.transport import commands as _transport_commands
 from squire_core.transport import routing as _transport_routing
+from squire_core.transport.discord.adapter import (
+    DiscordSquireBot as _DiscordAdapterBot,
+    safe_add_reaction as _discord_safe_add_reaction,
+    send_response as _discord_send_response,
+    swap_reaction as _discord_swap_reaction,
+)
+from squire_core.transport.discord.views import (
+    AutoApplyFeedbackView,
+    MutationPendingView,
+    PendingActionView,
+)
 from squire_core.transport.health import (
     HealthServer as _HealthServer,
     parse_health_port as _parse_health_port,
@@ -124,20 +134,11 @@ _SCHEMA_MAP = {
     "ideas": Path("config/schemas/derived_event_ideas_v1.json"),
     "admin": Path("config/schemas/derived_event_admin_v1.json"),
 }
-_VIEW_TIMEOUT_SECONDS = 3600
-_SELECT_OPTION_LIMIT = 25
-_SELECT_LABEL_LIMIT = 100
-_SELECT_DESCRIPTION_LIMIT = 100
 _ARCHIVE_CLEAR_CONFIRM_TTL_SECONDS = 120
 _DEFAULT_HEALTH_HOST = "0.0.0.0"
 _DEFAULT_HEALTH_PORT = 8080
 _DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY = "_due_time_reminder_notify"
-_DUE_TIME_REMINDER_LEDGER_FILENAME = "due_time_reminder_sent_ledger_v1.json"
-_DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS = 48
-_DUE_TIME_REMINDER_HORIZON_HOURS = 36
-_DUE_TIME_REMINDER_EMPTY_QUEUE_WAIT_SECONDS = 300
 _DUE_TIME_REMINDER_DEFAULT_OFFSETS_MINUTES = (90, 15)
-_DUE_TIME_REMINDER_ALLOWED_STATUSES = {"open", "blocked"}
 _PENDING_CONTROLS_INSTRUCTION = (
     "Use the buttons below to confirm which note should be updated, choose to create a new note, or cancel (do nothing):"
 )
@@ -1296,16 +1297,6 @@ def _render_numbered_weekly_review_for_command(review: Any) -> tuple[str, list[s
     )
 
 
-def _truncate_text(value: str | None, limit: int) -> str:
-    if not value:
-        return ""
-    if len(value) <= limit:
-        return value
-    if limit <= 3:
-        return value[:limit]
-    return value[: limit - 3].rstrip() + "..."
-
-
 def _refresh_index(
     objects_root: str | Path,
     index_db: str | Path,
@@ -1394,398 +1385,6 @@ async def _candidate_queries_from_llm(
         if value:
             cleaned.append(value)
     return cleaned
-
-
-class _CandidateSelect(discord.ui.Select):
-    def __init__(self, view: "PendingActionView", options: list[discord.SelectOption]) -> None:
-        super().__init__(
-            placeholder="Choose a different target (optional)",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
-        self._view_ref = view
-
-    async def callback(self, interaction: discord.Interaction) -> None:  # type: ignore[override]
-        if not self._view_ref.is_author(interaction):
-            await interaction.response.send_message("This selection is not for you.")
-            return
-        if not self.values:
-            await interaction.response.defer()
-            return
-        self._view_ref.selected_target_id = self.values[0]
-        await interaction.response.defer()
-
-
-class PendingActionView(discord.ui.View):
-    def __init__(
-        self,
-        *,
-        pending_id: str,
-        pending_root: str | Path,
-        objects_root: str | Path,
-        index_db: str | Path,
-        schema_path: Path,
-        author_id: int,
-        candidates: list[dict[str, Any]],
-        default_target_id: str | None,
-        matching: MatchingConfig | None,
-        affinity_key: tuple[int, int],
-        on_canonical_change: Callable[[], None] | None = None,
-        confirm_action: str | None = None,
-        selected_target_id: str | None = None,
-    ) -> None:
-        super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
-        self.pending_id = pending_id
-        self.pending_root = pending_root
-        self.objects_root = objects_root
-        self.index_db = index_db
-        self.schema_path = schema_path
-        self.author_id = author_id
-        self.selected_target_id = selected_target_id if selected_target_id else default_target_id
-        self._default_target_id = default_target_id
-        self._matching = matching
-        self._affinity_key = affinity_key
-        self._on_canonical_change = on_canonical_change
-        self._candidates = [candidate for candidate in candidates if isinstance(candidate, dict)]
-        self._confirm_action = confirm_action
-
-        if confirm_action:
-            self._render_confirmation()
-        else:
-            self._render_primary()
-
-    def _render_primary(self) -> None:
-        self.clear_items()
-        if self._default_target_id and len(self._candidates) > 1:
-            options = []
-            selected = self.selected_target_id or self._default_target_id
-            for candidate in self._candidates[:_SELECT_OPTION_LIMIT]:
-                candidate_id = candidate.get("id")
-                if not isinstance(candidate_id, str):
-                    continue
-                title = candidate.get("title")
-                label = _truncate_text(str(title or candidate_id), _SELECT_LABEL_LIMIT) or candidate_id
-                snippet = _truncate_text(str(candidate.get("snippet") or ""), _SELECT_DESCRIPTION_LIMIT)
-                options.append(
-                    discord.SelectOption(
-                        label=label,
-                        value=candidate_id,
-                        description=snippet if snippet else None,
-                        default=candidate_id == selected,
-                    )
-                )
-            if options:
-                self.add_item(_CandidateSelect(self, options))
-        self._add_button("Confirm", discord.ButtonStyle.green, self._begin_confirm_update, row=1)
-        self._add_button("Create New", discord.ButtonStyle.primary, self._begin_confirm_create_new, row=1)
-        self._add_button("Cancel", discord.ButtonStyle.gray, self._begin_confirm_cancel, row=1)
-
-    def _render_confirmation(self) -> None:
-        self.clear_items()
-        action = self._confirm_action or ""
-        if action == "confirm":
-            label = "Yes, apply update"
-            style = discord.ButtonStyle.green
-        elif action == "create_new":
-            label = "Yes, create new"
-            style = discord.ButtonStyle.primary
-        else:
-            label = "Yes, cancel (do nothing)"
-            style = discord.ButtonStyle.gray
-        self._add_button(label, style, self._confirm_selected_action, row=1)
-        self._add_button("No, go back", discord.ButtonStyle.secondary, self._restore_primary_actions, row=1)
-
-    def _add_button(
-        self,
-        label: str,
-        style: discord.ButtonStyle,
-        handler: Callable[[discord.Interaction], Awaitable[None]],
-        *,
-        row: int | None = None,
-    ) -> None:
-        button = discord.ui.Button(label=label, style=style, row=row)
-
-        async def _callback(interaction: discord.Interaction) -> None:
-            await handler(interaction)
-
-        button.callback = _callback  # type: ignore[assignment]
-        self.add_item(button)
-
-    def _spawn_view(self, *, confirm_action: str | None) -> "PendingActionView":
-        return PendingActionView(
-            pending_id=self.pending_id,
-            pending_root=self.pending_root,
-            objects_root=self.objects_root,
-            index_db=self.index_db,
-            schema_path=self.schema_path,
-            author_id=self.author_id,
-            candidates=self._candidates,
-            default_target_id=self._default_target_id,
-            matching=self._matching,
-            affinity_key=self._affinity_key,
-            on_canonical_change=self._on_canonical_change,
-            confirm_action=confirm_action,
-            selected_target_id=self.selected_target_id,
-        )
-
-    def is_author(self, interaction: discord.Interaction) -> bool:
-        user = interaction.user
-        return bool(user and user.id == self.author_id)
-
-    async def _begin_confirm_update(self, interaction: discord.Interaction) -> None:
-        await self._show_confirmation(interaction, "confirm")
-
-    async def _begin_confirm_create_new(self, interaction: discord.Interaction) -> None:
-        await self._show_confirmation(interaction, "create_new")
-
-    async def _begin_confirm_cancel(self, interaction: discord.Interaction) -> None:
-        await self._show_confirmation(interaction, "cancel")
-
-    async def _show_confirmation(self, interaction: discord.Interaction, action: str) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This action is not for you.")
-            return
-        confirm_view = self._spawn_view(confirm_action=action)
-        await interaction.response.edit_message(view=confirm_view)
-
-    async def _restore_primary_actions(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This action is not for you.")
-            return
-        original_view = self._spawn_view(confirm_action=None)
-        await interaction.response.edit_message(view=original_view)
-
-    async def _confirm_selected_action(self, interaction: discord.Interaction) -> None:
-        action = self._confirm_action
-        if action == "confirm":
-            await self._apply_pending(interaction)
-            return
-        if action == "create_new":
-            await self._create_new_pending(interaction)
-            return
-        await self._cancel_pending(interaction)
-
-    async def _apply_pending(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This confirmation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        derived = pending.derived
-        ops = derived.get("proposed_operations") or []
-        if (
-            self.selected_target_id
-            and self._default_target_id
-            and self.selected_target_id != self._default_target_id
-            and isinstance(ops, list)
-            and len(ops) == 1
-            and isinstance(ops[0], dict)
-        ):
-            updated_op = dict(ops[0])
-            updated_op["target_id"] = self.selected_target_id
-            derived = dict(derived)
-            derived["proposed_operations"] = [updated_op]
-        try:
-            result = apply_operations(
-                derived,
-                objects_root=self.objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=self.schema_path,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception as exc:
-            logging.exception("pending_apply_failed id=%s", self.pending_id)
-            _write_pending_with_status(self.pending_root, pending, "failed", derived=derived)
-            await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
-            return
-        await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
-        if self._on_canonical_change:
-            self._on_canonical_change()
-        if self._matching:
-            touched_ids = _extract_target_ids_from_derived(derived)
-            _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
-        _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived)
-        fallback_title = _candidate_title(self._candidates, self.selected_target_id)
-        await interaction.response.send_message(
-            _format_apply_success_message(written_paths=result.written_paths, fallback_title=fallback_title)
-        )
-        await _disable_view(interaction, clear_pending_instructions=True)
-
-    async def _create_new_pending(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This action is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        derived = _force_create_derived(pending.derived)
-        try:
-            result = apply_operations(
-                derived,
-                objects_root=self.objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=self.schema_path,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception:
-            logging.exception("pending_create_new_failed id=%s", self.pending_id)
-            _write_pending_with_status(self.pending_root, pending, "failed", derived=derived)
-            await interaction.response.send_message("Failed to create a new item. Check logs for details.")
-            return
-        await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
-        if self._on_canonical_change:
-            self._on_canonical_change()
-        if self._matching:
-            touched_ids = _extract_ids_from_written_paths(result.written_paths)
-            _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
-        _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived)
-        title = _first_title_from_paths(result.written_paths)
-        if title:
-            await interaction.response.send_message(f'Created a new note "{title}".')
-        else:
-            await interaction.response.send_message(f"Created a new note. ({len(result.written_paths)} item(s) updated.)")
-        await _disable_view(interaction, clear_pending_instructions=True)
-
-    async def _cancel_pending(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This cancellation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        _write_pending_with_status(self.pending_root, pending, "cancelled")
-        await interaction.response.send_message("Cancelled. No changes made.")
-        await _disable_view(interaction, clear_pending_instructions=True)
-
-
-class MutationPendingView(discord.ui.View):
-    def __init__(
-        self,
-        *,
-        pending_id: str,
-        pending_root: str | Path,
-        objects_root: str | Path,
-        index_db: str | Path,
-        author_id: int,
-        matching: MatchingConfig | None,
-        affinity_key: tuple[int, int],
-        on_canonical_change: Callable[[], None] | None = None,
-    ) -> None:
-        super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
-        self.pending_id = pending_id
-        self.pending_root = pending_root
-        self.objects_root = objects_root
-        self.index_db = index_db
-        self.author_id = author_id
-        self._matching = matching
-        self._affinity_key = affinity_key
-        self._on_canonical_change = on_canonical_change
-
-    def is_author(self, interaction: discord.Interaction) -> bool:
-        user = interaction.user
-        return bool(user and user.id == self.author_id)
-
-    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green)
-    async def confirm_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This confirmation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        try:
-            result = apply_operations(
-                pending.derived,
-                objects_root=self.objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=None,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception:
-            logging.exception("nl_mutation_pending_apply_failed id=%s", self.pending_id)
-            _write_pending_with_status(self.pending_root, pending, "failed")
-            await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
-            return
-        await _refresh_index_async(self.objects_root, self.index_db, matching=self._matching)
-        if self._on_canonical_change:
-            self._on_canonical_change()
-        if self._matching:
-            touched_ids = _extract_target_ids_from_derived(pending.derived)
-            touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
-            _record_affinity_touches(self._affinity_key, touched_ids, matching=self._matching)
-        _write_pending_with_status(self.pending_root, pending, "confirmed")
-        _log_nl_plan_confirm_applied(pending_id=self.pending_id)
-        await interaction.response.send_message(_format_apply_success_message(written_paths=result.written_paths))
-        await _disable_view(interaction)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.gray)
-    async def cancel_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This cancellation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        _write_pending_with_status(self.pending_root, pending, "cancelled")
-        await interaction.response.send_message("Cancelled. No changes made.")
-        await _disable_view(interaction)
-
-
-class AutoApplyFeedbackView(discord.ui.View):
-    def __init__(self, *, author_id: int, target_id: str) -> None:
-        super().__init__(timeout=_VIEW_TIMEOUT_SECONDS)
-        self.author_id = author_id
-        self.target_id = target_id
-
-    def is_author(self, interaction: discord.Interaction) -> bool:
-        user = interaction.user
-        return bool(user and user.id == self.author_id)
-
-    @discord.ui.button(label="Was this incorrect?", style=discord.ButtonStyle.secondary)
-    async def incorrect_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button,
-    ) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This feedback is not for you.")
-            return
-        await interaction.response.send_message(
-            "Sorry about that. Reply with `!fix {id} field=value` or `!append {id} <text>` to correct it.".format(
-                id=self.target_id
-            )
-        )
-        await _disable_view(interaction)
 
 
 def _command_name_for_action_type(action_type: str) -> str:
@@ -2392,6 +1991,11 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
                 matching=matching_config,
                 affinity_key=_cursor_key(message),
                 on_canonical_change=lambda: _notify_due_time_reminder_schedule_changed(config),
+                refresh_index_async=lambda root, db: _refresh_index_async(root, db, matching=matching_config),
+                extract_target_ids_from_derived=_extract_target_ids_from_derived,
+                extract_ids_from_written_paths=_extract_ids_from_written_paths,
+                record_affinity_touches=lambda key, ids, matching: _record_affinity_touches(key, ids, matching=matching),
+                now_iso=_now_iso,
             )
         await _swap_reaction(message, "⏳", "❓")
         await _send_response(
@@ -2604,75 +2208,12 @@ def _write_matching_trace(
         logging.warning("matching_trace_write_failed id=%s error=%s", raw_event_id, exc)
 
 
-def _write_pending_with_status(
-    root: str | Path,
-    pending: PendingAction,
-    status: str,
-    *,
-    derived: dict[str, Any] | None = None,
-) -> PendingAction:
-    updated = PendingAction(
-        schema_version=pending.schema_version,
-        pending_action_id=pending.pending_action_id,
-        raw_event_id=pending.raw_event_id,
-        object_type=pending.object_type,
-        status=status,
-        created_at=pending.created_at,
-        last_updated=_now_iso(),
-        derived=derived or pending.derived,
-        decision=pending.decision,
-        decision_confidence=pending.decision_confidence,
-        last_decision_id=pending.last_decision_id,
-    )
-    write_pending_action(updated, root)
-    return updated
-
-
-def _strip_pending_controls_from_message(content: str) -> str:
-    lines = content.split("\n")
-    cleaned = [
-        line
-        for line in lines
-        if line != _PENDING_CONTROLS_INSTRUCTION and line != "\u200b"
-    ]
-    while cleaned and not cleaned[-1].strip():
-        cleaned.pop()
-    return "\n".join(cleaned)
-
-
-async def _disable_view(
-    interaction: discord.Interaction,
-    *,
-    clear_pending_instructions: bool = False,
-) -> None:
-    try:
-        if interaction.message:
-            edit_kwargs: dict[str, Any] = {"view": None}
-            if clear_pending_instructions:
-                message_content = getattr(interaction.message, "content", None)
-                if isinstance(message_content, str):
-                    edit_kwargs["content"] = _strip_pending_controls_from_message(message_content)
-            await interaction.message.edit(**edit_kwargs)
-    except (discord.HTTPException, discord.Forbidden, AttributeError):
-        return
-
-
 async def _safe_add_reaction(message: discord.Message, emoji: str) -> None:
-    try:
-        await message.add_reaction(emoji)
-    except (discord.HTTPException, discord.Forbidden):
-        return
+    await _discord_safe_add_reaction(message, emoji)
 
 
 async def _swap_reaction(message: discord.Message, remove_emoji: str, add_emoji: str) -> None:
-    await _safe_add_reaction(message, add_emoji)
-    try:
-        bot_user = message.guild.me if message.guild else message._state.user
-        if bot_user is None:
-            return
-        await message.remove_reaction(remove_emoji, cast(discord.abc.Snowflake, bot_user))
-    except (discord.HTTPException, discord.Forbidden, AttributeError):
-        return
+    await _discord_swap_reaction(message, remove_emoji, add_emoji)
 
 
 async def _send_response(
@@ -2681,35 +2222,12 @@ async def _send_response(
     thread_title: str | None = None,
     view: discord.ui.View | None = None,
 ) -> None:
-    if isinstance(message.channel, discord.Thread):
-        try:
-            await message.channel.send(content=content, view=view)
-        except (discord.HTTPException, discord.Forbidden) as exc:
-            logging.warning("response_send_failed channel=thread error=%s", exc)
-        return
-    try:
-        name = "Squire"
-        if thread_title:
-            trimmed = thread_title.strip()
-            if len(trimmed) > 60:
-                trimmed = trimmed[:57].rstrip() + "..."
-            name = f"Squire: {trimmed}"
-        else:
-            name = f"Squire: {message.author.display_name}"
-        thread = await message.create_thread(
-            name=name,
-            auto_archive_duration=1440,
-        )
-        await thread.send(content=content, view=view)
-        logging.info("response_sent thread=%s", thread.id)
-        return
-    except (discord.HTTPException, discord.Forbidden) as exc:
-        logging.warning("thread_create_failed channel=%s error=%s", message.channel.id, exc)
-        try:
-            await message.channel.send(content=content, view=view)
-            logging.info("response_sent channel=%s", message.channel.id)
-        except (discord.HTTPException, discord.Forbidden) as send_exc:
-            logging.warning("response_send_failed channel=%s error=%s", message.channel.id, send_exc)
+    await _discord_send_response(
+        message,
+        content,
+        thread_title=thread_title,
+        view=view,
+    )
 
 
 class _DiscordRoutingRuntime:
@@ -2888,6 +2406,12 @@ class _DiscordRoutingRuntime:
             matching=matching,
             affinity_key=affinity_key,
             on_canonical_change=on_canonical_change,
+            refresh_index_async=lambda root, db: _refresh_index_async(root, db, matching=matching),
+            extract_target_ids_from_derived=_extract_target_ids_from_derived,
+            extract_ids_from_written_paths=_extract_ids_from_written_paths,
+            record_affinity_touches=lambda key, ids, match: _record_affinity_touches(key, ids, matching=match),
+            now_iso=_now_iso,
+            log_confirm_applied=lambda pending_id: _log_nl_plan_confirm_applied(pending_id=pending_id),
         )
 
     def cursor_key(self, message: discord.Message) -> tuple[int, int]:
@@ -3162,18 +2686,6 @@ def _format_pending_message(_pending_id: str, decision_payload: dict[str, Any]) 
     return "\n".join(lines)
 
 
-def _force_create_derived(derived: dict[str, Any]) -> dict[str, Any]:
-    routing = DecisionRouting(
-        action="create",
-        confidence=0.0,
-        decision_ops=[],
-        top_score=0.0,
-        second_score=None,
-        margin=None,
-    )
-    return apply_decision_to_derived(derived, routing)
-
-
 async def _apply_command_operation(
     message: discord.Message,
     raw_id: str,
@@ -3299,437 +2811,7 @@ async def _handle_archive_clear_confirmation(message: discord.Message, config: d
     return True
 
 
-class SquireBot(discord.Client):
-    def __init__(self, config: dict[str, Any]) -> None:
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(intents=intents)
-        self._config = config
-        schedule = config.get("schedule", {}) if isinstance(config.get("schedule"), dict) else {}
-        self._digest_time = _parse_daily_digest_time(schedule.get("daily_digest_time"))
-        self._weekly_review_day = _parse_weekly_review_day(schedule.get("weekly_review_day"))
-        self._weekly_review_time = _parse_daily_digest_time(schedule.get("weekly_review_time"))
-        self._digest_channel_id = _coerce_int(schedule.get("daily_digest_channel_id"))
-        self._digest_user_id = _coerce_int(schedule.get("daily_digest_user_id"))
-        self._due_time_reminder_schedule = _load_due_time_reminder_schedule_config(schedule)
-        self._due_time_reminder_ledger_path = _due_time_reminder_ledger_path(config)
-        self._last_dm_channel_id: int | None = None
-        self._last_dm_user_id: int | None = None
-        self._timezone = resolve_timezone(config.get("timezone"))
-        self._digest_task: asyncio.Task | None = None
-        self._weekly_review_task: asyncio.Task | None = None
-        self._due_time_reminder_task: asyncio.Task | None = None
-        self._due_time_reminder_midnight_task: asyncio.Task | None = None
-        self._due_time_reminder_reconcile_task: asyncio.Task | None = None
-        self._due_time_reminder_schedule_changed = asyncio.Event()
-        self._due_time_reminder_state_lock = asyncio.Lock()
-        self._due_time_reminder_heap: list[tuple[datetime, datetime, str, int, DueTimeReminderEvent]] = []
-        self._due_time_reminder_sent_ledger: dict[str, _DueTimeReminderSentLedgerEntry] = {}
-        self._due_time_reminder_reset_requested = False
-        self._config[_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY] = self._on_due_time_reminder_schedule_changed
-
-    async def on_ready(self) -> None:
-        print(f"Logged in as {self.user}")
-        if self._digest_time and self._digest_task is None:
-            self._digest_task = asyncio.create_task(self._daily_digest_loop())
-        if self._weekly_review_day is not None and self._weekly_review_time and self._weekly_review_task is None:
-            self._weekly_review_task = asyncio.create_task(self._weekly_review_loop())
-        if self._due_time_reminder_schedule.enabled and self._due_time_reminder_task is None:
-            self._due_time_reminder_task = asyncio.create_task(self._due_time_reminder_loop())
-            self._due_time_reminder_midnight_task = asyncio.create_task(self._due_time_reminder_midnight_loop())
-            self._due_time_reminder_reconcile_task = asyncio.create_task(self._due_time_reminder_reconcile_loop())
-
-    async def on_message(self, message: discord.Message) -> None:
-        if not message.author.bot and isinstance(message.channel, discord.DMChannel):
-            self._last_dm_channel_id = message.channel.id
-            self._last_dm_user_id = message.author.id
-        await _handle_message(message, self._config)
-
-    def _on_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
-        if not self._due_time_reminder_schedule.enabled:
-            return
-        if clear_state:
-            self._due_time_reminder_reset_requested = True
-        self._due_time_reminder_schedule_changed.set()
-
-    @staticmethod
-    def _due_time_reminder_heap_item(
-        event: DueTimeReminderEvent,
-    ) -> tuple[datetime, datetime, str, int, DueTimeReminderEvent]:
-        return (event.fire_at, event.due_at, event.object_id, event.offset_minutes, event)
-
-    def _prune_due_time_reminder_sent_ledger(self, *, now: datetime) -> bool:
-        expired_keys = [key for key, entry in self._due_time_reminder_sent_ledger.items() if entry.expires_at <= now]
-        for key in expired_keys:
-            self._due_time_reminder_sent_ledger.pop(key, None)
-        return bool(expired_keys)
-
-    async def _load_due_time_reminder_sent_ledger(self) -> None:
-        now = datetime.now(timezone.utc)
-        loaded = await asyncio.to_thread(
-            _load_due_time_reminder_ledger_entries,
-            self._due_time_reminder_ledger_path,
-            now=now,
-        )
-        async with self._due_time_reminder_state_lock:
-            self._due_time_reminder_sent_ledger = loaded
-
-    async def _flush_due_time_reminder_sent_ledger(self) -> None:
-        now = datetime.now(timezone.utc)
-        async with self._due_time_reminder_state_lock:
-            entries = dict(self._due_time_reminder_sent_ledger)
-        try:
-            await asyncio.to_thread(
-                _flush_due_time_reminder_ledger_entries,
-                self._due_time_reminder_ledger_path,
-                entries=entries,
-                now=now,
-            )
-        except Exception as exc:
-            logging.warning("due_time_reminder_ledger_flush_failed error=%s", exc)
-
-    async def _rebuild_due_time_reminder_schedule(self, *, source: str) -> int:
-        now = datetime.now(self._timezone)
-        events = await asyncio.to_thread(
-            build_due_time_reminder_events,
-            self._config.get("paths", {}).get("objects_root", "objects"),
-            self._config,
-            offsets_minutes=list(self._due_time_reminder_schedule.offsets_minutes),
-            now=now,
-            late_grace_minutes=self._due_time_reminder_schedule.late_grace_minutes,
-            horizon_hours=_DUE_TIME_REMINDER_HORIZON_HOURS,
-        )
-        heap_items = [self._due_time_reminder_heap_item(event) for event in events]
-        heapq.heapify(heap_items)
-        async with self._due_time_reminder_state_lock:
-            self._due_time_reminder_heap = heap_items
-        logging.info(
-            "due_time_reminder_schedule_built count=%s horizon_hours=%s source=%s",
-            len(events),
-            _DUE_TIME_REMINDER_HORIZON_HOURS,
-            source,
-        )
-        return len(events)
-
-    async def _peek_due_time_reminder_fire_at(self) -> datetime | None:
-        async with self._due_time_reminder_state_lock:
-            if not self._due_time_reminder_heap:
-                return None
-            return self._due_time_reminder_heap[0][0]
-
-    async def _push_due_time_reminder_events(self, events: list[DueTimeReminderEvent]) -> None:
-        if not events:
-            return
-        async with self._due_time_reminder_state_lock:
-            for event in events:
-                heapq.heappush(self._due_time_reminder_heap, self._due_time_reminder_heap_item(event))
-
-    async def _pop_due_time_reminder_due_events(self, *, now: datetime) -> list[DueTimeReminderEvent]:
-        events: list[DueTimeReminderEvent] = []
-        async with self._due_time_reminder_state_lock:
-            while self._due_time_reminder_heap and self._due_time_reminder_heap[0][0] <= now:
-                events.append(heapq.heappop(self._due_time_reminder_heap)[4])
-            self._prune_due_time_reminder_sent_ledger(now=now.astimezone(timezone.utc))
-        return events
-
-    async def _resolve_due_time_reminder_channel(self) -> discord.abc.Messageable | None:
-        channel_id = self._due_time_reminder_schedule.channel_id
-        if channel_id:
-            channel = self.get_channel(channel_id)
-            if channel and isinstance(channel, discord.abc.Messageable):
-                return channel
-            try:
-                fetched = await self.fetch_channel(channel_id)
-                if isinstance(fetched, discord.abc.Messageable):
-                    return fetched
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logging.warning("due_time_reminder_channel_unavailable id=%s", channel_id)
-                return None
-        user_id = self._due_time_reminder_schedule.user_id
-        if user_id:
-            user = self.get_user(user_id)
-            if not user:
-                try:
-                    user = await self.fetch_user(user_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logging.warning("due_time_reminder_user_unavailable id=%s", user_id)
-                    user = None
-            if user:
-                if user.dm_channel:
-                    return user.dm_channel
-                try:
-                    return await user.create_dm()
-                except (discord.HTTPException, discord.Forbidden):
-                    logging.warning("due_time_reminder_dm_create_failed user=%s", user_id)
-                    return None
-        return await self._resolve_digest_channel()
-
-    def _due_time_reminder_is_stale(self, event: DueTimeReminderEvent, *, now: datetime) -> bool:
-        grace = timedelta(minutes=self._due_time_reminder_schedule.late_grace_minutes)
-        return now - event.fire_at > grace
-
-    def _due_time_reminder_recheck_event(self, event: DueTimeReminderEvent) -> tuple[bool, str | None]:
-        objects_root = self._config.get("paths", {}).get("objects_root", "objects")
-        path = find_object_path(objects_root, event.object_id)
-        if not path:
-            return False, "missing_object"
-        try:
-            frontmatter = load_frontmatter(path)
-        except Exception:
-            return False, "ineligible"
-        status_value = str(frontmatter.get("status") or "").strip().lower()
-        if status_value not in _DUE_TIME_REMINDER_ALLOWED_STATUSES:
-            return False, "ineligible"
-        archived_value = frontmatter.get("archived")
-        archived = False
-        if isinstance(archived_value, bool):
-            archived = archived_value
-        elif isinstance(archived_value, str):
-            archived = archived_value.strip().lower() in {"1", "true", "yes", "y"}
-        if archived:
-            return False, "ineligible"
-        due_at = _coerce_timezone_datetime(frontmatter.get("due_at"), self._timezone)
-        if due_at is None:
-            return False, "ineligible"
-        if due_at != event.due_at:
-            return False, "ineligible"
-        return True, None
-
-    async def _dispatch_due_time_reminders(self) -> None:
-        now = datetime.now(self._timezone)
-        due_events = await self._pop_due_time_reminder_due_events(now=now)
-        if not due_events:
-            return
-
-        async with self._due_time_reminder_state_lock:
-            active_sent_keys = set(self._due_time_reminder_sent_ledger.keys())
-
-        sendable: list[DueTimeReminderEvent] = []
-        for event in due_events:
-            if self._due_time_reminder_is_stale(event, now=now):
-                logging.info("due_time_reminder_event_skipped reason=stale")
-                continue
-            key = _due_time_reminder_key(event)
-            if key in active_sent_keys:
-                logging.info("due_time_reminder_event_skipped reason=duplicate")
-                continue
-            eligible, reason = self._due_time_reminder_recheck_event(event)
-            if not eligible:
-                logging.info("due_time_reminder_event_skipped reason=%s", reason or "ineligible")
-                continue
-            sendable.append(event)
-
-        if not sendable:
-            return
-
-        channel = await self._resolve_due_time_reminder_channel()
-        if not channel:
-            logging.warning("due_time_reminder_skipped reason=no_channel")
-            await self._push_due_time_reminder_events(sendable)
-            return
-
-        content = render_due_time_reminder_message(sendable, self._config, now=now)
-        if not content:
-            return
-
-        try:
-            await channel.send(content=content)
-        except (discord.HTTPException, discord.Forbidden) as exc:
-            logging.warning("due_time_reminder_send_failed error=%s", exc)
-            await self._push_due_time_reminder_events(sendable)
-            return
-
-        sent_at = datetime.now(timezone.utc)
-        expires_at = sent_at + timedelta(hours=_DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS)
-        async with self._due_time_reminder_state_lock:
-            for event in sendable:
-                key = _due_time_reminder_key(event)
-                self._due_time_reminder_sent_ledger[key] = _DueTimeReminderSentLedgerEntry(
-                    key=key,
-                    object_id=event.object_id,
-                    due_at=event.due_at.astimezone(timezone.utc),
-                    offset_minutes=event.offset_minutes,
-                    fire_at=event.fire_at.astimezone(timezone.utc),
-                    sent_at=sent_at,
-                    expires_at=expires_at,
-                )
-                logging.info(
-                    "due_time_reminder_event_dispatched object_id=%s due_at=%s offset=%s",
-                    event.object_id,
-                    event.due_at.isoformat(),
-                    event.offset_minutes,
-                )
-            self._prune_due_time_reminder_sent_ledger(now=sent_at)
-        await self._flush_due_time_reminder_sent_ledger()
-
-    async def _due_time_reminder_loop(self) -> None:
-        try:
-            await self._load_due_time_reminder_sent_ledger()
-            await self._rebuild_due_time_reminder_schedule(source="startup")
-        except Exception:
-            logging.exception("due_time_reminder_startup_failed")
-        while not self.is_closed():
-            if self._due_time_reminder_schedule_changed.is_set():
-                self._due_time_reminder_schedule_changed.clear()
-                if self._due_time_reminder_reset_requested:
-                    async with self._due_time_reminder_state_lock:
-                        self._due_time_reminder_heap.clear()
-                        self._due_time_reminder_sent_ledger.clear()
-                    self._due_time_reminder_reset_requested = False
-                    await self._flush_due_time_reminder_sent_ledger()
-                try:
-                    await self._rebuild_due_time_reminder_schedule(source="event")
-                except Exception:
-                    logging.exception("due_time_reminder_rebuild_failed source=event")
-                continue
-
-            next_fire = await self._peek_due_time_reminder_fire_at()
-            if next_fire is None:
-                delay = float(_DUE_TIME_REMINDER_EMPTY_QUEUE_WAIT_SECONDS)
-            else:
-                delay = max(0.0, (next_fire - datetime.now(self._timezone)).total_seconds())
-            try:
-                await asyncio.wait_for(self._due_time_reminder_schedule_changed.wait(), timeout=delay)
-                self._due_time_reminder_schedule_changed.clear()
-                logging.info("due_time_reminder_wake reason=schedule_changed")
-                if self._due_time_reminder_reset_requested:
-                    async with self._due_time_reminder_state_lock:
-                        self._due_time_reminder_heap.clear()
-                        self._due_time_reminder_sent_ledger.clear()
-                    self._due_time_reminder_reset_requested = False
-                    await self._flush_due_time_reminder_sent_ledger()
-                try:
-                    await self._rebuild_due_time_reminder_schedule(source="event")
-                except Exception:
-                    logging.exception("due_time_reminder_rebuild_failed source=event")
-                continue
-            except asyncio.TimeoutError:
-                logging.info("due_time_reminder_wake reason=timeout")
-            try:
-                await self._dispatch_due_time_reminders()
-            except Exception:
-                logging.exception("due_time_reminder_dispatch_failed")
-
-    async def _due_time_reminder_midnight_loop(self) -> None:
-        while not self.is_closed():
-            now = datetime.now(self._timezone)
-            target = _next_midnight_run(now)
-            delay = (target - now).total_seconds()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            try:
-                await self._rebuild_due_time_reminder_schedule(source="midnight")
-            except Exception:
-                logging.exception("due_time_reminder_rebuild_failed source=midnight")
-
-    async def _due_time_reminder_reconcile_loop(self) -> None:
-        interval_seconds = max(1, self._due_time_reminder_schedule.reconcile_minutes) * 60
-        while not self.is_closed():
-            await asyncio.sleep(interval_seconds)
-            try:
-                count = await self._rebuild_due_time_reminder_schedule(source="reconcile")
-            except Exception:
-                logging.exception("due_time_reminder_rebuild_failed source=reconcile")
-                continue
-            now_utc = datetime.now(timezone.utc)
-            async with self._due_time_reminder_state_lock:
-                pruned = self._prune_due_time_reminder_sent_ledger(now=now_utc)
-            if pruned:
-                await self._flush_due_time_reminder_sent_ledger()
-            logging.info("due_time_reminder_reconcile_completed count=%s", count)
-
-    async def _resolve_digest_channel(self) -> discord.abc.Messageable | None:
-        if self._digest_channel_id:
-            channel = self.get_channel(self._digest_channel_id)
-            if channel and isinstance(channel, discord.abc.Messageable):
-                return channel
-            try:
-                fetched = await self.fetch_channel(self._digest_channel_id)
-                if isinstance(fetched, discord.abc.Messageable):
-                    return fetched
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logging.warning("daily_digest_channel_unavailable id=%s", self._digest_channel_id)
-                return None
-        if self._digest_user_id:
-            user = self.get_user(self._digest_user_id)
-            if not user:
-                try:
-                    user = await self.fetch_user(self._digest_user_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    logging.warning("daily_digest_user_unavailable id=%s", self._digest_user_id)
-                    user = None
-            if user:
-                if user.dm_channel:
-                    return user.dm_channel
-                try:
-                    return await user.create_dm()
-                except (discord.HTTPException, discord.Forbidden):
-                    logging.warning("daily_digest_dm_create_failed user=%s", self._digest_user_id)
-                    return None
-        if self._last_dm_channel_id:
-            channel = self.get_channel(self._last_dm_channel_id)
-            if channel and isinstance(channel, discord.abc.Messageable):
-                return channel
-            try:
-                fetched = await self.fetch_channel(self._last_dm_channel_id)
-                if isinstance(fetched, discord.abc.Messageable):
-                    return fetched
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logging.warning("daily_digest_last_dm_unavailable id=%s", self._last_dm_channel_id)
-                return None
-        return None
-
-    async def _send_daily_digest(self) -> None:
-        channel = await self._resolve_digest_channel()
-        if not channel:
-            logging.warning("daily_digest_skipped reason=no_channel")
-            return
-        objects_root = self._config.get("paths", {}).get("objects_root", "objects")
-        digest = build_daily_digest(objects_root, self._config)
-        try:
-            await channel.send(content=digest.render())
-        except (discord.HTTPException, discord.Forbidden) as exc:
-            logging.warning("daily_digest_send_failed error=%s", exc)
-
-    async def _daily_digest_loop(self) -> None:
-        if not self._digest_time:
-            return
-        while not self.is_closed():
-            now = datetime.now(self._timezone)
-            target = _next_daily_run(now, self._digest_time)
-            delay = (target - now).total_seconds()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            try:
-                await self._send_daily_digest()
-            except Exception:
-                logging.exception("daily_digest_failed")
-
-    async def _send_weekly_review(self) -> None:
-        channel = await self._resolve_digest_channel()
-        if not channel:
-            logging.warning("weekly_review_skipped reason=no_channel")
-            return
-        objects_root = self._config.get("paths", {}).get("objects_root", "objects")
-        review = build_weekly_review(objects_root, self._config)
-        try:
-            await channel.send(content=review.render())
-        except (discord.HTTPException, discord.Forbidden) as exc:
-            logging.warning("weekly_review_send_failed error=%s", exc)
-
-    async def _weekly_review_loop(self) -> None:
-        if self._weekly_review_day is None or not self._weekly_review_time:
-            return
-        while not self.is_closed():
-            now = datetime.now(self._timezone)
-            target = _next_weekly_run(now, self._weekly_review_day, self._weekly_review_time)
-            delay = (target - now).total_seconds()
-            if delay > 0:
-                await asyncio.sleep(delay)
-            try:
-                await self._send_weekly_review()
-            except Exception:
-                logging.exception("weekly_review_failed")
+SquireBot = _DiscordAdapterBot
 
 
 def main() -> None:
@@ -3788,7 +2870,7 @@ def main() -> None:
 
     health_server = _start_health_server()
     try:
-        bot = SquireBot(config=config)
+        bot = SquireBot(config=config, message_handler=_handle_message)
         bot.run(token)
     finally:
         if health_server:
