@@ -107,6 +107,11 @@
   - cursor/affinity/clarification/archive-clear helper logic moved into `src/squire_core/transport/state.py`
   - transport state now provides explicit get/store/prune APIs plus numbered digest/review rendering helpers
   - `src/squire_core/discord_bot.py` delegates to transport-state helpers while retaining compatibility wrappers and thread-parent cursor fallback semantics.
+- Stage 3 command engine extraction is complete:
+  - explicit `!` command orchestration moved into `src/squire_core/transport/commands.py` as a shared transport module
+  - added adapter callback protocol hooks in the command engine for send/reaction/state/apply operations
+  - `src/squire_core/discord_bot.py` now delegates `_handle_command` to shared transport command handling via `_DiscordCommandRuntime` compatibility adapter
+  - command apply internals (`_apply_command_operation`) remain in `discord_bot.py` for stage-3 compatibility and will be reduced further in later adapter consolidation stages
 - `discord_bot.py` is intentionally retained as a temporary compatibility shim during staged extraction; target end-state removes it after entrypoint/test migration.
 - Final runtime composition-root direction is `python -m squire_core.runtime` (`src/squire_core/runtime.py`) after cutover stage.
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
@@ -119,6 +124,10 @@
   - `.venv/bin/python -m py_compile src/squire_core/transport/state.py src/squire_core/discord_bot.py` passed.
   - `.venv/bin/python -m pytest -q tests/test_surfacing_cursor.py tests/test_discord_commands.py tests/test_nl_multi_operation_clarification.py` passed (`42 passed`).
   - `.venv/bin/python -m pytest -q` passed except the same known environment-restricted `tests/test_health_server.py` socket-bind failures (`2 failed`, `116 passed`).
+- Stage 3 validation:
+  - `.venv/bin/python -m py_compile src/squire_core/transport/commands.py src/squire_core/discord_bot.py tests/test_transport_commands.py` passed.
+  - `.venv/bin/python -m pytest -q tests/test_transport_commands.py tests/test_discord_commands.py tests/test_discord_schedule.py tests/test_nl_multi_operation_clarification.py` passed (`57 passed`).
+  - `.venv/bin/python -m pytest -q tests/test_surfacing.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py` passed (`20 passed`).
 
 ## Known Constraints and Loose Ends
 
