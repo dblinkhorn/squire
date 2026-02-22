@@ -1,8 +1,8 @@
-# Multi-Transport Refactor Spec (Discord -> Shared Core -> Slack)
+# Multi-Transport Refactor Spec (Discord -> Shared Core)
 
 ## Purpose
 
-Define an implementation-ready refactor plan to separate transport-specific logic from shared Squire runtime behavior, so new interfaces (starting with Slack) can reuse command, routing, mutation, and state logic without duplicating `discord_bot.py` behavior.
+Define an implementation-ready refactor plan to separate transport-specific logic from shared Squire runtime behavior, so future interfaces can reuse command, routing, mutation, and state logic without duplicating `discord_bot.py` behavior.
 
 This spec is intentionally detailed for a fresh-context implementer.
 
@@ -16,14 +16,14 @@ Current runtime behavior is heavily concentrated in `/Users/dblinkhorn/squire/sr
 
 This slows feature development and raises risk for each new integration because core behavior must be copied or re-implemented.
 
-Primary objective: modularize once, then add Slack on top of reusable shared layers.
+Primary objective: modularize once so future transports can be added on top of reusable shared layers.
 
 ## Goals
 
 1. Preserve current Discord behavior while extracting transport-agnostic logic.
 2. Establish clear module boundaries for shared runtime behavior vs adapter behavior.
 3. Introduce stable transport-facing interfaces (message context, response contract, action handlers).
-4. Enable Slack v1 to reuse shared command and NL mutation flows with minimal duplication.
+4. Prepare shared command and NL mutation flows for future transport adapters with minimal duplication.
 5. Keep confirmation-first mutation safety and explicit-only destructive controls unchanged.
 6. Keep the app working at the end of every stage (no intentional broken intermediate stage).
 
@@ -31,7 +31,7 @@ Primary objective: modularize once, then add Slack on top of reusable shared lay
 
 1. Redesigning command UX or NL policy semantics.
 2. Changing canonical storage, index schema, or reminder business rules.
-3. Adding advanced Slack UI parity in v1 (buttons/modals can be deferred).
+3. Implementing Slack adapter/runtime behavior in this staged refactor.
 4. Broad architecture rewrite outside transport boundaries.
 5. Requiring a console-script packaging change in this refactor (existing `make`-driven startup remains acceptable).
 
@@ -391,6 +391,7 @@ Scope:
 1. reduce Discord adapter to thin event-translation and IO layer
 2. move Discord-only views/scheduler into `transport/discord/*`
 3. keep `discord_bot.py` as compatibility wrapper/small shim while call sites are migrated
+4. use explicit Discord-specific adapter naming (`DiscordSquireBot`); keep `SquireBot` as a temporary compatibility alias during migration
 
 Acceptance criteria:
 
@@ -398,21 +399,7 @@ Acceptance criteria:
 2. code ownership boundaries are clear and documented
 3. `discord_bot.py` significantly reduced in responsibility
 
-## Stage 6: Slack v1 Adapter (After Shared Core Stabilizes)
-
-Scope:
-
-1. implement Slack DM/message ingest adapter using shared command/routing modules
-2. support text-based confirm/cancel first
-3. defer advanced interactive parity if needed
-
-Acceptance criteria:
-
-1. Slack can execute shared read/mutation command semantics
-2. pending action confirmation-first policy preserved
-3. no duplication of command/NL normalization logic from Discord adapter
-
-## Stage 7: Entrypoint Cutover and Shim Removal
+## Stage 6: Entrypoint Cutover and Shim Removal
 
 Scope:
 
@@ -462,7 +449,7 @@ Tests should evolve in phases, not as a bulk move:
   - `tests/test_transport_routing.py`
   - `tests/test_transport_reminders.py`
 3. add adapter contract tests to verify Discord adapter passes normalized context/callbacks correctly
-4. once stage 7 cutover is complete, update or retire tests that directly import `squire_core.discord_bot`
+4. once stage 6 cutover is complete, update or retire tests that directly import `squire_core.discord_bot`
 5. preserve user-visible behavior assertions while moving internal-unit coverage closer to extracted modules
 
 Regression policy:
@@ -485,8 +472,8 @@ Regression policy:
 4. Reminder delivery drift
 - Mitigation: isolate logic tests for queue/ledger behavior before and after extraction.
 
-5. Over-scoping refactor before Slack starts
-- Mitigation: stage gates with explicit acceptance criteria; stop after Stage 5 if instability appears.
+5. Over-scoping before cutover completion
+- Mitigation: stage gates with explicit acceptance criteria; complete through Stage 6 and stop there if instability appears.
 
 ## Documentation Updates Required During Implementation
 
@@ -511,7 +498,7 @@ When stages land, keep docs aligned:
 - run focused tests first, then broader suite
 - update `.agent/context.md` with only durable decisions and unresolved risks
 
-4. Do not start Slack adapter implementation until shared command/routing/state layers are extracted and stable.
+4. Slack adapter implementation is out of scope for this staged refactor. Revisit only after Stage 6 completes (entrypoint cutover + shim removal).
 
 ## Success Definition
 
@@ -519,5 +506,4 @@ This project is successful when:
 
 1. Discord behavior is unchanged from user perspective.
 2. Shared runtime logic is isolated from Discord platform primitives.
-3. A Slack adapter can reuse shared command/routing/state modules without copy/paste of core logic.
-4. New transport additions become additive adapter work, not monolith edits.
+3. New transport additions should become additive adapter work, not monolith edits.

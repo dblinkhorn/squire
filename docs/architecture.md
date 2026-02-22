@@ -25,6 +25,8 @@ Migration note:
 
 1. `/Users/dblinkhorn/squire/src/squire_core/discord_bot.py` remains a temporary compatibility shim during staged extraction
 2. target end-state removes the monolithic `discord_bot.py` once entrypoints, tests, and adapter wiring are migrated
+3. Discord-specific adapter code is now split under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`:
+`adapter.py` (lifecycle/IO), `views.py` (Discord UI interactions), and `scheduler.py` (digest/reminder loops)
 
 ## Trust Model
 
