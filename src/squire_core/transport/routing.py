@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, cast
+from typing import Any, Callable, Protocol, cast
 
 from squire_core.config_utils import NLCommandRoutingConfig, load_matching_config, load_nl_command_routing_config
 from squire_core.derived_event_store import write_derived_event

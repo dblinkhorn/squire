@@ -470,6 +470,17 @@ Acceptance criteria:
 2. all Stage 7A removals include explicit safety evidence and behavior-parity verification
 3. inventory of deferred candidate removals is documented with rationale and confidence
 
+Completion notes (2026-02-22):
+
+1. applied low-risk hygiene removals with no behavior changes:
+   - removed unused imports in `/Users/dblinkhorn/squire/src/squire_core/transport/routing.py` (`Awaitable`, `timezone`)
+   - removed unused import in `/Users/dblinkhorn/squire/src/squire_core/transport/discord/scheduler.py` (`Path`)
+   - removed unused exception aliases in `/Users/dblinkhorn/squire/src/squire_core/runtime.py` (two `except Exception as exc` sites where `exc` was not referenced)
+2. refreshed deferred-inventory decisions with confidence:
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py` (`TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`) remain deferred with **medium** confidence they are orphaned; held for Stage 8/7B to avoid pre-hardening contract churn
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/state.py` (`NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`) remain deferred with **medium-high** confidence they are orphaned; held until Stage 8 determines final shared contract shape
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/{adapter.py,scheduler.py,__init__.py}` remain deferred with **high** confidence runtime-unreferenced; final retain/remove decision stays in Stage 7B
+
 ### Stage 7B: Orphan Removal and Contract Pruning (Post-Hardening)
 
 Scope:

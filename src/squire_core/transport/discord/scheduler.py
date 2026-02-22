@@ -6,7 +6,6 @@ import asyncio
 import heapq
 import logging
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import discord

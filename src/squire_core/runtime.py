@@ -2014,7 +2014,7 @@ async def _handle_message(message: discord.Message, config: dict[str, Any]) -> N
             derived_schema_path=schema_path,
             last_decision_id=decision_artifact_id,
         )
-    except Exception as exc:
+    except Exception:
         logging.exception("apply_failed id=%s object_type=%s", raw_id, object_type)
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "Failed to save item. Please try again.")
@@ -2761,7 +2761,7 @@ async def _apply_command_operation(
             canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
             derived_schema_path=None,
         )
-    except Exception as exc:
+    except Exception:
         logging.exception("command_apply_failed id=%s op=%s", raw_id, op)
         await _swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "Command failed. Check logs for details.")
