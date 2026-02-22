@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import shlex
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
@@ -73,6 +72,7 @@ from squire_core.transport.bootstrap import (
     parse_weekly_review_day as _parse_weekly_review_day,
     run_test_mode_reset_seed as _run_test_mode_reset_seed,
 )
+from squire_core.transport import commands as _transport_commands
 from squire_core.transport.health import (
     HealthServer as _HealthServer,
     parse_health_port as _parse_health_port,
@@ -3638,352 +3638,223 @@ async def _send_response(
             logging.warning("response_send_failed channel=%s error=%s", message.channel.id, send_exc)
 
 
+class _DiscordCommandRuntime:
+    @property
+    def schema_map(self) -> dict[str, Path]:
+        return _SCHEMA_MAP
+
+    @property
+    def help_copy(self) -> str:
+        return _HELP_COPY
+
+    @property
+    def help_details(self) -> dict[str, str]:
+        return _HELP_DETAILS
+
+    @property
+    def numbered_command_tip(self) -> str:
+        return _NUMBERED_COMMAND_TIP
+
+    @property
+    def numbered_command_tip_with_recent_limit(self) -> str:
+        return _NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT
+
+    def load_matching_config(self, config: dict[str, Any]) -> MatchingConfig:
+        return load_matching_config(config)
+
+    def build_daily_digest(self, objects_root: str | Path, config: dict[str, Any]) -> DailyDigest:
+        return build_daily_digest(objects_root, config)
+
+    def build_weekly_review(self, objects_root: str | Path, config: dict[str, Any]) -> WeeklyReview:
+        return build_weekly_review(objects_root, config)
+
+    def render_numbered_daily_digest_for_command(self, digest: DailyDigest) -> tuple[str, list[str]]:
+        return _render_numbered_daily_digest_for_command(digest)
+
+    def render_numbered_weekly_review_for_command(self, review: WeeklyReview) -> tuple[str, list[str]]:
+        return _render_numbered_weekly_review_for_command(review)
+
+    def store_result_cursor(
+        self,
+        message: discord.Message,
+        config: dict[str, Any],
+        object_ids: list[str],
+        *,
+        source_view: str = "unknown",
+    ) -> None:
+        _store_result_cursor(message, config, object_ids, source_view=source_view)
+
+    def parse_positive_int(self, value: str) -> int | None:
+        return _parse_positive_int(value)
+
+    def normalize_help_topic(self, value: str) -> str:
+        return _normalize_help_topic(value)
+
+    def build_recent_list(
+        self,
+        objects_root: str | Path,
+        config: dict[str, Any],
+        *,
+        limit: int | None = None,
+    ) -> Any:
+        return build_recent_list(objects_root, config, limit=limit)
+
+    def build_find_list(
+        self,
+        objects_root: str | Path,
+        index_db: str | Path,
+        config: dict[str, Any],
+        query: str,
+    ) -> Any:
+        return build_find_list(objects_root, index_db, config, query)
+
+    def resolve_result_cursor(self, message: discord.Message, number: int) -> str | None:
+        return _resolve_result_cursor(message, number)
+
+    def resolve_command_target(self, message: discord.Message, target_token: str) -> _CommandTargetResolution:
+        return _resolve_command_target(message, target_token)
+
+    def log_numbered_mutation_resolution_failed(
+        self,
+        *,
+        raw_event_id: str,
+        command: str,
+        reason: str,
+        row_number: int,
+        source_view: str | None = None,
+    ) -> None:
+        _log_numbered_mutation_resolution_failed(
+            raw_event_id=raw_event_id,
+            command=command,
+            reason=reason,
+            source_view=source_view,
+            row_number=row_number,
+        )
+
+    async def apply_command_operation(
+        self,
+        message: discord.Message,
+        raw_id: str,
+        config: dict[str, Any],
+        target_id: str,
+        op: str,
+        fields: dict[str, Any],
+        *,
+        validate_fix: bool = False,
+        command_name: str | None = None,
+        row_number: int | None = None,
+        source_view: str | None = None,
+    ) -> bool:
+        return await _apply_command_operation(
+            message,
+            raw_id,
+            config,
+            target_id,
+            op,
+            fields,
+            validate_fix=validate_fix,
+            command_name=command_name,
+            row_number=row_number,
+            source_view=source_view,
+        )
+
+    def start_archive_clear_confirmation(self, message: discord.Message) -> None:
+        _start_archive_clear_confirmation(message)
+
+    def load_pending_action(self, root: str | Path, pending_id: str) -> PendingAction | None:
+        return load_pending_action(root, pending_id)
+
+    def apply_operations(
+        self,
+        derived: dict[str, Any],
+        *,
+        objects_root: str | Path,
+        canonical_schema_path: Path,
+        derived_schema_path: Path | None,
+        last_decision_id: str | None = None,
+    ) -> Any:
+        return apply_operations(
+            derived,
+            objects_root=objects_root,
+            canonical_schema_path=canonical_schema_path,
+            derived_schema_path=derived_schema_path,
+            last_decision_id=last_decision_id,
+        )
+
+    def update_pending_action_status(self, root: str | Path, pending_id: str, status: str) -> PendingAction:
+        return update_pending_action_status(root, pending_id, status)
+
+    async def refresh_index_async(
+        self,
+        objects_root: str | Path,
+        index_db: str | Path,
+        *,
+        matching: MatchingConfig | None = None,
+    ) -> None:
+        await _refresh_index_async(objects_root, index_db, matching=matching)
+
+    def notify_due_time_reminder_schedule_changed(self, config: dict[str, Any], *, clear_state: bool = False) -> None:
+        _notify_due_time_reminder_schedule_changed(config, clear_state=clear_state)
+
+    def extract_target_ids_from_derived(self, derived: dict[str, Any]) -> list[str]:
+        return _extract_target_ids_from_derived(derived)
+
+    def extract_ids_from_written_paths(self, paths: list[Path]) -> list[str]:
+        return _extract_ids_from_written_paths(paths)
+
+    def record_affinity_touches(
+        self,
+        key: tuple[int, int],
+        object_ids: list[str],
+        *,
+        matching: MatchingConfig,
+    ) -> None:
+        _record_affinity_touches(key, object_ids, matching=matching)
+
+    def cursor_key(self, message: discord.Message) -> tuple[int, int]:
+        return _cursor_key(message)
+
+    async def swap_reaction(self, message: discord.Message, remove_emoji: str, add_emoji: str) -> None:
+        await _swap_reaction(message, remove_emoji, add_emoji)
+
+    async def send_response(
+        self,
+        message: discord.Message,
+        content: str,
+        *,
+        thread_title: str | None = None,
+        view: discord.ui.View | None = None,
+    ) -> None:
+        await _send_response(
+            message,
+            content,
+            thread_title=thread_title,
+            view=view,
+        )
+
+    def build_item_detail(self, objects_root: str | Path, object_id: str, config: dict[str, Any]) -> str:
+        return build_item_detail(objects_root, object_id, config)
+
+    def now_iso(self) -> str:
+        return _now_iso()
+
+
+_DISCORD_COMMAND_RUNTIME = _DiscordCommandRuntime()
+
+
 async def _handle_command(
     message: discord.Message,
     content: str,
     raw_id: str,
     config: dict[str, Any],
 ) -> bool:
-    parts = content.split()
-    command = parts[0].lower()
-    matching_config = load_matching_config(config)
-    objects_root = config.get("paths", {}).get("objects_root", "objects")
-    index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
-    if command == "!status":
-        try:
-            digest = build_daily_digest(objects_root, config)
-        except Exception:
-            logging.exception("status_digest_failed id=%s", raw_id)
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Failed to build status digest. Check logs for details.")
-            return True
-        rendered, cursor_object_ids = _render_numbered_daily_digest_for_command(digest)
-        if cursor_object_ids:
-            _store_result_cursor(message, config, cursor_object_ids, source_view="status")
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(message, rendered)
-        return True
-    if command == "!weekly":
-        try:
-            review = build_weekly_review(objects_root, config)
-        except Exception:
-            logging.exception("weekly_review_build_failed id=%s", raw_id)
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Failed to build weekly review. Check logs for details.")
-            return True
-        rendered, cursor_object_ids = _render_numbered_weekly_review_for_command(review)
-        if cursor_object_ids:
-            _store_result_cursor(message, config, cursor_object_ids, source_view="weekly")
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(message, rendered)
-        return True
-    if command == "!help":
-        if len(parts) > 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !help [command]")
-            return True
-        if len(parts) == 2:
-            topic = _normalize_help_topic(parts[1])
-            help_detail = _HELP_DETAILS.get(topic)
-            if help_detail is None:
-                await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, f"Unknown command `{parts[1]}`. Run `!help` for a command list.")
-                return True
-            await _swap_reaction(message, "⏳", "✅")
-            await _send_response(message, help_detail)
-            return True
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(message, _HELP_COPY)
-        return True
-    if command == "!recent":
-        limit: int | None = None
-        if len(parts) > 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !recent [number]")
-            return True
-        if len(parts) == 2:
-            parsed = _parse_positive_int(parts[1])
-            if parsed is None:
-                await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, "Usage: !recent [number]")
-                return True
-            limit = parsed
-        surfaced = build_recent_list(objects_root, config, limit=limit)
-        if not surfaced.lines:
-            await _swap_reaction(message, "⏳", "✅")
-            await _send_response(message, "No recent notes found.")
-            return True
-        _store_result_cursor(message, config, surfaced.object_ids, source_view="recent")
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(
-            message,
-            "Recent notes:\n"
-            + "\n".join(surfaced.lines)
-            + "\n\n"
-            + _NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT,
-        )
-        return True
-    if command == "!find":
-        if len(parts) < 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !find <query>")
-            return True
-        query = content.split(None, 1)[1].strip()
-        if not query:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !find <query>")
-            return True
-        surfaced = build_find_list(objects_root, index_db, config, query)
-        if not surfaced.lines:
-            await _swap_reaction(message, "⏳", "✅")
-            await _send_response(message, f'No matches found for \"{query}\".')
-            return True
-        _store_result_cursor(message, config, surfaced.object_ids, source_view="find")
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(
-            message,
-            "Matches:\n" + "\n".join(surfaced.lines) + "\n\n" + _NUMBERED_COMMAND_TIP,
-        )
-        return True
-    if command == "!show":
-        if len(parts) != 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !show <number>")
-            return True
-        number = _parse_positive_int(parts[1])
-        if number is None:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !show <number>")
-            return True
-        object_id = _resolve_result_cursor(message, number)
-        if object_id is None:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(
-                message,
-                "No active result list for that number. Run !recent, !find, !status, or !weekly first.",
-            )
-            return True
-        detail = build_item_detail(objects_root, object_id, config)
-        if not detail:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "That note is no longer available.")
-            return True
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(message, detail)
-        return True
-    if command == "!append":
-        if len(parts) < 3:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !append <id|number> <text>")
-            return True
-        target_resolution = _resolve_command_target(message, parts[1])
-        if target_resolution.reason and target_resolution.row_number is not None:
-            _log_numbered_mutation_resolution_failed(
-                raw_event_id=raw_id,
-                command="append",
-                reason=target_resolution.reason,
-                source_view=target_resolution.source_view,
-                row_number=target_resolution.row_number,
-            )
-        if target_resolution.error:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, target_resolution.error)
-            return True
-        target_id = target_resolution.target_id
-        if not target_id:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !append <id|number> <text>")
-            return True
-        text = content.split(None, 2)[2].strip()
-        if not text:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !append <id|number> <text>")
-            return True
-        return await _apply_command_operation(
-            message,
-            raw_id,
-            config,
-            target_id=target_id,
-            op="append",
-            fields={"body": text},
-            command_name="append",
-            row_number=target_resolution.row_number,
-            source_view=target_resolution.source_view,
-        )
-    if command == "!done":
-        if len(parts) != 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !done <id|number>")
-            return True
-        target_resolution = _resolve_command_target(message, parts[1])
-        if target_resolution.reason and target_resolution.row_number is not None:
-            _log_numbered_mutation_resolution_failed(
-                raw_event_id=raw_id,
-                command="done",
-                reason=target_resolution.reason,
-                source_view=target_resolution.source_view,
-                row_number=target_resolution.row_number,
-            )
-        if target_resolution.error:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, target_resolution.error)
-            return True
-        target_id = target_resolution.target_id
-        if not target_id:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !done <id|number>")
-            return True
-        return await _apply_command_operation(
-            message,
-            raw_id,
-            config,
-            target_id=target_id,
-            op="update",
-            fields={"status": "done", "completed_at": _now_iso()},
-            command_name="done",
-            row_number=target_resolution.row_number,
-            source_view=target_resolution.source_view,
-        )
-    if command == "!fix":
-        try:
-            fix_parts = shlex.split(content)
-        except ValueError:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Invalid !fix syntax. Quote values containing spaces.")
-            return True
-        if len(fix_parts) < 3:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !fix <id|number> <field=value> [field=value ...]")
-            return True
-        target_resolution = _resolve_command_target(message, fix_parts[1])
-        if target_resolution.reason and target_resolution.row_number is not None:
-            _log_numbered_mutation_resolution_failed(
-                raw_event_id=raw_id,
-                command="fix",
-                reason=target_resolution.reason,
-                source_view=target_resolution.source_view,
-                row_number=target_resolution.row_number,
-            )
-        if target_resolution.error:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, target_resolution.error)
-            return True
-        target_id = target_resolution.target_id
-        if not target_id:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !fix <id|number> <field=value> [field=value ...]")
-            return True
-        updates: dict[str, Any] = {}
-        for token in fix_parts[2:]:
-            if "=" not in token:
-                await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, "Invalid !fix syntax. Use field=value and quote values containing spaces.")
-                return True
-            key, value = token.split("=", 1)
-            key = key.strip()
-            value = value.strip()
-            if not key:
-                await _swap_reaction(message, "⏳", "⚠️")
-                await _send_response(message, "Field name cannot be empty.")
-                return True
-            updates[key] = value
-        if not updates:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "No valid fields provided.")
-            return True
-        return await _apply_command_operation(
-            message,
-            raw_id,
-            config,
-            target_id=target_id,
-            op="update",
-            fields=updates,
-            validate_fix=True,
-            command_name="fix",
-            row_number=target_resolution.row_number,
-            source_view=target_resolution.source_view,
-        )
-    if command == "!clear-archive":
-        if len(parts) != 1:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !clear-archive")
-            return True
-        _start_archive_clear_confirmation(message)
-        await _swap_reaction(message, "⏳", "❓")
-        await _send_response(
-            message,
-            "This will permanently clear all archive data (except `.git`). Reply with `DELETE` within 2 minutes to confirm.",
-        )
-        return True
-    if command == "!confirm":
-        if len(parts) != 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !confirm <pending_id>")
-            return True
-        pending_id = parts[1]
-        pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
-        pending = load_pending_action(pending_root, pending_id)
-        if not pending:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, f"Unknown pending action: {pending_id}")
-            return True
-        if pending.status != "pending":
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, f"Pending action {pending_id} is {pending.status}.")
-            return True
-        object_type = pending.object_type
-        schema_path = _SCHEMA_MAP.get(object_type)
-        if not schema_path and object_type != "mixed":
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Pending action has an unsupported object type.")
-            return True
-        try:
-            result = apply_operations(
-                pending.derived,
-                objects_root=objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=schema_path if schema_path else None,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception as exc:
-            logging.exception("pending_apply_failed id=%s", pending_id)
-            update_pending_action_status(pending_root, pending_id, "failed")
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Failed to apply pending action. Check logs for details.")
-            return True
-        await _refresh_index_async(objects_root, index_db, matching=matching_config)
-        _notify_due_time_reminder_schedule_changed(config)
-        touched_ids = _extract_target_ids_from_derived(pending.derived)
-        touched_ids.extend(_extract_ids_from_written_paths(result.written_paths))
-        _record_affinity_touches(_cursor_key(message), touched_ids, matching=matching_config)
-        update_pending_action_status(pending_root, pending_id, "confirmed")
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(
-            message,
-            f"Applied pending action {pending_id}. ({len(result.written_paths)} item(s) updated.)",
-        )
-        return True
-    if command == "!cancel":
-        if len(parts) != 2:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, "Usage: !cancel <pending_id>")
-            return True
-        pending_id = parts[1]
-        pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
-        pending = load_pending_action(pending_root, pending_id)
-        if not pending:
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, f"Unknown pending action: {pending_id}")
-            return True
-        if pending.status != "pending":
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, f"Pending action {pending_id} is {pending.status}.")
-            return True
-        update_pending_action_status(pending_root, pending_id, "cancelled")
-        await _swap_reaction(message, "⏳", "✅")
-        await _send_response(message, f"Cancelled pending action {pending_id}.")
-        return True
-    return False
+    return await _transport_commands.handle_command(
+        runtime=_DISCORD_COMMAND_RUNTIME,
+        message=message,
+        content=content,
+        raw_id=raw_id,
+        config=config,
+    )
 
 
 def _now_iso() -> str:
