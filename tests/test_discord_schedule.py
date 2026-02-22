@@ -5,7 +5,7 @@ from datetime import timedelta
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 
-from squire_core import discord_bot
+from squire_core import runtime as discord_bot
 
 
 def test_parse_weekly_review_day() -> None:

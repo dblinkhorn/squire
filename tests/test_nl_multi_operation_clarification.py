@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from squire_core import discord_bot
+from squire_core import runtime as discord_bot
 from squire_core.config_utils import load_nl_command_routing_config
 
 

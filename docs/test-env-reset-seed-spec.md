@@ -133,7 +133,7 @@ On failure:
 
 ## Implementation Notes
 
-- Add a dedicated helper module for seed construction and writes (for example `src/squire_core/test_seed.py`) instead of embedding fixture literals in `discord_bot.py`.
+- Add a dedicated helper module for seed construction and writes (for example `src/squire_core/test_seed.py`) instead of embedding fixture literals in `runtime.py`.
 - Reuse canonical write path (`write_canonical_object`) and schema validation to ensure seeded data remains contract-valid.
 - Keep seed IDs deterministic so smoke scripts and docs can reference known items.
 

@@ -98,57 +98,18 @@
   - `src/squire_core/transport/{__init__.py,contracts.py,state.py,bootstrap.py,health.py,commands.py,routing.py,reminders.py}`
   - `src/squire_core/transport/discord/{__init__.py,adapter.py,views.py,scheduler.py}`
   - `src/squire_core/transport/slack/{__init__.py,adapter.py,scheduler.py}`
-- Stage 1 helper extraction is complete:
-  - implemented health helpers in `src/squire_core/transport/health.py`
-  - implemented bootstrap/time-parse/test-mode helpers in `src/squire_core/transport/bootstrap.py`
-  - implemented due-time reminder schedule/ledger helpers in `src/squire_core/transport/reminders.py`
-  - `src/squire_core/discord_bot.py` now imports these helpers as compatibility shims (behavior preserved).
-- Stage 2 shared state extraction is complete:
-  - cursor/affinity/clarification/archive-clear helper logic moved into `src/squire_core/transport/state.py`
-  - transport state now provides explicit get/store/prune APIs plus numbered digest/review rendering helpers
-  - `src/squire_core/discord_bot.py` delegates to transport-state helpers while retaining compatibility wrappers and thread-parent cursor fallback semantics.
-- Stage 3 command engine extraction is complete:
-  - explicit `!` command orchestration moved into `src/squire_core/transport/commands.py` as a shared transport module
-  - added adapter callback protocol hooks in the command engine for send/reaction/state/apply operations
-  - `src/squire_core/discord_bot.py` now delegates `_handle_command` to shared transport command handling via `_DiscordCommandRuntime` compatibility adapter
-  - command apply internals (`_apply_command_operation`) remain in `discord_bot.py` for stage-3 compatibility and will be reduced further in later adapter consolidation stages
-- Stage 4 NL routing engine extraction is complete:
-  - implemented transport-agnostic routing/normalization engine in `src/squire_core/transport/routing.py`
-  - extracted NL route evaluation + mutation plan normalization + clarification-scope enforcement + pending-plan assembly into shared routing module
-  - retained compatibility wrappers in `src/squire_core/discord_bot.py` for `_maybe_route_nl_command`, `_queue_nl_mutation_confirmation`, `_normalize_nl_mutation_plan_input`, and `_normalize_set_fields`
-  - added `_DiscordRoutingRuntime` adapter so Discord-specific side effects (message IO, view construction, state keys, numbered-resolution logging) are injected via callbacks
-  - kept `MutationPendingView` construction in Discord adapter layer by runtime callback (`create_mutation_pending_view`) to preserve transport boundary
-  - added shared-module seam tests in `tests/test_transport_routing.py`
-- Stage 5 Discord adapter consolidation is complete:
-  - moved Discord view classes into `src/squire_core/transport/discord/views.py` (`PendingActionView`, `MutationPendingView`, `AutoApplyFeedbackView`)
-  - moved Discord scheduler logic into `src/squire_core/transport/discord/scheduler.py` (`DiscordSchedulerMixin`)
-  - implemented Discord adapter lifecycle + IO helpers in `src/squire_core/transport/discord/adapter.py` and shifted `SquireBot` there
-  - adapter naming now uses `DiscordSquireBot`; `SquireBot` is kept as a temporary compatibility alias
-  - `src/squire_core/discord_bot.py` now acts as compatibility shim by importing adapter/view modules and preserving existing symbol names/call sites
-  - updated docs for explicit adapter boundaries in `docs/modules.md` and `docs/architecture.md`
-- Sequencing decision (2026-02-22): Slack adapter behavior is out of scope for this staged refactor; only revisit after Stage 6 completion (entrypoint cutover + `discord_bot.py` shim removal).
-- `discord_bot.py` is intentionally retained as a temporary compatibility shim during staged extraction; target end-state removes it after entrypoint/test migration.
-- Final runtime composition-root direction is `python -m squire_core.runtime` (`src/squire_core/runtime.py`) after cutover stage.
+- Stages 1-5 helper/state/command/routing/adapter extraction are complete; shared runtime logic now lives under `src/squire_core/transport/*` and Discord-specific behavior is isolated under `src/squire_core/transport/discord/*`.
+- Stage 6 is complete (2026-02-22):
+  - removed compatibility shim `src/squire_core/discord_bot.py`
+  - canonical runtime entrypoint is `python -m squire_core.runtime` (`src/squire_core/runtime.py`)
+  - runtime surfaces (`Makefile`, `Dockerfile`) and shim-dependent tests were migrated off `squire_core.discord_bot`
+- Sequencing decision (2026-02-22): Slack adapter behavior remains out of scope for this staged refactor and should be revisited as follow-on work after Stage 6.
+- Stage 7 is now explicitly two-phase in `docs/multi-transport-refactor-spec.md` and should run as Stage 7A (safe hygiene/inventory) -> Stage 8 (boundary hardening) -> Stage 7B (post-hardening orphan removals).
+- Stage 8 boundary hardening is now tracked in `docs/multi-transport-refactor-spec.md` to complete original modularity intent (remove Discord coupling from root runtime/shared flow contracts).
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
-- Stage 1 validation:
-  - `.venv/bin/python -m py_compile $(rg --files src/squire_core/transport)` passed.
-  - `.venv/bin/python -m pytest -q tests/test_discord_schedule.py tests/test_test_mode_startup.py` passed (`20 passed`).
-  - `.venv/bin/python -m pytest -q tests/test_discord_commands.py` passed (`37 passed`).
-  - `tests/test_health_server.py` still has known environment-restricted socket-bind failures in this sandbox (parse-only health tests pass).
-- Stage 2 validation:
-  - `.venv/bin/python -m py_compile src/squire_core/transport/state.py src/squire_core/discord_bot.py` passed.
-  - `.venv/bin/python -m pytest -q tests/test_surfacing_cursor.py tests/test_discord_commands.py tests/test_nl_multi_operation_clarification.py` passed (`42 passed`).
-  - `.venv/bin/python -m pytest -q` passed except the same known environment-restricted `tests/test_health_server.py` socket-bind failures (`2 failed`, `116 passed`).
-- Stage 3 validation:
-  - `.venv/bin/python -m py_compile src/squire_core/transport/commands.py src/squire_core/discord_bot.py tests/test_transport_commands.py` passed.
-  - `.venv/bin/python -m pytest -q tests/test_transport_commands.py tests/test_discord_commands.py tests/test_discord_schedule.py tests/test_nl_multi_operation_clarification.py` passed (`57 passed`).
-  - `.venv/bin/python -m pytest -q tests/test_surfacing.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py` passed (`20 passed`).
-- Stage 4 validation:
-  - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_transport_routing.py tests/test_discord_commands.py tests/test_nl_mutation_normalization.py tests/test_nl_multi_operation_clarification.py` passed (`48 passed`).
-  - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_transport_commands.py tests/test_transport_routing.py tests/test_discord_schedule.py tests/test_surfacing.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py tests/test_nl_multi_operation_clarification.py` passed (`43 passed`).
-- Stage 5 validation:
-  - `.venv/bin/python -m py_compile src/squire_core/discord_bot.py src/squire_core/transport/discord/views.py src/squire_core/transport/discord/scheduler.py src/squire_core/transport/discord/adapter.py` passed.
-  - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_discord_commands.py tests/test_discord_schedule.py tests/test_transport_commands.py tests/test_transport_routing.py` passed (`57 passed`).
+- Validation baseline:
+  - `.venv/bin/python -m pytest -q` currently passes except known sandbox socket-bind failures in `tests/test_health_server.py`.
+  - Stage 6 cutover verification (2026-02-22): `py_compile` across `src/` + `tests/` passed; focused cutover suite passed (`73 passed`).
 
 ## Known Constraints and Loose Ends
 
@@ -156,6 +117,7 @@
 - Plan-size guardrails (max operations per plan / max targets per operation) are intentionally deferred for now.
   - Track this in `.agent/future-plans.md` under routing hardening.
 - Due-time reminder scheduler assumes single-process runtime ownership of queue/ledger writes.
+- Investigate daily status surfacing gap: admin items without `due_date` are reported as not surfacing reliably in daily status output.
 
 ## Canonical References
 

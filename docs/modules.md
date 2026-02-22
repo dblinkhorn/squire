@@ -51,7 +51,7 @@ Design intent:
 2. keep shared runtime logic transport-neutral
 3. use adapter-to-shared contracts instead of passing SDK-native objects into shared layers
 
-Current Discord adapter split (Stage 5):
+Current Discord adapter/runtime split:
 
 1. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/adapter.py`:
 event translation (`discord.Client` lifecycle hooks) and Discord message/reaction IO helpers.
@@ -59,8 +59,8 @@ event translation (`discord.Client` lifecycle hooks) and Discord message/reactio
 Discord UI views (`PendingActionView`, `MutationPendingView`, `AutoApplyFeedbackView`) and interaction callbacks.
 3. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/scheduler.py`:
 digest/reminder scheduling loops and Discord delivery channel resolution.
-4. `/Users/dblinkhorn/squire/src/squire_core/discord_bot.py`:
-temporary compatibility shim that wires shared transport modules and re-exports adapter behavior for existing call sites/tests.
+4. `/Users/dblinkhorn/squire/src/squire_core/runtime.py`:
+runtime composition root that wires shared transport modules, adapter callbacks, and startup behavior.
 
 ## Optional Providers
 

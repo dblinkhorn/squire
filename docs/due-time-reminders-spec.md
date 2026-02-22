@@ -345,7 +345,7 @@ Emit structured logs with consistent event names.
 
 Primary implementation files:
 
-1. `src/squire_core/discord_bot.py`
+1. `src/squire_core/runtime.py`
    - schedule config parsing
    - task lifecycle
    - dispatch, rebuild, reconcile loops

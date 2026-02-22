@@ -415,9 +415,112 @@ Expected update surfaces:
 
 Acceptance criteria:
 
-1. no remaining runtime/test/doc references to `squire_core.discord_bot` entrypoint
+1. no remaining operational runtime/test/doc references to `squire_core.discord_bot` entrypoint (historical references in this planning spec are acceptable)
 2. startup behavior remains unchanged from user perspective
 3. full test suite passes with new module paths
+
+Completion notes (2026-02-22):
+
+1. runtime entrypoint cut over to `python -m squire_core.runtime` in local/dev/deploy surfaces
+2. compatibility shim file `/Users/dblinkhorn/squire/src/squire_core/discord_bot.py` removed
+3. tests that imported `from squire_core import discord_bot` migrated to runtime module import paths
+
+Execution ordering after Stage 6 (required):
+
+1. Stage 7A (safe hygiene + verification inventory) first
+2. Stage 8 (transport boundary hardening) second
+3. Stage 7B (orphan removals that depend on boundary-hardening outcomes) last
+
+## Stage 7: Cleanup and Orphan Handling (Two-Phase)
+
+Safety proviso (required):
+
+1. do not remove code solely because it appears unused from static scans
+2. before deleting any symbol/module/path, verify it is truly leftover by checking runtime call paths, tests, and config-driven/indirect usage
+3. if certainty is low, prefer deprecation + follow-up verification over immediate removal
+4. every removal PR must include explicit evidence of safety (references searched, tests run, and observed behavior parity)
+
+Recorded findings inventory (2026-02-22 audit):
+
+1. likely unused imports in transport/shared modules:
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/routing.py` (`Awaitable`, and likely `timezone`)
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/discord/scheduler.py` (`Path`)
+2. likely unused exception aliases in runtime:
+   - `/Users/dblinkhorn/squire/src/squire_core/runtime.py` (`except Exception as exc` sites where `exc` is not referenced)
+3. likely orphaned transport helpers/protocol aliases (no call sites found in repo scan):
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py`: `TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/state.py`: `NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`
+4. Slack scaffold modules currently unreferenced by runtime:
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/adapter.py`
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/scheduler.py`
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/__init__.py`
+
+### Stage 7A: Safe Hygiene and Verification Inventory (Pre-Hardening)
+
+Scope:
+
+1. remove only low-risk hygiene issues that are independently safe (for example clearly-unused imports/locals with no behavior impact)
+2. create/refresh the verified inventory of candidate orphan symbols/modules, including evidence and confidence level
+3. add lightweight lint/static-check coverage in dev workflow to prevent new unused-symbol drift
+4. defer any ambiguous module/symbol removals to Stage 7B unless safety is proven
+
+Acceptance criteria:
+
+1. static analysis reports no new unused-import/unused-variable warnings in `src/squire_core/transport/*` and `src/squire_core/runtime.py`
+2. all Stage 7A removals include explicit safety evidence and behavior-parity verification
+3. inventory of deferred candidate removals is documented with rationale and confidence
+
+### Stage 7B: Orphan Removal and Contract Pruning (Post-Hardening)
+
+Scope:
+
+1. after Stage 8, remove or wire orphaned helpers/symbols based on the hardened boundary design
+2. decide and document final status of Slack scaffold placeholders (retain as explicit stubs vs retire)
+3. remove any temporary compatibility/deprecation scaffolding proven unnecessary after Stage 8
+
+Acceptance criteria:
+
+1. every exported symbol in `transport/contracts.py` and `transport/state.py` is either used or intentionally documented as reserved scaffolding
+2. docs capture final decision for Slack scaffold retention vs removal
+3. tests remain green at current baseline (allowing known sandbox-limited health-server bind constraints)
+4. each removed symbol/module has recorded verification evidence that removal is safe and non-disruptive
+
+## Stage 8: Transport Boundary Hardening (Modularity Intent Completion)
+
+Intent:
+
+1. complete the original modularity goal by enforcing strict separation between shared runtime behavior and transport SDK concerns
+2. address architecture drift left after Stage 6 cutover, where runtime composition remains Discord-coupled
+
+Recorded boundary violations (2026-02-22 audit):
+
+1. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` still imports and types against `discord` directly, including `discord.Message` in shared flow helpers and runtime wrappers
+2. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` still constructs and dispatches Discord UI/view primitives (`PendingActionView`, `MutationPendingView`, `AutoApplyFeedbackView`) instead of delegating those concerns to adapter modules
+3. shared command/routing orchestration is invoked through Discord-specific runtime wrappers (`_DiscordCommandRuntime`, `_DiscordRoutingRuntime`) whose method signatures remain transport-specific
+4. transport-neutral contracts in `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py` (`TransportMessageContext`, `TransportIO`) are not yet the active production entry contracts for command/routing flow
+
+Scope:
+
+1. make `/Users/dblinkhorn/squire/src/squire_core/runtime.py` a thin composition/launch module only (config/bootstrap/wiring)
+2. move Discord message lifecycle handling and Discord-specific flow orchestration under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`
+3. refactor shared flow entrypoints to consume transport-neutral contracts (`TransportMessageContext`, `TransportIO`, typed result contracts) instead of SDK-native message/view types
+4. remove Discord UI and reaction/send primitives from shared runtime codepaths; keep them adapter-owned
+5. add lightweight import-boundary checks and contract tests so boundary regressions are caught automatically
+
+Implementation guidance:
+
+1. shared modules (`transport/commands.py`, `transport/routing.py`, `transport/state.py`) should not import or type against `discord.py`/Slack SDK objects
+2. adapter modules should own all SDK object translation and UI concerns
+3. any temporary compatibility wrappers must be documented with explicit removal criteria and targeted follow-up stage
+4. apply the Stage 7 removal-safety proviso to any boundary-hardening deletions (verify first, then remove)
+
+Acceptance criteria:
+
+1. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` has no `discord.py` imports and no function signatures typed with Discord SDK objects
+2. shared transport modules (`/Users/dblinkhorn/squire/src/squire_core/transport/{commands.py,routing.py,state.py,contracts.py}`) expose transport-neutral contracts only
+3. Discord-specific UI/view creation and message/reaction side effects exist only under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`
+4. contract tests validate that Discord adapter translates SDK-native objects into shared contracts and preserves current behavior
+5. docs (`architecture.md`, `modules.md`, this spec) reflect the enforced boundary model, not just directional intent
 
 ## Test and Validation Strategy
 
@@ -449,7 +552,7 @@ Tests should evolve in phases, not as a bulk move:
   - `tests/test_transport_routing.py`
   - `tests/test_transport_reminders.py`
 3. add adapter contract tests to verify Discord adapter passes normalized context/callbacks correctly
-4. once stage 6 cutover is complete, update or retire tests that directly import `squire_core.discord_bot`
+4. stage 6 cutover completed on 2026-02-22; tests importing the old shim were migrated to runtime module paths
 5. preserve user-visible behavior assertions while moving internal-unit coverage closer to extracted modules
 
 Regression policy:
@@ -493,12 +596,16 @@ When stages land, keep docs aligned:
 
 2. Execute by stages, one PR-sized slice at a time.
 
+Post-Stage-6 sequencing requirement:
+
+- execute Stage 7A, then Stage 8, then Stage 7B
+
 3. For each stage:
 - keep behavior unchanged
 - run focused tests first, then broader suite
 - update `.agent/context.md` with only durable decisions and unresolved risks
 
-4. Slack adapter implementation is out of scope for this staged refactor. Revisit only after Stage 6 completes (entrypoint cutover + shim removal).
+4. Slack adapter implementation remains out of scope for this staged refactor. Revisit as a follow-on after Stage 7B completes.
 
 ## Success Definition
 
