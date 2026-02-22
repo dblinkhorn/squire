@@ -16,10 +16,10 @@ init:
 	python -m squire_core.cli_init
 
 run-bot:
-	python -m squire_core.discord_bot
+	python -m squire_core.runtime
 
 run-bot-test:
-	SQUIRE_ENV=test python -m squire_core.discord_bot
+	SQUIRE_ENV=test python -m squire_core.runtime
 
 test:
 	python3 -m pytest -q

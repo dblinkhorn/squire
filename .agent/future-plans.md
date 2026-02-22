@@ -27,6 +27,10 @@ Purpose:
 
 - Calendar integration (for example event creation from admin items) if explicitly prioritized.
 - Optional archive backup automation (for example remote git backup workflow).
+- Make target naming follow-on (post-Stage-6, separate PR):
+  - rename Discord run targets to explicit transport names: `run-discord-bot` and `run-discord-bot-test`
+  - do not add Slack make targets until Slack integration is actually implemented
+  - do not keep legacy aliases (`run-bot`, `run-bot-test`) once the rename lands
 
 ## Extensibility Ideas
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from squire_core import discord_bot
+from squire_core import runtime as discord_bot
 from squire_core.config_utils import normalize_archive_config
 
 

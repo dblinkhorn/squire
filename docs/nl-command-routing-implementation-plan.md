@@ -13,7 +13,7 @@ Status:
 
 Assume current runtime:
 
-- NL routing entrypoint exists in `src/squire_core/discord_bot.py`.
+- NL routing entrypoint exists in `src/squire_core/runtime.py`.
 - At planning time, route schema/prompt supported single-operation mutation plans.
 - Pending-action confirm/apply pipeline is implemented and must be reused.
 - Explicit command flows (`!done`, `!append`, `!fix`, `!confirm`, `!cancel`, `!clear-archive`) are stable.
@@ -35,7 +35,7 @@ Required deliverables:
 2. Prompt update:
    - `config/prompts/nl_command_routing_v1.txt`
 3. Runtime implementation:
-   - `src/squire_core/discord_bot.py`
+   - `src/squire_core/runtime.py`
    - optional helper extraction into `src/squire_core/nl_planner.py`
 4. Clarification runtime state:
    - in-memory (or equivalent runtime state) clarification context keyed by user+channel with TTL.
@@ -104,7 +104,7 @@ Acceptance check:
 
 Files:
 
-- `src/squire_core/discord_bot.py` (or `src/squire_core/nl_planner.py`)
+- `src/squire_core/runtime.py` (or `src/squire_core/nl_planner.py`)
 
 Tasks:
 
@@ -121,7 +121,7 @@ Acceptance check:
 
 Files:
 
-- `src/squire_core/discord_bot.py`
+- `src/squire_core/runtime.py`
 
 Tasks:
 
@@ -148,7 +148,7 @@ Acceptance check:
 
 Files:
 
-- `src/squire_core/discord_bot.py`
+- `src/squire_core/runtime.py`
 
 Tasks:
 
@@ -174,7 +174,7 @@ Acceptance check:
 
 Files:
 
-- `src/squire_core/discord_bot.py`
+- `src/squire_core/runtime.py`
 
 Tasks:
 
@@ -193,7 +193,7 @@ Acceptance check:
 
 Files:
 
-- `src/squire_core/discord_bot.py`
+- `src/squire_core/runtime.py`
 
 Tasks:
 
@@ -257,7 +257,7 @@ Run at minimum:
 
 1. `.venv/bin/python -m pytest -q tests/test_discord_commands.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py tests/test_nl_multi_operation_clarification.py`
 2. `.venv/bin/python -m pytest -q tests/test_surfacing.py tests/test_discord_schedule.py`
-3. `.venv/bin/python -m py_compile src/squire_core/discord_bot.py src/squire_core/config_utils.py`
+3. `.venv/bin/python -m py_compile src/squire_core/runtime.py src/squire_core/config_utils.py`
 
 If tests fail, fix before handoff.
 

@@ -5,7 +5,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from squire_core import discord_bot
+from squire_core import runtime as discord_bot
 
 
 def test_parse_health_port_defaults_and_disable() -> None:
