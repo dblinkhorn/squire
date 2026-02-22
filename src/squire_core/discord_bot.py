@@ -73,6 +73,7 @@ from squire_core.transport.bootstrap import (
     run_test_mode_reset_seed as _run_test_mode_reset_seed,
 )
 from squire_core.transport import commands as _transport_commands
+from squire_core.transport import routing as _transport_routing
 from squire_core.transport.health import (
     HealthServer as _HealthServer,
     parse_health_port as _parse_health_port,
@@ -564,121 +565,7 @@ def _normalize_nl_raw_user_phrases(payload: Any) -> dict[str, str]:
 
 
 def _normalize_nl_mutation_plan_input(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    raw_operations = payload.get("operations")
-    operation_items: list[Any]
-    if isinstance(raw_operations, list):
-        operation_items = raw_operations
-    else:
-        # Legacy single-operation payload fallback.
-        operation_items = [
-            {
-                "operation_id": "op_1",
-                "action_type": payload.get("action_type"),
-                "target_refs": [payload.get("target_ref")] if isinstance(payload.get("target_ref"), dict) else [],
-                "field_updates": payload.get("field_updates"),
-                "append_text": payload.get("append_text"),
-                "raw_user_phrases": payload.get("raw_user_phrases"),
-                "confidence": payload.get("confidence"),
-                "requires_clarification": payload.get("requires_clarification"),
-                "clarification_reason": payload.get("clarification_reason"),
-            }
-        ]
-
-    normalized_operations: list[dict[str, Any]] = []
-    unresolved_reasons: list[str] = []
-    for index, raw_operation in enumerate(operation_items, start=1):
-        if not isinstance(raw_operation, dict):
-            continue
-        operation_id = _coerce_non_empty_str(raw_operation.get("operation_id")) or f"op_{index}"
-        action_type = _coerce_non_empty_str(raw_operation.get("action_type"))
-        if action_type is None:
-            unresolved_reasons.append("I can apply that update, but I need the action type.")
-            continue
-        action_type = action_type.lower()
-        if action_type not in _NL_MUTATION_ACTIONS:
-            unresolved_reasons.append("I couldn't map that to a supported mutation action.")
-            continue
-
-        raw_target_refs = raw_operation.get("target_refs")
-        if not isinstance(raw_target_refs, list):
-            raw_target_ref = raw_operation.get("target_ref")
-            if isinstance(raw_target_ref, dict):
-                raw_target_refs = [raw_target_ref]
-            else:
-                raw_target_refs = []
-        target_refs: list[dict[str, Any]] = []
-        for raw_target_ref in raw_target_refs:
-            if not isinstance(raw_target_ref, dict):
-                continue
-            target_token = _extract_nl_target_token_from_target_ref(raw_target_ref)
-            if target_token is None:
-                continue
-            target_refs.append({"target_ref": raw_target_ref, "target_token": target_token})
-        if not target_refs:
-            unresolved_reasons.append("I can apply that update, but I need which item to target.")
-            continue
-
-        field_updates = raw_operation.get("field_updates")
-        if not isinstance(field_updates, list):
-            field_updates = []
-
-        append_text = _coerce_non_empty_str(raw_operation.get("append_text"))
-        operation_confidence_raw = raw_operation.get("confidence")
-        operation_confidence = 0.0
-        if isinstance(operation_confidence_raw, (int, float)):
-            operation_confidence = max(0.0, min(1.0, float(operation_confidence_raw)))
-        requires_clarification_raw = raw_operation.get("requires_clarification")
-        requires_clarification = (
-            bool(requires_clarification_raw) if isinstance(requires_clarification_raw, bool) else False
-        )
-        clarification_reason = _coerce_non_empty_str(raw_operation.get("clarification_reason"))
-        raw_user_phrases = _normalize_nl_raw_user_phrases(raw_operation.get("raw_user_phrases"))
-
-        normalized_operations.append(
-            {
-                "operation_id": operation_id,
-                "action_type": action_type,
-                "target_refs": target_refs,
-                "field_updates": field_updates,
-                "append_text": append_text,
-                "raw_user_phrases": raw_user_phrases,
-                "confidence": operation_confidence,
-                "requires_clarification": requires_clarification,
-                "clarification_reason": clarification_reason,
-            }
-        )
-
-    if not normalized_operations:
-        return None, unresolved_reasons[0] if unresolved_reasons else "I can apply that update, but I need more detail."
-
-    plan_confidence_raw = payload.get("confidence")
-    plan_confidence = 0.0
-    if isinstance(plan_confidence_raw, (int, float)):
-        plan_confidence = max(0.0, min(1.0, float(plan_confidence_raw)))
-
-    object_type_hint = _coerce_non_empty_str(payload.get("object_type_hint"))
-    if object_type_hint:
-        object_type_hint = object_type_hint.lower()
-    if object_type_hint not in {"admin", "projects", "people", "ideas"}:
-        object_type_hint = None
-
-    requires_clarification_raw = payload.get("requires_clarification")
-    requires_clarification = bool(requires_clarification_raw) if isinstance(requires_clarification_raw, bool) else False
-    clarification_reason = _coerce_non_empty_str(payload.get("clarification_reason"))
-    if any(bool(op.get("requires_clarification")) for op in normalized_operations):
-        requires_clarification = True
-
-    return (
-        {
-            "operations": normalized_operations,
-            "confidence": plan_confidence,
-            "requires_clarification": requires_clarification,
-            "clarification_reason": clarification_reason,
-            "object_type_hint": object_type_hint,
-            "raw_user_phrases": _normalize_nl_raw_user_phrases(payload.get("raw_user_phrases")),
-        },
-        None,
-    )
+    return _transport_routing.normalize_nl_mutation_plan_input(payload)
 
 
 def _build_nl_read_command(
@@ -1050,46 +937,13 @@ def _normalize_set_fields(
     now: datetime,
     tz: tzinfo,
 ) -> tuple[dict[str, str] | None, str | None, list[str]]:
-    normalized: dict[str, str] = {}
-    notes: list[str] = []
-    if not field_updates:
-        return None, "field_unknown", notes
-    for raw_update in field_updates:
-        if not isinstance(raw_update, dict):
-            continue
-        field_id, field_error, field_notes = _resolve_field_for_update(
-            object_type=object_type,
-            update=raw_update,
-        )
-        notes.extend(field_notes)
-        if field_error:
-            return None, field_error, notes
-        if field_id is None:
-            return None, "field_unknown", notes
-
-        value_text = _coerce_non_empty_str(raw_update.get("value_text"))
-        if value_text is None:
-            return None, "value_parse_failed", notes
-        normalized_value, value_error = _normalize_value_for_field(
-            object_type=object_type,
-            field_id=field_id,
-            value_text=value_text,
-            now=now,
-            tz=tz,
-        )
-        if value_error or normalized_value is None:
-            return None, value_error or "value_parse_failed", notes
-        normalized[field_id] = normalized_value
-
-    if not normalized:
-        return None, "field_unknown", notes
-    validated, validation_error = _validate_fix_updates(object_type, normalized)
-    if validation_error:
-        notes.append(f"validation_error:{validation_error}")
-        return None, "validation_failed", notes
-    if validated is None:
-        return None, "validation_failed", notes
-    return {key: str(value) for key, value in validated.items()}, None, notes
+    return _transport_routing.normalize_set_fields(
+        object_type=object_type,
+        field_updates=field_updates,
+        routing=routing,
+        now=now,
+        tz=tz,
+    )
 
 
 def _clarification_for_plan_reason(reason_code: str, *, object_type: str | None = None) -> tuple[str, list[str]]:
@@ -2069,419 +1923,17 @@ async def _queue_nl_mutation_confirmation(
     source_view: str | None = None,
     allow_clarification: bool = True,
 ) -> bool:
-    operations = plan_input.get("operations")
-    if not isinstance(operations, list) or not operations:
-        await _swap_reaction(message, "⏳", "⚠️")
-        await _send_response(message, "I can apply that update, but I need which actions to run.")
-        return True
-
-    _log_nl_plan_generated(raw_event_id=raw_id, action_type="multi_operation")
-    matching_config = load_matching_config(config)
-    objects_root = config.get("paths", {}).get("objects_root", "objects")
-    tz = resolve_timezone(config.get("timezone"))
-    now_local = datetime.now(tz)
-    now_iso = _now_iso()
-    normalized_entries: list[dict[str, Any]] = []
-
-    for operation in operations:
-        if not isinstance(operation, dict):
-            continue
-        action_type = _coerce_non_empty_str(operation.get("action_type")) or ""
-        operation_id = _coerce_non_empty_str(operation.get("operation_id")) or generate_prefixed_id("OP_")
-        command_name = _command_name_for_action_type(action_type)
-        target_refs = operation.get("target_refs")
-        if not isinstance(target_refs, list):
-            target_refs = []
-        if not target_refs:
-            normalized_entries.append(
-                {
-                    "operation_id": operation_id,
-                    "action_type": action_type,
-                    "target_ref": None,
-                    "target_token": None,
-                    "target_resolved_id": None,
-                    "target_object_type": None,
-                    "op_status": "unresolved",
-                    "reason_code": "target_missing",
-                    "normalization_notes": ["target_missing"],
-                    "normalized_fields": {},
-                    "proposed_operation": None,
-                    "_command_name": command_name,
-                    "_row_number": None,
-                    "_source_view": source_view,
-                    "target_title": None,
-                }
-            )
-            continue
-        for target_ref in target_refs:
-            target_token = None
-            if isinstance(target_ref, dict):
-                target_token = _coerce_non_empty_str(target_ref.get("target_token"))
-            entry: dict[str, Any] = {
-                "operation_id": operation_id,
-                "action_type": action_type,
-                "target_ref": target_ref if isinstance(target_ref, dict) else None,
-                "target_token": target_token,
-                "target_resolved_id": None,
-                "target_object_type": None,
-                "op_status": "unresolved",
-                "reason_code": None,
-                "normalization_notes": [],
-                "normalized_fields": {},
-                "proposed_operation": None,
-                "_command_name": command_name,
-                "_row_number": None,
-                "_source_view": source_view,
-                "target_title": None,
-            }
-            if target_token is None:
-                entry["reason_code"] = "target_missing"
-                entry["normalization_notes"] = ["target_missing"]
-                normalized_entries.append(entry)
-                continue
-
-            target_resolution = _resolve_command_target(message, target_token)
-            entry["_row_number"] = target_resolution.row_number
-            entry["_source_view"] = target_resolution.source_view or source_view
-            if target_resolution.reason and target_resolution.row_number is not None:
-                _log_numbered_mutation_resolution_failed(
-                    raw_event_id=raw_id,
-                    command=command_name,
-                    reason=target_resolution.reason,
-                    source_view=target_resolution.source_view or source_view,
-                    row_number=target_resolution.row_number,
-                )
-            if target_resolution.error:
-                entry["reason_code"] = _map_target_resolution_reason_to_plan_reason(target_resolution.reason)
-                entry["normalization_notes"] = [target_resolution.error]
-                normalized_entries.append(entry)
-                continue
-
-            target_id = target_resolution.target_id
-            if not target_id:
-                entry["reason_code"] = "target_missing"
-                entry["normalization_notes"] = ["target_missing"]
-                normalized_entries.append(entry)
-                continue
-            entry["target_resolved_id"] = target_id
-
-            target_path = find_object_path(objects_root, target_id)
-            if not target_path:
-                entry["reason_code"] = "target_unknown_id"
-                entry["normalization_notes"] = [f"unknown_id:{target_id}"]
-                normalized_entries.append(entry)
-                continue
-            frontmatter = load_frontmatter(target_path)
-            object_type_value = frontmatter.get("type")
-            if not isinstance(object_type_value, str) or not object_type_value.strip():
-                entry["reason_code"] = "validation_failed"
-                entry["normalization_notes"] = [f"type_missing:{target_id}"]
-                normalized_entries.append(entry)
-                continue
-            object_type = object_type_value.strip()
-            entry["target_object_type"] = object_type
-            entry["target_title"] = _coerce_non_empty_str(frontmatter.get("title")) or target_id
-
-            normalized_fields: dict[str, str] = {}
-            notes: list[str] = []
-            reason_code: str | None = None
-            proposed_operation: dict[str, Any] | None = None
-
-            if action_type == "mark_done":
-                notes.append("action:mark_done")
-                if object_type != "admin":
-                    reason_code = "target_wrong_type"
-                else:
-                    normalized_fields = {"status": "done", "completed_at": now_iso}
-                    proposed_operation = {
-                        "op": "update",
-                        "target_id": target_id,
-                        "fields": dict(normalized_fields),
-                        "object_type": object_type,
-                    }
-            elif action_type == "append_body":
-                append_text = _coerce_non_empty_str(operation.get("append_text"))
-                notes.append("action:append_body")
-                if append_text is None:
-                    reason_code = "value_parse_failed"
-                else:
-                    normalized_fields = {"body": append_text}
-                    proposed_operation = {
-                        "op": "append",
-                        "target_id": target_id,
-                        "fields": dict(normalized_fields),
-                        "object_type": object_type,
-                    }
-            elif action_type == "set_fields":
-                field_updates = operation.get("field_updates")
-                if not isinstance(field_updates, list):
-                    field_updates = []
-                normalized_fields, reason_code, notes = _normalize_set_fields(
-                    object_type=object_type,
-                    field_updates=field_updates,
-                    routing=routing,
-                    now=now_local,
-                    tz=tz,
-                )
-                if normalized_fields is None:
-                    normalized_fields = {}
-                if reason_code is None:
-                    proposed_operation = {
-                        "op": "update",
-                        "target_id": target_id,
-                        "fields": dict(normalized_fields),
-                        "object_type": object_type,
-                    }
-            else:
-                reason_code = "validation_failed"
-                notes.append("unsupported_action")
-
-            if reason_code is None and proposed_operation is not None:
-                entry["op_status"] = "resolved"
-                entry["reason_code"] = None
-                entry["normalization_notes"] = notes
-                entry["normalized_fields"] = {key: str(value) for key, value in normalized_fields.items()}
-                entry["proposed_operation"] = proposed_operation
-            else:
-                entry["op_status"] = "unresolved"
-                entry["reason_code"] = reason_code or "validation_failed"
-                entry["normalization_notes"] = notes
-                entry["normalized_fields"] = {key: str(value) for key, value in normalized_fields.items()}
-            normalized_entries.append(entry)
-
-    # Detect conflicting updates to the same target+field with different values.
-    seen_updates: dict[tuple[str, str], tuple[str, int]] = {}
-    conflict_indexes: set[int] = set()
-    for index, entry in enumerate(normalized_entries):
-        if entry.get("op_status") != "resolved":
-            continue
-        proposed = entry.get("proposed_operation")
-        if not isinstance(proposed, dict):
-            continue
-        if proposed.get("op") != "update":
-            continue
-        target_id = _coerce_non_empty_str(entry.get("target_resolved_id"))
-        fields = proposed.get("fields")
-        if target_id is None or not isinstance(fields, dict):
-            continue
-        for field, value in fields.items():
-            key = (target_id, str(field))
-            value_text = str(value)
-            existing = seen_updates.get(key)
-            if existing is None:
-                seen_updates[key] = (value_text, index)
-                continue
-            if existing[0] != value_text:
-                conflict_indexes.add(existing[1])
-                conflict_indexes.add(index)
-    for index in conflict_indexes:
-        entry = normalized_entries[index]
-        entry["op_status"] = "unresolved"
-        entry["reason_code"] = "operation_conflict"
-        entry["proposed_operation"] = None
-
-    resolved_entries = [entry for entry in normalized_entries if entry.get("op_status") == "resolved"]
-    unresolved_entries = [entry for entry in normalized_entries if entry.get("op_status") == "unresolved"]
-    unresolved_scope = _build_unresolved_scope_from_entries(unresolved_entries)
-
-    if unresolved_entries and allow_clarification:
-        first_reason = _coerce_non_empty_str(unresolved_entries[0].get("reason_code")) or "clarification_insufficient"
-        _log_nl_plan_clarified(raw_event_id=raw_id, reason_code=first_reason)
-        if routing.plan_trace_enabled:
-            _write_nl_mutation_normalized_trace(
-                config=config,
-                raw_event_id=raw_id,
-                payload={
-                    "schema_version": 1,
-                    "raw_event_id": raw_id,
-                    "plan_input": plan_input,
-                    "operations": [_build_nl_trace_operation(entry) for entry in normalized_entries],
-                    "summary": {
-                        "total_operations": len(normalized_entries),
-                        "resolved_count": len(resolved_entries),
-                        "unresolved_count": len(unresolved_entries),
-                        "cancelled_unresolved_count": 0,
-                    },
-                    "validation_outcome": "clarify",
-                },
-            )
-        _store_nl_clarification_context(
-            message=message,
-            raw_event_id=raw_id,
-            unresolved_scope=unresolved_scope,
-            base_plan_input=plan_input,
-        )
-        question, options = _clarification_for_plan_reason(first_reason)
-        clarification = _format_nl_clarification_message(
-            question=question,
-            options=options,
-            fallback="I need one clarification before I can continue with that request.",
-        )
-        await _swap_reaction(message, "⏳", "❓")
-        await _send_response(
-            message,
-            "\n".join([clarification, "", _summarize_unresolved_scope(unresolved_scope)]),
-        )
-        return True
-
-    cancelled_entries: list[dict[str, Any]] = []
-    if unresolved_entries:
-        for entry in unresolved_entries:
-            entry["op_status"] = "cancelled_unresolved"
-        cancelled_entries = list(unresolved_entries)
-        unresolved_entries = []
-        _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(cancelled_entries))
-
-    if not resolved_entries:
-        _log_nl_plan_blocked(raw_event_id=raw_id, reason_code="clarification_insufficient")
-        if routing.plan_trace_enabled:
-            _write_nl_mutation_normalized_trace(
-                config=config,
-                raw_event_id=raw_id,
-                payload={
-                    "schema_version": 1,
-                    "raw_event_id": raw_id,
-                    "plan_input": plan_input,
-                    "operations": [_build_nl_trace_operation(entry) for entry in normalized_entries],
-                    "summary": {
-                        "total_operations": len(normalized_entries),
-                        "resolved_count": 0,
-                        "unresolved_count": 0,
-                        "cancelled_unresolved_count": len(cancelled_entries),
-                    },
-                    "validation_outcome": "blocked",
-                },
-            )
-        lines = ["I couldn't safely apply this request, so no changes were made."]
-        if cancelled_entries:
-            lines.append("")
-            lines.append(_summarize_unresolved_scope(_build_unresolved_scope_from_entries(cancelled_entries)))
-        await _swap_reaction(message, "⏳", "⚠️")
-        await _send_response(message, "\n".join(lines))
-        return True
-
-    for entry in resolved_entries:
-        command_name = _coerce_non_empty_str(entry.get("_command_name")) or "fix"
-        row_number = entry.get("_row_number")
-        if not isinstance(row_number, int):
-            continue
-        target_id = _coerce_non_empty_str(entry.get("target_resolved_id"))
-        if target_id is None:
-            continue
-        _log_numbered_mutation_resolved(
-            raw_event_id=raw_id,
-            command=command_name,
-            source_view=_coerce_non_empty_str(entry.get("_source_view")) or source_view,
-            row_number=row_number,
-            object_id=target_id,
-        )
-
-    primary = resolved_entries[0]
-    _log_nl_plan_normalized(
-        raw_event_id=raw_id,
-        action_type=_coerce_non_empty_str(primary.get("action_type")) or "multi_operation",
-        target_id=_coerce_non_empty_str(primary.get("target_resolved_id")) or "",
-        object_type=_coerce_non_empty_str(primary.get("target_object_type")) or "unknown",
+    return await _transport_routing.queue_nl_mutation_confirmation(
+        runtime=_DISCORD_ROUTING_RUNTIME,
+        message=message,
+        raw_id=raw_id,
+        config=config,
+        plan_input=plan_input,
+        confidence=confidence,
+        routing=routing,
+        source_view=source_view,
+        allow_clarification=allow_clarification,
     )
-
-    object_types = {
-        _coerce_non_empty_str(entry.get("target_object_type"))
-        for entry in resolved_entries
-        if _coerce_non_empty_str(entry.get("target_object_type"))
-    }
-    pending_object_type = "mixed" if len(object_types) > 1 else (next(iter(object_types)) if object_types else "admin")
-    proposed_operations = []
-    for entry in resolved_entries:
-        proposed = entry.get("proposed_operation")
-        if isinstance(proposed, dict):
-            proposed_operations.append(proposed)
-
-    derived = {
-        "object_type": pending_object_type,
-        "raw_event_id": raw_id,
-        "extracted_fields": {},
-        "proposed_operations": proposed_operations,
-    }
-    pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
-    pending_id = generate_prefixed_id("PA_")
-    pending = PendingAction(
-        schema_version=1,
-        pending_action_id=pending_id,
-        raw_event_id=raw_id,
-        object_type=pending_object_type,
-        status="pending",
-        created_at=now_iso,
-        last_updated=now_iso,
-        derived=derived,
-        decision={
-            "source": "nl_command_routing",
-            "intent": "multi_operation",
-            "action_type": "multi_operation",
-            "confidence": confidence,
-        },
-        decision_confidence=confidence,
-        last_decision_id=None,
-    )
-    write_pending_action(pending, pending_root)
-    _log_nl_plan_pending_created(raw_event_id=raw_id, pending_id=pending_id, action_type="multi_operation")
-
-    outcome = "partial" if cancelled_entries else "ok"
-    if routing.plan_trace_enabled:
-        _write_nl_mutation_normalized_trace(
-            config=config,
-            raw_event_id=raw_id,
-            payload={
-                "schema_version": 1,
-                "raw_event_id": raw_id,
-                "plan_input": plan_input,
-                "operations": [_build_nl_trace_operation(entry) for entry in normalized_entries],
-                "summary": {
-                    "total_operations": len(normalized_entries),
-                    "resolved_count": len(resolved_entries),
-                    "unresolved_count": 0,
-                    "cancelled_unresolved_count": len(cancelled_entries),
-                },
-                "validation_outcome": outcome,
-            },
-        )
-
-    index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
-    view = MutationPendingView(
-        pending_id=pending_id,
-        pending_root=pending_root,
-        objects_root=objects_root,
-        index_db=index_db,
-        author_id=message.author.id,
-        matching=matching_config,
-        affinity_key=_cursor_key(message),
-        on_canonical_change=lambda: _notify_due_time_reminder_schedule_changed(config),
-    )
-    lines: list[str] = []
-    if len(resolved_entries) == 1:
-        lines.append(f'I think you meant to {_action_phrase_for_entry(resolved_entries[0]).lower()}?')
-    else:
-        lines.append("Please confirm you would like to:")
-        for entry in resolved_entries:
-            lines.append(f"- {_action_phrase_for_entry(entry)}")
-    if cancelled_entries:
-        lines.append("")
-        lines.append("Cancelled unresolved operations:")
-        for operation_id, detail in _build_unresolved_scope_from_entries(cancelled_entries).items():
-            reason_code = _coerce_non_empty_str(detail.get("reason_code")) or "clarification_insufficient"
-            lines.append(f"- {operation_id} ({reason_code})")
-    lines.append("")
-    lines.append("Confirm action or cancel to take no action.")
-    thread_title = _coerce_non_empty_str(resolved_entries[0].get("target_title")) or _coerce_non_empty_str(
-        resolved_entries[0].get("target_resolved_id")
-    )
-    await _swap_reaction(message, "⏳", "❓")
-    await _send_response(
-        message,
-        "\n".join(lines),
-        thread_title=thread_title,
-        view=view,
-    )
-    return True
 
 
 async def _maybe_route_nl_command(
@@ -2493,393 +1945,15 @@ async def _maybe_route_nl_command(
     provider: OpenAIProvider,
     model: str,
 ) -> bool:
-    routing = load_nl_command_routing_config(config)
-    if not routing.enabled:
-        return False
-
-    llm_config = config.get("llm", {})
-    prompt_path = "config/prompts/nl_command_routing_v1.txt"
-    if isinstance(llm_config, dict):
-        configured = llm_config.get("nl_command_routing_prompt_path")
-        if isinstance(configured, str) and configured.strip():
-            prompt_path = configured
-    try:
-        prompt = load_prompt(prompt_path)
-    except OSError as exc:
-        logging.warning("nl_route_prompt_load_failed path=%s error=%s", prompt_path, exc)
-        return False
-
-    try:
-        interpretation = await interpret_text_async(
-            provider=provider,
-            text=content,
-            model=model,
-            system_prompt=prompt,
-            schema_path=_NL_INTENT_SCHEMA_PATH,
-        )
-    except InterpretationValidationError as exc:
-        logging.warning("nl_route_invalid id=%s error=%s", raw_id, exc)
-        return False
-    except Exception as exc:
-        logging.warning("nl_route_failed id=%s error=%s", raw_id, exc)
-        return False
-
-    payload = interpretation.derived if isinstance(interpretation.derived, dict) else {}
-    route = _normalize_nl_route_payload(payload)
-    intent = route.intent
-    risk_tier = route.risk_tier
-    confidence = route.confidence
-    mapped_command = _NL_COMMAND_FOR_INTENT.get(intent)
-    clarification_payload = route.clarification or {}
-    clarification_question = _coerce_non_empty_str(clarification_payload.get("question"))
-    clarification_options_raw = clarification_payload.get("options")
-    clarification_options = (
-        [item.strip() for item in clarification_options_raw if isinstance(item, str) and item.strip()]
-        if isinstance(clarification_options_raw, list)
-        else []
+    return await _transport_routing.maybe_route_nl_command(
+        runtime=_DISCORD_ROUTING_RUNTIME,
+        message=message,
+        content=content,
+        raw_id=raw_id,
+        config=config,
+        provider=provider,
+        model=model,
     )
-    if not clarification_options:
-        clarification_options = route.ambiguities[:3]
-
-    if route.route == "read_command":
-        threshold = routing.read_auto_min_confidence
-    elif route.route == "mutation_plan":
-        threshold = routing.mutation_confirm_min_confidence
-    else:
-        threshold = routing.read_auto_min_confidence if risk_tier == "read" else routing.mutation_confirm_min_confidence
-    band = _confidence_band(confidence, threshold)
-
-    clarification_context = _load_nl_clarification_context(message)
-    if clarification_context is not None:
-        _clear_nl_clarification_context(message)
-        if route.route != "mutation_plan":
-            _log_nl_clarification_scope_blocked(raw_event_id=raw_id)
-            _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(clarification_context.unresolved_scope))
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(
-                message,
-                "\n".join(
-                    [
-                        _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
-                        "",
-                        _summarize_unresolved_scope(clarification_context.unresolved_scope),
-                    ]
-                ),
-            )
-            return True
-
-        clarification_raw_plan = route.mutation_plan or {}
-        clarification_plan_input, clarification_error = _normalize_nl_mutation_plan_input(clarification_raw_plan)
-        in_scope = (
-            clarification_plan_input is not None
-            and clarification_error is None
-            and _is_clarification_plan_in_scope(
-                clarification_plan_input=clarification_plan_input,
-                unresolved_scope=clarification_context.unresolved_scope,
-            )
-        )
-        if not in_scope:
-            _log_nl_clarification_scope_blocked(raw_event_id=raw_id)
-            _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(clarification_context.unresolved_scope))
-            await _swap_reaction(message, "⏳", "⚠️")
-            await _send_response(
-                message,
-                "\n".join(
-                    [
-                        _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
-                        "",
-                        _summarize_unresolved_scope(clarification_context.unresolved_scope),
-                    ]
-                ),
-            )
-            return True
-
-        merged_plan_input = _merge_clarification_plan_input(
-            base_plan_input=clarification_context.base_plan_input,
-            clarification_plan_input=cast(dict[str, Any], clarification_plan_input),
-        )
-        _log_nl_route_evaluated(
-            raw_event_id=raw_id,
-            route_result="clarified",
-            intent=intent,
-            risk_tier="mutation",
-            confidence_band=band,
-            mapped_command="nl_mutation_clarification",
-        )
-        return await _queue_nl_mutation_confirmation(
-            message=message,
-            raw_id=raw_id,
-            config=config,
-            plan_input=merged_plan_input,
-            confidence=confidence,
-            routing=routing,
-            source_view="nl_clarification",
-            allow_clarification=False,
-        )
-
-    if route.route == "capture_fallthrough" or intent == "none":
-        _log_nl_route_evaluated(
-            raw_event_id=raw_id,
-            route_result="fallthrough",
-            intent=intent,
-            risk_tier=risk_tier,
-            confidence_band=band,
-            mapped_command=mapped_command,
-        )
-        return False
-
-    if route.route == "blocked_explicit_only" or intent in _NL_EXPLICIT_ONLY_INTENTS:
-        if band == "low":
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="fallthrough",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            return False
-        _log_nl_route_blocked(raw_event_id=raw_id, intent=intent, reason="explicit_only")
-        _log_nl_route_evaluated(
-            raw_event_id=raw_id,
-            route_result="blocked_explicit_only",
-            intent=intent,
-            risk_tier=risk_tier,
-            confidence_band=band,
-            mapped_command=mapped_command,
-        )
-        await _swap_reaction(message, "⏳", "❓")
-        await _send_response(message, _explicit_only_guidance_for_intent(intent))
-        return True
-
-    if route.route == "clarify":
-        if routing.clarify_on_ambiguous and band != "low":
-            clarification = _format_nl_clarification_message(
-                question=clarification_question,
-                options=clarification_options,
-                fallback="Did you want me to run a command or capture this as a note?",
-            )
-            _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="clarified",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            await _swap_reaction(message, "⏳", "❓")
-            await _send_response(message, clarification)
-            return True
-        _log_nl_route_evaluated(
-            raw_event_id=raw_id,
-            route_result="fallthrough",
-            intent=intent,
-            risk_tier=risk_tier,
-            confidence_band=band,
-            mapped_command=mapped_command,
-        )
-        return False
-
-    if route.route == "read_command":
-        read_command = route.read_command or {}
-        read_intent = _coerce_non_empty_str(read_command.get("intent"))
-        if read_intent:
-            read_intent = read_intent.lower()
-        if read_intent not in _NL_READ_INTENTS:
-            read_intent = intent if intent in _NL_READ_INTENTS else "none"
-        args = read_command.get("args")
-        if not isinstance(args, dict):
-            args = {}
-
-        if read_intent == "show":
-            show_number = _coerce_positive_int(args.get("number"))
-            show_target = _coerce_non_empty_str(args.get("target"))
-            if show_number is None and (show_target is None or not show_target.isdigit()) and _looks_like_recent_request(content, args):
-                read_intent = "recent"
-                mapped_command = _NL_COMMAND_FOR_INTENT["recent"]
-
-        command, command_error = _build_nl_read_command(intent=read_intent, args=args, routing=routing)
-        if command_error:
-            if routing.clarify_on_ambiguous and band != "low":
-                clarification = _format_nl_clarification_message(
-                    question=clarification_question,
-                    options=clarification_options,
-                    fallback=command_error or "Did you want me to run a command, or save this as a note?",
-                )
-                _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
-                _log_nl_route_evaluated(
-                    raw_event_id=raw_id,
-                    route_result="clarified",
-                    intent=intent,
-                    risk_tier=risk_tier,
-                    confidence_band=band,
-                    mapped_command=mapped_command,
-                )
-                await _swap_reaction(message, "⏳", "❓")
-                await _send_response(message, clarification)
-                return True
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="fallthrough",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            return False
-        if band == "high" and command is not None:
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="executed",
-                intent=read_intent,
-                risk_tier="read",
-                confidence_band=band,
-                mapped_command=command,
-            )
-            return await _handle_command(message, command, raw_id, config)
-        if routing.clarify_on_ambiguous and band == "medium":
-            clarification = _format_nl_clarification_message(
-                question=clarification_question,
-                options=clarification_options or [f"Run `{command}`", "Save this as a note"],
-                fallback="Did you want me to run this command or capture a note?",
-            )
-            _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options or [f"Run `{command}`", "Save this as a note"])
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="clarified",
-                intent=read_intent,
-                risk_tier="read",
-                confidence_band=band,
-                mapped_command=command,
-            )
-            await _swap_reaction(message, "⏳", "❓")
-            await _send_response(message, clarification)
-            return True
-        _log_nl_route_evaluated(
-            raw_event_id=raw_id,
-            route_result="fallthrough",
-            intent=read_intent,
-            risk_tier="read",
-            confidence_band=band,
-            mapped_command=command,
-        )
-        return False
-
-    if route.route == "mutation_plan":
-        if not routing.allow_nl_mutations:
-            if band == "low":
-                _log_nl_route_evaluated(
-                    raw_event_id=raw_id,
-                    route_result="fallthrough",
-                    intent=intent,
-                    risk_tier=risk_tier,
-                    confidence_band=band,
-                    mapped_command=mapped_command,
-                )
-                return False
-            _log_nl_route_blocked(raw_event_id=raw_id, intent=intent, reason="mutations_disabled")
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="blocked_explicit_only",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            await _swap_reaction(message, "⏳", "❓")
-            await _send_response(message, "Natural-language mutations are disabled. Use explicit commands like `!done`, `!append`, or `!fix`.")
-            return True
-
-        raw_plan = route.mutation_plan or {}
-        plan_input, plan_error = _normalize_nl_mutation_plan_input(raw_plan)
-        if plan_error:
-            if routing.clarify_on_ambiguous and band != "low":
-                fallback = "I need more detail before applying that update."
-                if isinstance(plan_input, dict):
-                    reason_hint = _coerce_non_empty_str(plan_input.get("clarification_reason"))
-                    if reason_hint:
-                        fallback = reason_hint
-                clarification = _format_nl_clarification_message(
-                    question=clarification_question,
-                    options=clarification_options,
-                    fallback=plan_error or fallback,
-                )
-                _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
-                _log_nl_route_evaluated(
-                    raw_event_id=raw_id,
-                    route_result="clarified",
-                    intent=intent,
-                    risk_tier=risk_tier,
-                    confidence_band=band,
-                    mapped_command=mapped_command,
-                )
-                await _swap_reaction(message, "⏳", "❓")
-                await _send_response(message, clarification)
-                return True
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="fallthrough",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            return False
-        if band == "high" and plan_input is not None:
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="needs_confirmation",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            return await _queue_nl_mutation_confirmation(
-                message=message,
-                raw_id=raw_id,
-                config=config,
-                plan_input=plan_input,
-                confidence=confidence,
-                routing=routing,
-            )
-        if routing.clarify_on_ambiguous and band == "medium":
-            clarification = _format_nl_clarification_message(
-                question=clarification_question,
-                options=clarification_options,
-                fallback="I can apply that update, but I need a bit more detail.",
-            )
-            _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="clarified",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            await _swap_reaction(message, "⏳", "❓")
-            await _send_response(message, clarification)
-            return True
-        _log_nl_route_evaluated(
-            raw_event_id=raw_id,
-            route_result="fallthrough",
-            intent=intent,
-            risk_tier=risk_tier,
-            confidence_band=band,
-            mapped_command=mapped_command,
-        )
-        return False
-
-    _log_nl_route_evaluated(
-        raw_event_id=raw_id,
-        route_result="fallthrough",
-        intent=intent,
-        risk_tier=risk_tier,
-        confidence_band=band,
-        mapped_command=mapped_command,
-    )
-    return False
 
 
 async def _handle_message(message: discord.Message, config: dict[str, Any]) -> None:
@@ -3636,6 +2710,197 @@ async def _send_response(
             logging.info("response_sent channel=%s", message.channel.id)
         except (discord.HTTPException, discord.Forbidden) as send_exc:
             logging.warning("response_send_failed channel=%s error=%s", message.channel.id, send_exc)
+
+
+class _DiscordRoutingRuntime:
+    def load_prompt(self, path: str) -> str:
+        return load_prompt(path)
+
+    async def interpret_text_async(
+        self,
+        *,
+        provider: OpenAIProvider,
+        text: str,
+        model: str,
+        system_prompt: str,
+        schema_path: Path,
+    ) -> Any:
+        return await interpret_text_async(
+            provider=provider,
+            text=text,
+            model=model,
+            system_prompt=system_prompt,
+            schema_path=schema_path,
+        )
+
+    async def handle_command(
+        self,
+        message: discord.Message,
+        content: str,
+        raw_id: str,
+        config: dict[str, Any],
+    ) -> bool:
+        return await _handle_command(message, content, raw_id, config)
+
+    async def queue_nl_mutation_confirmation(
+        self,
+        *,
+        message: discord.Message,
+        raw_id: str,
+        config: dict[str, Any],
+        plan_input: dict[str, Any],
+        confidence: float,
+        routing: NLCommandRoutingConfig,
+        source_view: str | None = None,
+        allow_clarification: bool = True,
+    ) -> bool:
+        kwargs: dict[str, Any] = {
+            "message": message,
+            "raw_id": raw_id,
+            "config": config,
+            "plan_input": plan_input,
+            "confidence": confidence,
+            "routing": routing,
+            "source_view": source_view,
+        }
+        if not allow_clarification:
+            kwargs["allow_clarification"] = False
+        return await _queue_nl_mutation_confirmation(
+            **kwargs,
+        )
+
+    def load_nl_clarification_context(self, message: discord.Message) -> _NLClarificationContext | None:
+        return _load_nl_clarification_context(message)
+
+    def clear_nl_clarification_context(self, message: discord.Message) -> None:
+        _clear_nl_clarification_context(message)
+
+    def store_nl_clarification_context(
+        self,
+        *,
+        message: discord.Message,
+        raw_event_id: str,
+        unresolved_scope: dict[str, dict[str, Any]],
+        base_plan_input: dict[str, Any],
+    ) -> None:
+        _store_nl_clarification_context(
+            message=message,
+            raw_event_id=raw_event_id,
+            unresolved_scope=unresolved_scope,
+            base_plan_input=base_plan_input,
+        )
+
+    async def swap_reaction(self, message: discord.Message, remove_emoji: str, add_emoji: str) -> None:
+        await _swap_reaction(message, remove_emoji, add_emoji)
+
+    async def send_response(
+        self,
+        message: discord.Message,
+        content: str,
+        *,
+        thread_title: str | None = None,
+        view: discord.ui.View | None = None,
+    ) -> None:
+        await _send_response(
+            message,
+            content,
+            thread_title=thread_title,
+            view=view,
+        )
+
+    def resolve_command_target(self, message: discord.Message, target_token: str) -> _CommandTargetResolution:
+        return _resolve_command_target(message, target_token)
+
+    def map_target_resolution_reason_to_plan_reason(self, reason: str | None) -> str:
+        return _map_target_resolution_reason_to_plan_reason(reason)
+
+    def log_numbered_mutation_resolution_failed(
+        self,
+        *,
+        raw_event_id: str,
+        command: str,
+        reason: str,
+        row_number: int,
+        source_view: str | None = None,
+    ) -> None:
+        _log_numbered_mutation_resolution_failed(
+            raw_event_id=raw_event_id,
+            command=command,
+            reason=reason,
+            row_number=row_number,
+            source_view=source_view,
+        )
+
+    def log_numbered_mutation_resolved(
+        self,
+        *,
+        raw_event_id: str,
+        command: str,
+        source_view: str | None,
+        row_number: int,
+        object_id: str,
+    ) -> None:
+        _log_numbered_mutation_resolved(
+            raw_event_id=raw_event_id,
+            command=command,
+            source_view=source_view,
+            row_number=row_number,
+            object_id=object_id,
+        )
+
+    def find_object_path(self, objects_root: str | Path, target_id: str) -> Path | None:
+        return find_object_path(objects_root, target_id)
+
+    def load_frontmatter(self, path: str | Path) -> dict[str, Any]:
+        return load_frontmatter(path)
+
+    def write_nl_mutation_normalized_trace(
+        self,
+        *,
+        config: dict[str, Any],
+        raw_event_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        _write_nl_mutation_normalized_trace(
+            config=config,
+            raw_event_id=raw_event_id,
+            payload=payload,
+        )
+
+    def create_mutation_pending_view(
+        self,
+        *,
+        pending_id: str,
+        pending_root: str | Path,
+        objects_root: str | Path,
+        index_db: str | Path,
+        author_id: int,
+        matching: MatchingConfig | None,
+        affinity_key: tuple[int, int],
+        on_canonical_change: Callable[[], None] | None = None,
+    ) -> MutationPendingView:
+        return MutationPendingView(
+            pending_id=pending_id,
+            pending_root=pending_root,
+            objects_root=objects_root,
+            index_db=index_db,
+            author_id=author_id,
+            matching=matching,
+            affinity_key=affinity_key,
+            on_canonical_change=on_canonical_change,
+        )
+
+    def cursor_key(self, message: discord.Message) -> tuple[int, int]:
+        return _cursor_key(message)
+
+    def notify_due_time_reminder_schedule_changed(self, config: dict[str, Any], *, clear_state: bool = False) -> None:
+        _notify_due_time_reminder_schedule_changed(config, clear_state=clear_state)
+
+    def now_iso(self) -> str:
+        return _now_iso()
+
+
+_DISCORD_ROUTING_RUNTIME = _DiscordRoutingRuntime()
 
 
 class _DiscordCommandRuntime:

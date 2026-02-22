@@ -112,6 +112,13 @@
   - added adapter callback protocol hooks in the command engine for send/reaction/state/apply operations
   - `src/squire_core/discord_bot.py` now delegates `_handle_command` to shared transport command handling via `_DiscordCommandRuntime` compatibility adapter
   - command apply internals (`_apply_command_operation`) remain in `discord_bot.py` for stage-3 compatibility and will be reduced further in later adapter consolidation stages
+- Stage 4 NL routing engine extraction is complete:
+  - implemented transport-agnostic routing/normalization engine in `src/squire_core/transport/routing.py`
+  - extracted NL route evaluation + mutation plan normalization + clarification-scope enforcement + pending-plan assembly into shared routing module
+  - retained compatibility wrappers in `src/squire_core/discord_bot.py` for `_maybe_route_nl_command`, `_queue_nl_mutation_confirmation`, `_normalize_nl_mutation_plan_input`, and `_normalize_set_fields`
+  - added `_DiscordRoutingRuntime` adapter so Discord-specific side effects (message IO, view construction, state keys, numbered-resolution logging) are injected via callbacks
+  - kept `MutationPendingView` construction in Discord adapter layer by runtime callback (`create_mutation_pending_view`) to preserve transport boundary
+  - added shared-module seam tests in `tests/test_transport_routing.py`
 - `discord_bot.py` is intentionally retained as a temporary compatibility shim during staged extraction; target end-state removes it after entrypoint/test migration.
 - Final runtime composition-root direction is `python -m squire_core.runtime` (`src/squire_core/runtime.py`) after cutover stage.
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
@@ -128,6 +135,9 @@
   - `.venv/bin/python -m py_compile src/squire_core/transport/commands.py src/squire_core/discord_bot.py tests/test_transport_commands.py` passed.
   - `.venv/bin/python -m pytest -q tests/test_transport_commands.py tests/test_discord_commands.py tests/test_discord_schedule.py tests/test_nl_multi_operation_clarification.py` passed (`57 passed`).
   - `.venv/bin/python -m pytest -q tests/test_surfacing.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py` passed (`20 passed`).
+- Stage 4 validation:
+  - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_transport_routing.py tests/test_discord_commands.py tests/test_nl_mutation_normalization.py tests/test_nl_multi_operation_clarification.py` passed (`48 passed`).
+  - `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_transport_commands.py tests/test_transport_routing.py tests/test_discord_schedule.py tests/test_surfacing.py tests/test_nl_command_routing_config.py tests/test_nl_mutation_normalization.py tests/test_nl_multi_operation_clarification.py` passed (`43 passed`).
 
 ## Known Constraints and Loose Ends
 
