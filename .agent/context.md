@@ -104,7 +104,10 @@
   - canonical runtime entrypoint is `python -m squire_core.runtime` (`src/squire_core/runtime.py`)
   - runtime surfaces (`Makefile`, `Dockerfile`) and shim-dependent tests were migrated off `squire_core.discord_bot`
 - Sequencing decision (2026-02-22): Slack adapter behavior remains out of scope for this staged refactor and should be revisited as follow-on work after Stage 6.
-- Stage 7 is now explicitly two-phase in `docs/multi-transport-refactor-spec.md` and should run as Stage 7A (safe hygiene/inventory) -> Stage 8 (boundary hardening) -> Stage 7B (post-hardening orphan removals).
+- Stage 7 is explicitly two-phase in `docs/multi-transport-refactor-spec.md`: Stage 7A (safe hygiene/inventory) -> Stage 8 (boundary hardening) -> Stage 7B (post-hardening orphan removals).
+- Stage 7A is complete (2026-02-22):
+  - removed low-risk unused imports in `src/squire_core/transport/routing.py` and `src/squire_core/transport/discord/scheduler.py`, plus unused exception aliases in `src/squire_core/runtime.py`
+  - refreshed deferred-orphan inventory in `docs/multi-transport-refactor-spec.md` with rationale/confidence (contracts/state aliases + Slack scaffolds deferred to Stage 8/7B)
 - Stage 8 boundary hardening is now tracked in `docs/multi-transport-refactor-spec.md` to complete original modularity intent (remove Discord coupling from root runtime/shared flow contracts).
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
 - Validation baseline:
