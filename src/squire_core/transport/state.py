@@ -31,18 +31,6 @@ class CommandTargetResolution:
 
 
 @dataclass(frozen=True)
-class NLRouteIntentV1:
-    route: str
-    intent: str
-    risk_tier: str
-    confidence: float
-    ambiguities: list[str]
-    read_command: dict[str, Any] | None
-    mutation_plan: dict[str, Any] | None
-    clarification: dict[str, Any] | None
-
-
-@dataclass(frozen=True)
 class AffinityTouch:
     object_id: str
     touched_at: datetime
@@ -97,17 +85,6 @@ def prune_result_cursors(*, now: datetime | None = None) -> None:
     expired = [key for key, value in RESULT_CURSORS.items() if value.expires_at <= current]
     for key in expired:
         RESULT_CURSORS.pop(key, None)
-
-
-def get_result_cursor(key: InteractionKey, *, now: datetime | None = None) -> ResultCursor | None:
-    current = now or datetime.now(timezone.utc)
-    cursor = RESULT_CURSORS.get(key)
-    if cursor is None:
-        return None
-    if cursor.expires_at <= current:
-        RESULT_CURSORS.pop(key, None)
-        return None
-    return cursor
 
 
 def store_result_cursor(
@@ -233,21 +210,6 @@ def prune_archive_clear_confirmations(*, now: datetime | None = None) -> None:
     expired = [key for key, value in ARCHIVE_CLEAR_CONFIRMATIONS.items() if value.expires_at <= current]
     for key in expired:
         ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
-
-
-def get_archive_clear_confirmation(
-    key: InteractionKey,
-    *,
-    now: datetime | None = None,
-) -> ArchiveClearConfirmation | None:
-    current = now or datetime.now(timezone.utc)
-    confirmation = ARCHIVE_CLEAR_CONFIRMATIONS.get(key)
-    if confirmation is None:
-        return None
-    if confirmation.expires_at <= current:
-        ARCHIVE_CLEAR_CONFIRMATIONS.pop(key, None)
-        return None
-    return confirmation
 
 
 def store_archive_clear_confirmation(

@@ -103,19 +103,25 @@
   - removed compatibility shim `src/squire_core/discord_bot.py`
   - canonical runtime entrypoint is `python -m squire_core.runtime` (`src/squire_core/runtime.py`)
   - runtime surfaces (`Makefile`, `Dockerfile`) and shim-dependent tests were migrated off `squire_core.discord_bot`
-- Sequencing decision (2026-02-22): Slack adapter behavior remains out of scope for this staged refactor and should be revisited as follow-on work after Stage 6.
+- Sequencing decision: Slack adapter behavior remains out of scope for this staged refactor and is tracked as separate follow-on work (not a remaining step in this refactor sequence).
 - Stage 7 is explicitly two-phase in `docs/multi-transport-refactor-spec.md`: Stage 7A (safe hygiene/inventory) -> Stage 8 (boundary hardening) -> Stage 7B (post-hardening orphan removals).
 - Stage 7A is complete (2026-02-22):
   - removed low-risk unused imports in `src/squire_core/transport/routing.py` and `src/squire_core/transport/discord/scheduler.py`, plus unused exception aliases in `src/squire_core/runtime.py`
-  - refreshed deferred-orphan inventory in `docs/multi-transport-refactor-spec.md` with rationale/confidence (contracts/state aliases + Slack scaffolds deferred to Stage 8/7B)
+  - refreshed deferred-orphan inventory in `docs/multi-transport-refactor-spec.md` with rationale/confidence
 - Stage 8 is complete (2026-02-22):
   - `src/squire_core/runtime.py` is now transport-agnostic and delegates runtime launch to `src/squire_core/transport/discord/flow.py`
   - Discord message lifecycle and orchestration moved under `src/squire_core/transport/discord/flow.py`
   - shared command/routing contracts now use `TransportMessageContext` in `src/squire_core/transport/{commands.py,routing.py}`
   - tests importing runtime internals were migrated to `squire_core.transport.discord.flow` to keep runtime thin while preserving behavior assertions
   - added adapter contract-bridge coverage in `tests/test_discord_contract_bridge.py` for command and NL routing context translation
-- Stage 7B (orphan removal/contract pruning) is now the next required step after Stage 8.
-- Stage 7B removal policy is explicit: do not delete symbols/modules unless confirmed orphaned/leftover from the multi-transport refactor; “likely unused” is insufficient without verification evidence.
+- Stage 7B is complete (2026-02-23) for non-Slack scope:
+  - removed confirmed orphan symbols from `src/squire_core/transport/contracts.py`: `TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`, `CommandResult`, `RouteResult`
+  - removed confirmed orphan symbols from `src/squire_core/transport/state.py`: `NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`
+  - verification evidence: repo symbol scan + focused suite passed (`56 passed`) across transport/Discord-bridge/NL routing command tests
+- Follow-on modularization spec added (2026-02-23):
+  - `docs/transport-modularity-hardening-spec.md` defines post-Stage-8 extraction to reach truly pluggable transport boundaries.
+  - explicit end-state decision: remove `src/squire_core/transport/discord/flow.py` after phased extraction; do not preserve it as a permanent architecture file.
+  - preferred execution is one PR with phase-gated validation checkpoints.
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
 - Validation baseline:
   - `.venv/bin/python -m pytest -q` currently passes except known sandbox socket-bind failures in `tests/test_health_server.py`.

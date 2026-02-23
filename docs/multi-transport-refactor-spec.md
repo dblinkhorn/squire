@@ -140,11 +140,11 @@ Dependency boundary guidance:
 
 ### Command/Routing Result Contracts
 
-Use typed results to avoid stringly coupled branching across adapters:
+Decision update (2026-02-23):
 
-1. `CommandResult` (handled/not-handled, telemetry payload, cursor updates, side effects).
-2. `RouteResult` (read command mapped, mutation plan normalized, blocked reason, clarification request).
-3. `TargetResolutionResult` (resolved id/object_type + reason/source_view for telemetry).
+1. keep shared entry contracts minimal and use `TransportMessageContext` + runtime callback protocols.
+2. remove unused typed result containers if they are not actively wired in production.
+3. preserve target-resolution reason/source telemetry via command/routing runtime adapters.
 
 ### Shared State Contracts
 
@@ -485,23 +485,32 @@ Completion notes (2026-02-22):
 2. refreshed deferred-inventory decisions with confidence:
    - `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py` (`TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`) remain deferred with **medium** confidence they are orphaned; held for Stage 8/7B to avoid pre-hardening contract churn
    - `/Users/dblinkhorn/squire/src/squire_core/transport/state.py` (`NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`) remain deferred with **medium-high** confidence they are orphaned; held until Stage 8 determines final shared contract shape
-   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/{adapter.py,scheduler.py,__init__.py}` remain deferred with **high** confidence runtime-unreferenced; final retain/remove decision stays in Stage 7B
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/{adapter.py,scheduler.py,__init__.py}` were deferred with **high** confidence runtime-unreferenced; later superseded by the Stage 7B decision to keep Slack scaffolds out of this refactor scope.
 
 ### Stage 7B: Orphan Removal and Contract Pruning (Post-Hardening)
 
 Scope:
 
 1. after Stage 8, remove or wire orphaned helpers/symbols based on the hardened boundary design
-2. decide and document final status of Slack scaffold placeholders (retain as explicit stubs vs retire)
-3. remove any temporary compatibility/deprecation scaffolding proven unnecessary after Stage 8
+2. remove any temporary compatibility/deprecation scaffolding proven unnecessary after Stage 8
+3. keep Slack adapter scaffolds explicitly out of scope for this refactor; do not track them as Stage 7B action items
 
 Acceptance criteria:
 
 1. every exported symbol in `transport/contracts.py` and `transport/state.py` is either used or intentionally documented as reserved scaffolding
-2. docs capture final decision for Slack scaffold retention vs removal
-3. tests remain green at current baseline (allowing known sandbox-limited health-server bind constraints)
-4. each removed symbol/module has recorded verification evidence that removal is safe and non-disruptive
-5. no removal lands without explicit confirmation that the removed code was orphaned/leftover from the refactor
+2. tests remain green at current baseline (allowing known sandbox-limited health-server bind constraints)
+3. each removed symbol/module has recorded verification evidence that removal is safe and non-disruptive
+4. no removal lands without explicit confirmation that the removed code was orphaned/leftover from the refactor
+
+Completion notes (2026-02-23):
+
+1. verified orphan candidates by repo scan + focused tests, then removed confirmed leftovers:
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py`: `TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`, `CommandResult`, `RouteResult`
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/state.py`: `NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`
+2. verification evidence:
+   - repo symbol scan found no call sites before removal
+   - focused validation passed: `56 passed` (`tests/test_transport_commands.py`, `tests/test_transport_routing.py`, `tests/test_discord_contract_bridge.py`, `tests/test_discord_commands.py`, `tests/test_nl_command_routing_config.py`, `tests/test_nl_mutation_normalization.py`, `tests/test_nl_multi_operation_clarification.py`)
+3. Slack-specific scaffold decisions remain intentionally outside this refactor scope and are not tracked as remaining Stage 7B work.
 
 ## Stage 8: Transport Boundary Hardening (Modularity Intent Completion)
 
@@ -515,13 +524,13 @@ Recorded boundary violations (2026-02-22 audit):
 1. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` still imports and types against `discord` directly, including `discord.Message` in shared flow helpers and runtime wrappers
 2. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` still constructs and dispatches Discord UI/view primitives (`PendingActionView`, `MutationPendingView`, `AutoApplyFeedbackView`) instead of delegating those concerns to adapter modules
 3. shared command/routing orchestration is invoked through Discord-specific runtime wrappers (`_DiscordCommandRuntime`, `_DiscordRoutingRuntime`) whose method signatures remain transport-specific
-4. transport-neutral contracts in `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py` (`TransportMessageContext`, `TransportIO`) are not yet the active production entry contracts for command/routing flow
+4. transport-neutral message contracts in `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py` are not yet the active production entry contracts for command/routing flow
 
 Scope:
 
 1. make `/Users/dblinkhorn/squire/src/squire_core/runtime.py` a thin composition/launch module only (config/bootstrap/wiring)
 2. move Discord message lifecycle handling and Discord-specific flow orchestration under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`
-3. refactor shared flow entrypoints to consume transport-neutral contracts (`TransportMessageContext`, `TransportIO`, typed result contracts) instead of SDK-native message/view types
+3. refactor shared flow entrypoints to consume transport-neutral message contracts (`TransportMessageContext`) and adapter callbacks instead of SDK-native message/view types
 4. remove Discord UI and reaction/send primitives from shared runtime codepaths; keep them adapter-owned
 
 Implementation guidance:
@@ -625,16 +634,16 @@ When stages land, keep docs aligned:
 
 2. Execute by stages, one PR-sized slice at a time.
 
-Post-Stage-6 sequencing requirement:
+Post-Stage-6 sequencing requirement (completed 2026-02-23):
 
-- execute Stage 7A, then Stage 8, then Stage 7B
+- Stage 7A, then Stage 8, then Stage 7B
 
 3. For each stage:
 - keep behavior unchanged
 - run focused tests first, then broader suite
 - update `.agent/context.md` with only durable decisions and unresolved risks
 
-4. Slack adapter implementation remains out of scope for this staged refactor. Revisit as a follow-on after Stage 7B completes.
+4. Slack adapter implementation remains out of scope for this staged refactor and is tracked as a separate follow-on effort, not as remaining work inside this refactor sequence.
 
 ## Success Definition
 
