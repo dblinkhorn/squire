@@ -137,7 +137,7 @@ def test_maybe_route_nl_command_queues_mutation_plan() -> None:
     handled = asyncio.run(
         routing.maybe_route_nl_command(
             runtime=runtime,
-            message=SimpleNamespace(),
+            context=SimpleNamespace(user_id="1", channel_id="2", thread_id=None, message_id="3", content="mark 2 done", source="discord", is_dm=True, created_at=datetime(2026, 2, 22, 0, 0, tzinfo=timezone.utc)),
             content="mark 2 done",
             raw_id="R_1",
             config={},

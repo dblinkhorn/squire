@@ -24,8 +24,8 @@ Design intent:
 Runtime composition:
 
 1. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` is the runtime composition root and startup entrypoint.
-2. Discord-specific adapter code is split under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`:
-`adapter.py` (lifecycle/IO), `views.py` (Discord UI interactions), and `scheduler.py` (digest/reminder loops).
+2. Discord-specific runtime flow and adapter code is split under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`:
+`flow.py` (message lifecycle + shared-contract orchestration), `adapter.py` (client lifecycle/IO), `views.py` (Discord UI interactions), and `scheduler.py` (digest/reminder loops).
 
 ## Trust Model
 

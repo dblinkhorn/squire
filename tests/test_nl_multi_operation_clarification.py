@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from squire_core import runtime as discord_bot
+from squire_core.transport.discord import flow
 from squire_core.config_utils import load_nl_command_routing_config
 
 
@@ -52,8 +52,8 @@ def _mutation_plan_payload(*, operations: list[dict[str, object]], confidence: f
 def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
     calls: list[str] = []
     message = _Message("what now", user_id=10, channel_id=20)
-    discord_bot._NL_CLARIFICATION_CONTEXTS.clear()
-    discord_bot._store_nl_clarification_context(
+    flow._NL_CLARIFICATION_CONTEXTS.clear()
+    flow._store_nl_clarification_context(
         message=message,
         raw_event_id="R_prev",
         unresolved_scope={"op_1": {"action_type": "set_fields", "target_tokens": ["1"], "reason_code": "field_ambiguous"}},
@@ -85,13 +85,13 @@ def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "load_prompt", _fake_load_prompt)
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "load_prompt", _fake_load_prompt)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=message,
             content=message.content,
             raw_id="R_now",
@@ -103,15 +103,15 @@ def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
 
     assert handled is True
     assert "swap:⏳:⚠️" in calls
-    assert any(discord_bot._NL_OUT_OF_SCOPE_CLARIFICATION_COPY in call for call in calls)
+    assert any(flow._NL_OUT_OF_SCOPE_CLARIFICATION_COPY in call for call in calls)
     assert any("Unresolved operations: op_1 (field_ambiguous)" in call for call in calls)
-    assert discord_bot._load_nl_clarification_context(message) is None
+    assert flow._load_nl_clarification_context(message) is None
 
 
 def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatch) -> None:
     captured: dict[str, object] = {}
     message = _Message("clarify", user_id=11, channel_id=21)
-    discord_bot._NL_CLARIFICATION_CONTEXTS.clear()
+    flow._NL_CLARIFICATION_CONTEXTS.clear()
     base_plan = {
         "operations": [
             {
@@ -143,7 +143,7 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
         "object_type_hint": None,
         "raw_user_phrases": {},
     }
-    discord_bot._store_nl_clarification_context(
+    flow._store_nl_clarification_context(
         message=message,
         raw_event_id="R_prev",
         unresolved_scope={"op_2": {"action_type": "set_fields", "target_tokens": ["2"], "reason_code": "field_ambiguous"}},
@@ -197,12 +197,12 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
         captured["operation_ids"] = [operation["operation_id"] for operation in plan_input["operations"]]
         return True
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "load_prompt", _fake_load_prompt)
-    monkeypatch.setattr(discord_bot, "_queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "load_prompt", _fake_load_prompt)
+    monkeypatch.setattr(flow, "_queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=message,
             content=message.content,
             raw_id="R_now",
@@ -237,11 +237,11 @@ def test_multi_operation_conflict_marks_operation_conflict(monkeypatch) -> None:
     def _fake_write_trace(*, config, raw_event_id, payload):
         trace_payload.update(payload)
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(discord_bot, "_write_nl_mutation_normalized_trace", _fake_write_trace)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "find_object_path", _fake_find_object_path)
+    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
+    monkeypatch.setattr(flow, "_write_nl_mutation_normalized_trace", _fake_write_trace)
 
     plan_input = {
         "operations": [
@@ -288,7 +288,7 @@ def test_multi_operation_conflict_marks_operation_conflict(monkeypatch) -> None:
     }
 
     handled = asyncio.run(
-        discord_bot._queue_nl_mutation_confirmation(
+        flow._queue_nl_mutation_confirmation(
             message=message,
             raw_id="R_conflict",
             config={},

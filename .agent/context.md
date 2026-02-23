@@ -108,11 +108,18 @@
 - Stage 7A is complete (2026-02-22):
   - removed low-risk unused imports in `src/squire_core/transport/routing.py` and `src/squire_core/transport/discord/scheduler.py`, plus unused exception aliases in `src/squire_core/runtime.py`
   - refreshed deferred-orphan inventory in `docs/multi-transport-refactor-spec.md` with rationale/confidence (contracts/state aliases + Slack scaffolds deferred to Stage 8/7B)
-- Stage 8 boundary hardening is now tracked in `docs/multi-transport-refactor-spec.md` to complete original modularity intent (remove Discord coupling from root runtime/shared flow contracts).
+- Stage 8 is complete (2026-02-22):
+  - `src/squire_core/runtime.py` is now transport-agnostic and delegates runtime launch to `src/squire_core/transport/discord/flow.py`
+  - Discord message lifecycle and orchestration moved under `src/squire_core/transport/discord/flow.py`
+  - shared command/routing contracts now use `TransportMessageContext` in `src/squire_core/transport/{commands.py,routing.py}`
+  - tests importing runtime internals were migrated to `squire_core.transport.discord.flow` to keep runtime thin while preserving behavior assertions
+  - added adapter contract-bridge coverage in `tests/test_discord_contract_bridge.py` for command and NL routing context translation
+- Stage 7B (orphan removal/contract pruning) is now the next required step after Stage 8.
+- Stage 7B removal policy is explicit: do not delete symbols/modules unless confirmed orphaned/leftover from the multi-transport refactor; “likely unused” is insufficient without verification evidence.
 - Transport-boundary rule is currently doc/review guidance (not CI-enforced import-lint).
 - Validation baseline:
   - `.venv/bin/python -m pytest -q` currently passes except known sandbox socket-bind failures in `tests/test_health_server.py`.
-  - Stage 6 cutover verification (2026-02-22): `py_compile` across `src/` + `tests/` passed; focused cutover suite passed (`73 passed`).
+  - Stage 8 hardening verification (2026-02-22): `py_compile` across `src/` + `tests/` passed; focused Stage-8 suite passed (`80 passed`).
 
 ## Known Constraints and Loose Ends
 
