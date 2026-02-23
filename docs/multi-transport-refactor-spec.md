@@ -40,7 +40,7 @@ Primary objective: modularize once so future transports can be added on top of r
 1. `discord_bot.py` is kept as a temporary compatibility shim during staged extraction, then removed near the end.
 2. Final runtime composition root is `/Users/dblinkhorn/squire/src/squire_core/runtime.py`.
 3. Canonical invocation target is `python -m squire_core.runtime` (with `make` targets updated accordingly).
-4. Transport import boundaries are documented as design guidance in docs/AGENTS, not enforced by strict CI import-lint rules in this refactor.
+4. Transport import boundaries are documented as design guidance in docs/AGENTS for this refactor.
 5. Test strategy is not only moving tests; it must include new seam/contract tests in addition to behavior-parity tests.
 
 ## Existing Invariants to Preserve
@@ -136,7 +136,7 @@ Dependency boundary guidance:
 
 1. shared modules must accept transport-neutral contracts (like this context)
 2. adapter modules own SDK-native object translation
-3. this boundary is review-guided in this project phase (not CI-enforced)
+3. this boundary is review-guided in this project phase
 
 ### Command/Routing Result Contracts
 
@@ -440,6 +440,12 @@ Safety proviso (required):
 3. if certainty is low, prefer deprecation + follow-up verification over immediate removal
 4. every removal PR must include explicit evidence of safety (references searched, tests run, and observed behavior parity)
 
+Removal policy clarification (required):
+
+1. no symbol/module/path should be deleted unless it is confirmed orphaned/leftover from this refactor
+2. “likely unused” is not sufficient for deletion without confirmation evidence
+3. when confirmation is incomplete, keep the code and record explicit follow-up verification steps
+
 Recorded findings inventory (2026-02-22 audit):
 
 1. likely unused imports in transport/shared modules:
@@ -495,6 +501,7 @@ Acceptance criteria:
 2. docs capture final decision for Slack scaffold retention vs removal
 3. tests remain green at current baseline (allowing known sandbox-limited health-server bind constraints)
 4. each removed symbol/module has recorded verification evidence that removal is safe and non-disruptive
+5. no removal lands without explicit confirmation that the removed code was orphaned/leftover from the refactor
 
 ## Stage 8: Transport Boundary Hardening (Modularity Intent Completion)
 
@@ -516,7 +523,6 @@ Scope:
 2. move Discord message lifecycle handling and Discord-specific flow orchestration under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`
 3. refactor shared flow entrypoints to consume transport-neutral contracts (`TransportMessageContext`, `TransportIO`, typed result contracts) instead of SDK-native message/view types
 4. remove Discord UI and reaction/send primitives from shared runtime codepaths; keep them adapter-owned
-5. add lightweight import-boundary checks and contract tests so boundary regressions are caught automatically
 
 Implementation guidance:
 
@@ -532,6 +538,18 @@ Acceptance criteria:
 3. Discord-specific UI/view creation and message/reaction side effects exist only under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`
 4. contract tests validate that Discord adapter translates SDK-native objects into shared contracts and preserves current behavior
 5. docs (`architecture.md`, `modules.md`, this spec) reflect the enforced boundary model, not just directional intent
+
+Completion notes (2026-02-22):
+
+1. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` is now transport-agnostic and delegates launch to `/Users/dblinkhorn/squire/src/squire_core/transport/discord/flow.py`; direct `discord.py` imports/types were removed from the runtime entrypoint.
+2. Discord-specific message lifecycle and orchestration moved under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/flow.py`, including command/routing runtime adapters, reaction/send wrappers, and pending-view wiring.
+3. Shared command/routing entrypoints now consume `TransportMessageContext` contracts:
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/commands.py`
+   - `/Users/dblinkhorn/squire/src/squire_core/transport/routing.py`
+4. Test imports that previously targeted `squire_core.runtime` internals were migrated to `/Users/dblinkhorn/squire/src/squire_core/transport/discord/flow.py` so runtime thinness is preserved while behavior tests remain intact.
+5. Validation snapshot:
+   - focused Stage-8 suite passed: `80 passed`
+   - known sandbox constraint remains unchanged: `tests/test_health_server.py` socket-bind failures in restricted environments.
 
 ## Test and Validation Strategy
 

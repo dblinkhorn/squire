@@ -5,26 +5,26 @@ from urllib.request import urlopen
 
 import pytest
 
-from squire_core import runtime as discord_bot
+from squire_core.transport.discord import flow
 
 
 def test_parse_health_port_defaults_and_disable() -> None:
-    assert discord_bot._parse_health_port(None) == 8080
-    assert discord_bot._parse_health_port("") == 8080
-    assert discord_bot._parse_health_port("9090") == 9090
-    assert discord_bot._parse_health_port("0") is None
+    assert flow._parse_health_port(None) == 8080
+    assert flow._parse_health_port("") == 8080
+    assert flow._parse_health_port("9090") == 9090
+    assert flow._parse_health_port("0") is None
 
 
 def test_parse_health_port_rejects_invalid_values() -> None:
     with pytest.raises(ValueError):
-        discord_bot._parse_health_port("abc")
+        flow._parse_health_port("abc")
 
     with pytest.raises(ValueError):
-        discord_bot._parse_health_port("70000")
+        flow._parse_health_port("70000")
 
 
 def test_health_endpoint_reports_ok() -> None:
-    server = discord_bot._HealthServer("127.0.0.1", 0)
+    server = flow._HealthServer("127.0.0.1", 0)
     server.start()
     try:
         url = f"http://127.0.0.1:{server.port}/health"
@@ -43,7 +43,7 @@ def test_health_endpoint_reports_ok() -> None:
 
 
 def test_health_endpoint_unknown_path_is_404() -> None:
-    server = discord_bot._HealthServer("127.0.0.1", 0)
+    server = flow._HealthServer("127.0.0.1", 0)
     server.start()
     try:
         url = f"http://127.0.0.1:{server.port}/not-health"

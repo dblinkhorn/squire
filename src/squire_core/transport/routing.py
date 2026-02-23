@@ -15,6 +15,7 @@ from squire_core.id_utils import generate_prefixed_id
 from squire_core.pending_actions import PendingAction, write_pending_action
 from squire_core.schema_loader import load_json_schema, validate_json
 from squire_core.timezone_utils import resolve_timezone
+from squire_core.transport.contracts import TransportMessageContext
 
 _NL_ROUTE_MEDIUM_CONFIDENCE = 0.5
 _NL_INTENT_SCHEMA_PATH = Path("config/schemas/nl_route_intent_v1.json")
@@ -179,7 +180,7 @@ class RoutingRuntime(Protocol):
 
     async def handle_command(
         self,
-        message: Any,
+        context: TransportMessageContext,
         content: str,
         raw_id: str,
         config: dict[str, Any],
@@ -189,7 +190,7 @@ class RoutingRuntime(Protocol):
     async def queue_nl_mutation_confirmation(
         self,
         *,
-        message: Any,
+        context: TransportMessageContext,
         raw_id: str,
         config: dict[str, Any],
         plan_input: dict[str, Any],
@@ -200,28 +201,28 @@ class RoutingRuntime(Protocol):
     ) -> bool:
         ...
 
-    def load_nl_clarification_context(self, message: Any) -> _ClarificationContextLike | None:
+    def load_nl_clarification_context(self, context: TransportMessageContext) -> _ClarificationContextLike | None:
         ...
 
-    def clear_nl_clarification_context(self, message: Any) -> None:
+    def clear_nl_clarification_context(self, context: TransportMessageContext) -> None:
         ...
 
     def store_nl_clarification_context(
         self,
         *,
-        message: Any,
+        context: TransportMessageContext,
         raw_event_id: str,
         unresolved_scope: dict[str, dict[str, Any]],
         base_plan_input: dict[str, Any],
     ) -> None:
         ...
 
-    async def swap_reaction(self, message: Any, remove_emoji: str, add_emoji: str) -> None:
+    async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
         ...
 
     async def send_response(
         self,
-        message: Any,
+        context: TransportMessageContext,
         content: str,
         *,
         thread_title: str | None = None,
@@ -229,7 +230,7 @@ class RoutingRuntime(Protocol):
     ) -> None:
         ...
 
-    def resolve_command_target(self, message: Any, target_token: str) -> _TargetResolutionLike:
+    def resolve_command_target(self, context: TransportMessageContext, target_token: str) -> _TargetResolutionLike:
         ...
 
     def map_target_resolution_reason_to_plan_reason(self, reason: str | None) -> str:
@@ -286,7 +287,7 @@ class RoutingRuntime(Protocol):
     ) -> Any:
         ...
 
-    def cursor_key(self, message: Any) -> tuple[int, int]:
+    def cursor_key(self, context: TransportMessageContext) -> tuple[int, int]:
         ...
 
     def notify_due_time_reminder_schedule_changed(self, config: dict[str, Any], *, clear_state: bool = False) -> None:
@@ -1237,7 +1238,7 @@ def write_nl_mutation_normalized_trace(*, config: dict[str, Any], raw_event_id: 
 async def queue_nl_mutation_confirmation(
     *,
     runtime: RoutingRuntime,
-    message: Any,
+    context: TransportMessageContext,
     raw_id: str,
     config: dict[str, Any],
     plan_input: dict[str, Any],
@@ -1248,8 +1249,8 @@ async def queue_nl_mutation_confirmation(
 ) -> bool:
     operations = plan_input.get("operations")
     if not isinstance(operations, list) or not operations:
-        await runtime.swap_reaction(message, "⏳", "⚠️")
-        await runtime.send_response(message, "I can apply that update, but I need which actions to run.")
+        await runtime.swap_reaction(context, "⏳", "⚠️")
+        await runtime.send_response(context, "I can apply that update, but I need which actions to run.")
         return True
 
     _log_nl_plan_generated(raw_event_id=raw_id, action_type="multi_operation")
@@ -1317,7 +1318,7 @@ async def queue_nl_mutation_confirmation(
                 normalized_entries.append(entry)
                 continue
 
-            target_resolution = runtime.resolve_command_target(message, target_token)
+            target_resolution = runtime.resolve_command_target(context, target_token)
             entry["_row_number"] = target_resolution.row_number
             entry["_source_view"] = target_resolution.source_view or source_view
             if target_resolution.reason and target_resolution.row_number is not None:
@@ -1482,7 +1483,7 @@ async def queue_nl_mutation_confirmation(
                 },
             )
         runtime.store_nl_clarification_context(
-            message=message,
+            context=context,
             raw_event_id=raw_id,
             unresolved_scope=unresolved_scope,
             base_plan_input=plan_input,
@@ -1493,9 +1494,9 @@ async def queue_nl_mutation_confirmation(
             options=options,
             fallback="I need one clarification before I can continue with that request.",
         )
-        await runtime.swap_reaction(message, "⏳", "❓")
+        await runtime.swap_reaction(context, "⏳", "❓")
         await runtime.send_response(
-            message,
+            context,
             "\n".join([clarification, "", _summarize_unresolved_scope(unresolved_scope)]),
         )
         return True
@@ -1532,8 +1533,8 @@ async def queue_nl_mutation_confirmation(
         if cancelled_entries:
             lines.append("")
             lines.append(_summarize_unresolved_scope(_build_unresolved_scope_from_entries(cancelled_entries)))
-        await runtime.swap_reaction(message, "⏳", "⚠️")
-        await runtime.send_response(message, "\n".join(lines))
+        await runtime.swap_reaction(context, "⏳", "⚠️")
+        await runtime.send_response(context, "\n".join(lines))
         return True
 
     for entry in resolved_entries:
@@ -1622,7 +1623,10 @@ async def queue_nl_mutation_confirmation(
         )
 
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
-    author_id = int(getattr(getattr(message, "author", object()), "id", 0))
+    try:
+        author_id = int(context.user_id)
+    except (TypeError, ValueError):
+        author_id = 0
     view = runtime.create_mutation_pending_view(
         pending_id=pending_id,
         pending_root=pending_root,
@@ -1630,7 +1634,7 @@ async def queue_nl_mutation_confirmation(
         index_db=index_db,
         author_id=author_id,
         matching=matching_config,
-        affinity_key=runtime.cursor_key(message),
+        affinity_key=runtime.cursor_key(context),
         on_canonical_change=lambda: runtime.notify_due_time_reminder_schedule_changed(config),
     )
     lines: list[str] = []
@@ -1651,9 +1655,9 @@ async def queue_nl_mutation_confirmation(
     thread_title = _coerce_non_empty_str(resolved_entries[0].get("target_title")) or _coerce_non_empty_str(
         resolved_entries[0].get("target_resolved_id")
     )
-    await runtime.swap_reaction(message, "⏳", "❓")
+    await runtime.swap_reaction(context, "⏳", "❓")
     await runtime.send_response(
-        message,
+        context,
         "\n".join(lines),
         thread_title=thread_title,
         view=view,
@@ -1664,7 +1668,7 @@ async def queue_nl_mutation_confirmation(
 async def maybe_route_nl_command(
     *,
     runtime: RoutingRuntime,
-    message: Any,
+    context: TransportMessageContext,
     content: str,
     raw_id: str,
     config: dict[str, Any],
@@ -1727,15 +1731,15 @@ async def maybe_route_nl_command(
         threshold = routing.read_auto_min_confidence if risk_tier == "read" else routing.mutation_confirm_min_confidence
     band = _confidence_band(confidence, threshold)
 
-    clarification_context = runtime.load_nl_clarification_context(message)
+    clarification_context = runtime.load_nl_clarification_context(context)
     if clarification_context is not None:
-        runtime.clear_nl_clarification_context(message)
+        runtime.clear_nl_clarification_context(context)
         if route.route != "mutation_plan":
             _log_nl_clarification_scope_blocked(raw_event_id=raw_id)
             _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(clarification_context.unresolved_scope))
-            await runtime.swap_reaction(message, "⏳", "⚠️")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
             await runtime.send_response(
-                message,
+                context,
                 "\n".join(
                     [
                         _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
@@ -1759,9 +1763,9 @@ async def maybe_route_nl_command(
         if not in_scope:
             _log_nl_clarification_scope_blocked(raw_event_id=raw_id)
             _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(clarification_context.unresolved_scope))
-            await runtime.swap_reaction(message, "⏳", "⚠️")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
             await runtime.send_response(
-                message,
+                context,
                 "\n".join(
                     [
                         _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
@@ -1785,7 +1789,7 @@ async def maybe_route_nl_command(
             mapped_command="nl_mutation_clarification",
         )
         return await runtime.queue_nl_mutation_confirmation(
-            message=message,
+            context=context,
             raw_id=raw_id,
             config=config,
             plan_input=merged_plan_input,
@@ -1826,8 +1830,8 @@ async def maybe_route_nl_command(
             confidence_band=band,
             mapped_command=mapped_command,
         )
-        await runtime.swap_reaction(message, "⏳", "❓")
-        await runtime.send_response(message, _explicit_only_guidance_for_intent(intent))
+        await runtime.swap_reaction(context, "⏳", "❓")
+        await runtime.send_response(context, _explicit_only_guidance_for_intent(intent))
         return True
 
     if route.route == "clarify":
@@ -1846,8 +1850,8 @@ async def maybe_route_nl_command(
                 confidence_band=band,
                 mapped_command=mapped_command,
             )
-            await runtime.swap_reaction(message, "⏳", "❓")
-            await runtime.send_response(message, clarification)
+            await runtime.swap_reaction(context, "⏳", "❓")
+            await runtime.send_response(context, clarification)
             return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,
@@ -1894,8 +1898,8 @@ async def maybe_route_nl_command(
                     confidence_band=band,
                     mapped_command=mapped_command,
                 )
-                await runtime.swap_reaction(message, "⏳", "❓")
-                await runtime.send_response(message, clarification)
+                await runtime.swap_reaction(context, "⏳", "❓")
+                await runtime.send_response(context, clarification)
                 return True
             _log_nl_route_evaluated(
                 raw_event_id=raw_id,
@@ -1915,7 +1919,7 @@ async def maybe_route_nl_command(
                 confidence_band=band,
                 mapped_command=command,
             )
-            return await runtime.handle_command(message, command, raw_id, config)
+            return await runtime.handle_command(context, command, raw_id, config)
         if routing.clarify_on_ambiguous and band == "medium":
             options = clarification_options or [f"Run `{command}`", "Save this as a note"]
             clarification = _format_nl_clarification_message(
@@ -1932,8 +1936,8 @@ async def maybe_route_nl_command(
                 confidence_band=band,
                 mapped_command=command,
             )
-            await runtime.swap_reaction(message, "⏳", "❓")
-            await runtime.send_response(message, clarification)
+            await runtime.swap_reaction(context, "⏳", "❓")
+            await runtime.send_response(context, clarification)
             return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,
@@ -1966,9 +1970,9 @@ async def maybe_route_nl_command(
                 confidence_band=band,
                 mapped_command=mapped_command,
             )
-            await runtime.swap_reaction(message, "⏳", "❓")
+            await runtime.swap_reaction(context, "⏳", "❓")
             await runtime.send_response(
-                message,
+                context,
                 "Natural-language mutations are disabled. Use explicit commands like `!done`, `!append`, or `!fix`.",
             )
             return True
@@ -1996,8 +2000,8 @@ async def maybe_route_nl_command(
                     confidence_band=band,
                     mapped_command=mapped_command,
                 )
-                await runtime.swap_reaction(message, "⏳", "❓")
-                await runtime.send_response(message, clarification)
+                await runtime.swap_reaction(context, "⏳", "❓")
+                await runtime.send_response(context, clarification)
                 return True
             _log_nl_route_evaluated(
                 raw_event_id=raw_id,
@@ -2018,7 +2022,7 @@ async def maybe_route_nl_command(
                 mapped_command=mapped_command,
             )
             return await runtime.queue_nl_mutation_confirmation(
-                message=message,
+                context=context,
                 raw_id=raw_id,
                 config=config,
                 plan_input=plan_input,
@@ -2040,8 +2044,8 @@ async def maybe_route_nl_command(
                 confidence_band=band,
                 mapped_command=mapped_command,
             )
-            await runtime.swap_reaction(message, "⏳", "❓")
-            await runtime.send_response(message, clarification)
+            await runtime.swap_reaction(context, "⏳", "❓")
+            await runtime.send_response(context, clarification)
             return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,

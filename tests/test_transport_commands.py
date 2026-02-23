@@ -56,7 +56,7 @@ def test_handle_command_help_uses_runtime_callbacks() -> None:
     handled = asyncio.run(
         handle_command(
             runtime=_Runtime(),
-            message=_Message(),
+            context=_Message(),
             content="!help",
             raw_id="R_1",
             config={},
@@ -92,7 +92,7 @@ def test_handle_command_clear_archive_calls_confirmation_hook() -> None:
     handled = asyncio.run(
         handle_command(
             runtime=_Runtime(),
-            message=_Message(),
+            context=_Message(),
             content="!clear-archive",
             raw_id="R_1",
             config={},
@@ -155,7 +155,7 @@ def test_handle_command_done_delegates_to_apply_operation() -> None:
     handled = asyncio.run(
         handle_command(
             runtime=_Runtime(),
-            message=_Message(),
+            context=_Message(),
             content="!done 2",
             raw_id="R_1",
             config={},

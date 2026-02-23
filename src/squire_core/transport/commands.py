@@ -7,6 +7,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Protocol
 
+from squire_core.transport.contracts import TransportMessageContext
+
 
 class _CommandTargetResolutionLike(Protocol):
     target_id: str | None
@@ -70,7 +72,7 @@ class CommandRuntime(Protocol):
 
     def store_result_cursor(
         self,
-        message: Any,
+        context: TransportMessageContext,
         config: dict[str, Any],
         object_ids: list[str],
         *,
@@ -102,10 +104,10 @@ class CommandRuntime(Protocol):
     ) -> _SurfacedListLike:
         ...
 
-    def resolve_result_cursor(self, message: Any, number: int) -> str | None:
+    def resolve_result_cursor(self, context: TransportMessageContext, number: int) -> str | None:
         ...
 
-    def resolve_command_target(self, message: Any, target_token: str) -> _CommandTargetResolutionLike:
+    def resolve_command_target(self, context: TransportMessageContext, target_token: str) -> _CommandTargetResolutionLike:
         ...
 
     def log_numbered_mutation_resolution_failed(
@@ -121,7 +123,7 @@ class CommandRuntime(Protocol):
 
     async def apply_command_operation(
         self,
-        message: Any,
+        context: TransportMessageContext,
         raw_id: str,
         config: dict[str, Any],
         target_id: str,
@@ -135,7 +137,7 @@ class CommandRuntime(Protocol):
     ) -> bool:
         ...
 
-    def start_archive_clear_confirmation(self, message: Any) -> None:
+    def start_archive_clear_confirmation(self, context: TransportMessageContext) -> None:
         ...
 
     def load_pending_action(self, root: str | Path, pending_id: str) -> _PendingActionLike | None:
@@ -176,15 +178,15 @@ class CommandRuntime(Protocol):
     def record_affinity_touches(self, key: tuple[int, int], object_ids: list[str], *, matching: Any) -> None:
         ...
 
-    def cursor_key(self, message: Any) -> tuple[int, int]:
+    def cursor_key(self, context: TransportMessageContext) -> tuple[int, int]:
         ...
 
-    async def swap_reaction(self, message: Any, remove_emoji: str, add_emoji: str) -> None:
+    async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
         ...
 
     async def send_response(
         self,
-        message: Any,
+        context: TransportMessageContext,
         content: str,
         *,
         thread_title: str | None = None,
@@ -202,7 +204,7 @@ class CommandRuntime(Protocol):
 async def handle_command(
     *,
     runtime: CommandRuntime,
-    message: Any,
+    context: TransportMessageContext,
     content: str,
     raw_id: str,
     config: dict[str, Any],
@@ -219,69 +221,69 @@ async def handle_command(
             digest = runtime.build_daily_digest(objects_root, config)
         except Exception:
             logging.exception("status_digest_failed id=%s", raw_id)
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Failed to build status digest. Check logs for details.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Failed to build status digest. Check logs for details.")
             return True
         rendered, cursor_object_ids = runtime.render_numbered_daily_digest_for_command(digest)
         if cursor_object_ids:
-            runtime.store_result_cursor(message, config, cursor_object_ids, source_view="status")
-        await runtime.swap_reaction(message, "⏳", "✅")
-        await runtime.send_response(message, rendered)
+            runtime.store_result_cursor(context, config, cursor_object_ids, source_view="status")
+        await runtime.swap_reaction(context, "⏳", "✅")
+        await runtime.send_response(context, rendered)
         return True
     if command == "!weekly":
         try:
             review = runtime.build_weekly_review(objects_root, config)
         except Exception:
             logging.exception("weekly_review_build_failed id=%s", raw_id)
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Failed to build weekly review. Check logs for details.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Failed to build weekly review. Check logs for details.")
             return True
         rendered, cursor_object_ids = runtime.render_numbered_weekly_review_for_command(review)
         if cursor_object_ids:
-            runtime.store_result_cursor(message, config, cursor_object_ids, source_view="weekly")
-        await runtime.swap_reaction(message, "⏳", "✅")
-        await runtime.send_response(message, rendered)
+            runtime.store_result_cursor(context, config, cursor_object_ids, source_view="weekly")
+        await runtime.swap_reaction(context, "⏳", "✅")
+        await runtime.send_response(context, rendered)
         return True
     if command == "!help":
         if len(parts) > 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !help [command]")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !help [command]")
             return True
         if len(parts) == 2:
             topic = runtime.normalize_help_topic(parts[1])
             help_detail = runtime.help_details.get(topic)
             if help_detail is None:
-                await runtime.swap_reaction(message, "⏳", "⚠️")
-                await runtime.send_response(message, f"Unknown command `{parts[1]}`. Run `!help` for a command list.")
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await runtime.send_response(context, f"Unknown command `{parts[1]}`. Run `!help` for a command list.")
                 return True
-            await runtime.swap_reaction(message, "⏳", "✅")
-            await runtime.send_response(message, help_detail)
+            await runtime.swap_reaction(context, "⏳", "✅")
+            await runtime.send_response(context, help_detail)
             return True
-        await runtime.swap_reaction(message, "⏳", "✅")
-        await runtime.send_response(message, runtime.help_copy)
+        await runtime.swap_reaction(context, "⏳", "✅")
+        await runtime.send_response(context, runtime.help_copy)
         return True
     if command == "!recent":
         limit: int | None = None
         if len(parts) > 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !recent [number]")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !recent [number]")
             return True
         if len(parts) == 2:
             parsed = runtime.parse_positive_int(parts[1])
             if parsed is None:
-                await runtime.swap_reaction(message, "⏳", "⚠️")
-                await runtime.send_response(message, "Usage: !recent [number]")
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await runtime.send_response(context, "Usage: !recent [number]")
                 return True
             limit = parsed
         surfaced = runtime.build_recent_list(objects_root, config, limit=limit)
         if not surfaced.lines:
-            await runtime.swap_reaction(message, "⏳", "✅")
-            await runtime.send_response(message, "No recent notes found.")
+            await runtime.swap_reaction(context, "⏳", "✅")
+            await runtime.send_response(context, "No recent notes found.")
             return True
-        runtime.store_result_cursor(message, config, surfaced.object_ids, source_view="recent")
-        await runtime.swap_reaction(message, "⏳", "✅")
+        runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="recent")
+        await runtime.swap_reaction(context, "⏳", "✅")
         await runtime.send_response(
-            message,
+            context,
             "Recent notes:\n"
             + "\n".join(surfaced.lines)
             + "\n\n"
@@ -290,58 +292,58 @@ async def handle_command(
         return True
     if command == "!find":
         if len(parts) < 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !find <query>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !find <query>")
             return True
         query = content.split(None, 1)[1].strip()
         if not query:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !find <query>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !find <query>")
             return True
         surfaced = runtime.build_find_list(objects_root, index_db, config, query)
         if not surfaced.lines:
-            await runtime.swap_reaction(message, "⏳", "✅")
-            await runtime.send_response(message, f'No matches found for "{query}".')
+            await runtime.swap_reaction(context, "⏳", "✅")
+            await runtime.send_response(context, f'No matches found for "{query}".')
             return True
-        runtime.store_result_cursor(message, config, surfaced.object_ids, source_view="find")
-        await runtime.swap_reaction(message, "⏳", "✅")
+        runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="find")
+        await runtime.swap_reaction(context, "⏳", "✅")
         await runtime.send_response(
-            message,
+            context,
             "Matches:\n" + "\n".join(surfaced.lines) + "\n\n" + runtime.numbered_command_tip,
         )
         return True
     if command == "!show":
         if len(parts) != 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !show <number>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !show <number>")
             return True
         number = runtime.parse_positive_int(parts[1])
         if number is None:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !show <number>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !show <number>")
             return True
-        object_id = runtime.resolve_result_cursor(message, number)
+        object_id = runtime.resolve_result_cursor(context, number)
         if object_id is None:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
             await runtime.send_response(
-                message,
+                context,
                 "No active result list for that number. Run !recent, !find, !status, or !weekly first.",
             )
             return True
         detail = runtime.build_item_detail(objects_root, object_id, config)
         if not detail:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "That note is no longer available.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "That note is no longer available.")
             return True
-        await runtime.swap_reaction(message, "⏳", "✅")
-        await runtime.send_response(message, detail)
+        await runtime.swap_reaction(context, "⏳", "✅")
+        await runtime.send_response(context, detail)
         return True
     if command == "!append":
         if len(parts) < 3:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !append <id|number> <text>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !append <id|number> <text>")
             return True
-        target_resolution = runtime.resolve_command_target(message, parts[1])
+        target_resolution = runtime.resolve_command_target(context, parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
             runtime.log_numbered_mutation_resolution_failed(
                 raw_event_id=raw_id,
@@ -351,21 +353,21 @@ async def handle_command(
                 row_number=target_resolution.row_number,
             )
         if target_resolution.error:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, target_resolution.error)
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, target_resolution.error)
             return True
         target_id = target_resolution.target_id
         if not target_id:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !append <id|number> <text>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !append <id|number> <text>")
             return True
         text = content.split(None, 2)[2].strip()
         if not text:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !append <id|number> <text>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !append <id|number> <text>")
             return True
         return await runtime.apply_command_operation(
-            message,
+            context,
             raw_id,
             config,
             target_id=target_id,
@@ -377,10 +379,10 @@ async def handle_command(
         )
     if command == "!done":
         if len(parts) != 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !done <id|number>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !done <id|number>")
             return True
-        target_resolution = runtime.resolve_command_target(message, parts[1])
+        target_resolution = runtime.resolve_command_target(context, parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
             runtime.log_numbered_mutation_resolution_failed(
                 raw_event_id=raw_id,
@@ -390,16 +392,16 @@ async def handle_command(
                 row_number=target_resolution.row_number,
             )
         if target_resolution.error:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, target_resolution.error)
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, target_resolution.error)
             return True
         target_id = target_resolution.target_id
         if not target_id:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !done <id|number>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !done <id|number>")
             return True
         return await runtime.apply_command_operation(
-            message,
+            context,
             raw_id,
             config,
             target_id=target_id,
@@ -413,14 +415,14 @@ async def handle_command(
         try:
             fix_parts = shlex.split(content)
         except ValueError:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Invalid !fix syntax. Quote values containing spaces.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Invalid !fix syntax. Quote values containing spaces.")
             return True
         if len(fix_parts) < 3:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !fix <id|number> <field=value> [field=value ...]")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !fix <id|number> <field=value> [field=value ...]")
             return True
-        target_resolution = runtime.resolve_command_target(message, fix_parts[1])
+        target_resolution = runtime.resolve_command_target(context, fix_parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
             runtime.log_numbered_mutation_resolution_failed(
                 raw_event_id=raw_id,
@@ -430,20 +432,20 @@ async def handle_command(
                 row_number=target_resolution.row_number,
             )
         if target_resolution.error:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, target_resolution.error)
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, target_resolution.error)
             return True
         target_id = target_resolution.target_id
         if not target_id:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !fix <id|number> <field=value> [field=value ...]")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !fix <id|number> <field=value> [field=value ...]")
             return True
         updates: dict[str, Any] = {}
         for token in fix_parts[2:]:
             if "=" not in token:
-                await runtime.swap_reaction(message, "⏳", "⚠️")
+                await runtime.swap_reaction(context, "⏳", "⚠️")
                 await runtime.send_response(
-                    message,
+                    context,
                     "Invalid !fix syntax. Use field=value and quote values containing spaces.",
                 )
                 return True
@@ -451,16 +453,16 @@ async def handle_command(
             key = key.strip()
             value = value.strip()
             if not key:
-                await runtime.swap_reaction(message, "⏳", "⚠️")
-                await runtime.send_response(message, "Field name cannot be empty.")
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await runtime.send_response(context, "Field name cannot be empty.")
                 return True
             updates[key] = value
         if not updates:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "No valid fields provided.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "No valid fields provided.")
             return True
         return await runtime.apply_command_operation(
-            message,
+            context,
             raw_id,
             config,
             target_id=target_id,
@@ -473,37 +475,37 @@ async def handle_command(
         )
     if command == "!clear-archive":
         if len(parts) != 1:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !clear-archive")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !clear-archive")
             return True
-        runtime.start_archive_clear_confirmation(message)
-        await runtime.swap_reaction(message, "⏳", "❓")
+        runtime.start_archive_clear_confirmation(context)
+        await runtime.swap_reaction(context, "⏳", "❓")
         await runtime.send_response(
-            message,
+            context,
             "This will permanently clear all archive data (except `.git`). Reply with `DELETE` within 2 minutes to confirm.",
         )
         return True
     if command == "!confirm":
         if len(parts) != 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !confirm <pending_id>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !confirm <pending_id>")
             return True
         pending_id = parts[1]
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
         pending = runtime.load_pending_action(pending_root, pending_id)
         if not pending:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, f"Unknown pending action: {pending_id}")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, f"Unknown pending action: {pending_id}")
             return True
         if pending.status != "pending":
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, f"Pending action {pending_id} is {pending.status}.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, f"Pending action {pending_id} is {pending.status}.")
             return True
         object_type = pending.object_type
         schema_path = runtime.schema_map.get(object_type)
         if not schema_path and object_type != "mixed":
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Pending action has an unsupported object type.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Pending action has an unsupported object type.")
             return True
         try:
             result = runtime.apply_operations(
@@ -516,39 +518,39 @@ async def handle_command(
         except Exception:
             logging.exception("pending_apply_failed id=%s", pending_id)
             runtime.update_pending_action_status(pending_root, pending_id, "failed")
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Failed to apply pending action. Check logs for details.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Failed to apply pending action. Check logs for details.")
             return True
         await runtime.refresh_index_async(objects_root, index_db, matching=matching_config)
         runtime.notify_due_time_reminder_schedule_changed(config)
         touched_ids = runtime.extract_target_ids_from_derived(pending.derived)
         touched_ids.extend(runtime.extract_ids_from_written_paths(result.written_paths))
-        runtime.record_affinity_touches(runtime.cursor_key(message), touched_ids, matching=matching_config)
+        runtime.record_affinity_touches(runtime.cursor_key(context), touched_ids, matching=matching_config)
         runtime.update_pending_action_status(pending_root, pending_id, "confirmed")
-        await runtime.swap_reaction(message, "⏳", "✅")
+        await runtime.swap_reaction(context, "⏳", "✅")
         await runtime.send_response(
-            message,
+            context,
             f"Applied pending action {pending_id}. ({len(result.written_paths)} item(s) updated.)",
         )
         return True
     if command == "!cancel":
         if len(parts) != 2:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, "Usage: !cancel <pending_id>")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, "Usage: !cancel <pending_id>")
             return True
         pending_id = parts[1]
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
         pending = runtime.load_pending_action(pending_root, pending_id)
         if not pending:
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, f"Unknown pending action: {pending_id}")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, f"Unknown pending action: {pending_id}")
             return True
         if pending.status != "pending":
-            await runtime.swap_reaction(message, "⏳", "⚠️")
-            await runtime.send_response(message, f"Pending action {pending_id} is {pending.status}.")
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, f"Pending action {pending_id} is {pending.status}.")
             return True
         runtime.update_pending_action_status(pending_root, pending_id, "cancelled")
-        await runtime.swap_reaction(message, "⏳", "✅")
-        await runtime.send_response(message, f"Cancelled pending action {pending_id}.")
+        await runtime.swap_reaction(context, "⏳", "✅")
+        await runtime.send_response(context, f"Cancelled pending action {pending_id}.")
         return True
     return False

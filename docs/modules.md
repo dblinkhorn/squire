@@ -59,8 +59,10 @@ event translation (`discord.Client` lifecycle hooks) and Discord message/reactio
 Discord UI views (`PendingActionView`, `MutationPendingView`, `AutoApplyFeedbackView`) and interaction callbacks.
 3. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/scheduler.py`:
 digest/reminder scheduling loops and Discord delivery channel resolution.
-4. `/Users/dblinkhorn/squire/src/squire_core/runtime.py`:
-runtime composition root that wires shared transport modules, adapter callbacks, and startup behavior.
+4. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/flow.py`:
+Discord message lifecycle handling and Discord-specific orchestration that adapts shared transport contracts to Discord IO.
+5. `/Users/dblinkhorn/squire/src/squire_core/runtime.py`:
+transport-agnostic composition entrypoint that delegates to configured transport runtime flow.
 
 ## Optional Providers
 

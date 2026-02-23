@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from squire_core import runtime as discord_bot
+from squire_core.transport.discord import flow
 
 
 class _Author:
@@ -78,8 +78,8 @@ def test_format_apply_success_message_lists_multiple_titles(monkeypatch) -> None
             return {"title": "Book annual physical"}
         return {}
 
-    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
-    message = discord_bot._format_apply_success_message(
+    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
+    message = flow._format_apply_success_message(
         written_paths=[Path("/tmp/a.md"), Path("/tmp/b.md")],
     )
     assert message == '✅ Applied updates to 2 notes:\n- "Call internet provider"\n- "Book annual physical"'
@@ -87,7 +87,7 @@ def test_format_apply_success_message_lists_multiple_titles(monkeypatch) -> None
 
 def test_pending_action_view_shows_primary_buttons() -> None:
     async def _run() -> None:
-        view = discord_bot.PendingActionView(
+        view = flow.PendingActionView(
             pending_id="PA_1",
             pending_root="/tmp/pending",
             objects_root="/tmp/objects",
@@ -107,7 +107,7 @@ def test_pending_action_view_shows_primary_buttons() -> None:
 
 def test_pending_action_view_shows_confirmation_buttons() -> None:
     async def _run() -> None:
-        view = discord_bot.PendingActionView(
+        view = flow.PendingActionView(
             pending_id="PA_1",
             pending_root="/tmp/pending",
             objects_root="/tmp/objects",
@@ -136,7 +136,7 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    pending = discord_bot.PendingAction(
+    pending = flow.PendingAction(
         schema_version=1,
         pending_action_id="PA_1",
         raw_event_id="R_1",
@@ -162,12 +162,12 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
     def _fake_refresh_index(objects_root, index_db, *, matching=None):
         calls.append(f"refresh:{objects_root}:{index_db}")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "load_pending_action", _fake_load_pending_action)
-    monkeypatch.setattr(discord_bot, "apply_operations", _fake_apply_operations)
-    monkeypatch.setattr(discord_bot, "update_pending_action_status", _fake_update_pending_action_status)
-    monkeypatch.setattr(discord_bot, "_refresh_index", _fake_refresh_index)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "load_pending_action", _fake_load_pending_action)
+    monkeypatch.setattr(flow, "apply_operations", _fake_apply_operations)
+    monkeypatch.setattr(flow, "update_pending_action_status", _fake_update_pending_action_status)
+    monkeypatch.setattr(flow, "_refresh_index", _fake_refresh_index)
 
     config = {
         "paths": {
@@ -175,10 +175,10 @@ def test_handle_command_confirm_refreshes_index(monkeypatch) -> None:
             "index_db": "/tmp/index.sqlite",
             "pending_actions": "/tmp/pending",
         },
-        discord_bot._DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY: lambda *, clear_state=False: reminder_calls.append(clear_state),
+        flow._DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY: lambda *, clear_state=False: reminder_calls.append(clear_state),
     }
 
-    handled = asyncio.run(discord_bot._handle_command(_Message("!confirm PA_1"), "!confirm PA_1", "R_1", config))
+    handled = asyncio.run(flow._handle_command(_Message("!confirm PA_1"), "!confirm PA_1", "R_1", config))
 
     assert handled is True
     assert "status:confirmed" in calls
@@ -212,11 +212,11 @@ def test_handle_command_fix_parses_quoted_values(monkeypatch) -> None:
         captured["source_view"] = source_view
         return True
 
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
     handled = asyncio.run(
-        discord_bot._handle_command(
+        flow._handle_command(
             object(),
             '!fix A_1 next_action="Call dentist tomorrow at 4pm" priority=high',
             "R_1",
@@ -243,15 +243,15 @@ def test_handle_command_help_sends_help_message(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         captured["response"] = content
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(_Message("!help"), "!help", "R_1", config))
+    handled = asyncio.run(flow._handle_command(_Message("!help"), "!help", "R_1", config))
 
     assert handled is True
     assert captured["reaction"] == ("⏳", "✅")
-    assert captured["response"] == discord_bot._HELP_COPY
+    assert captured["response"] == flow._HELP_COPY
     assert "\n- `!status` - show daily digest" in str(captured["response"])
 
 
@@ -264,15 +264,15 @@ def test_handle_command_help_topic_sends_detail(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         captured["response"] = content
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(_Message("!help done"), "!help done", "R_1", config))
+    handled = asyncio.run(flow._handle_command(_Message("!help done"), "!help done", "R_1", config))
 
     assert handled is True
     assert captured["reaction"] == ("⏳", "✅")
-    assert captured["response"] == discord_bot._HELP_DETAILS["done"]
+    assert captured["response"] == flow._HELP_DETAILS["done"]
     assert "`!done <id|number>`" in str(captured["response"])
     assert "\n- " not in str(captured["response"])
 
@@ -286,11 +286,11 @@ def test_handle_command_help_unknown_topic_warns(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         captured["response"] = content
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(_Message("!help nope"), "!help nope", "R_1", config))
+    handled = asyncio.run(flow._handle_command(_Message("!help nope"), "!help nope", "R_1", config))
 
     assert handled is True
     assert captured["reaction"] == ("⏳", "⚠️")
@@ -310,16 +310,16 @@ def test_handle_command_recent_does_not_override_digest_id_flag(monkeypatch) -> 
         captured["show_ids_daily_weekly"] = config.get("surfacing", {}).get("output", {}).get("show_ids_daily_weekly")
         return SimpleNamespace(lines=["1. Pay rent (A_1) - admin"], object_ids=["A_1"])
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_recent_list", _fake_build_recent_list)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_recent_list", _fake_build_recent_list)
 
     message = _Message("!recent", user_id=11, channel_id=22)
     config = {
         "surfacing": {"output": {"show_ids_daily_weekly": False}},
         "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
-    handled = asyncio.run(discord_bot._handle_command(message, "!recent", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!recent", "R_1", config))
 
     assert handled is True
     assert captured["show_ids_daily_weekly"] is False
@@ -342,16 +342,16 @@ def test_handle_command_find_does_not_override_digest_id_flag(monkeypatch) -> No
         captured["show_ids_daily_weekly"] = config.get("surfacing", {}).get("output", {}).get("show_ids_daily_weekly")
         return SimpleNamespace(lines=["1. Call dentist (A_2) - admin"], object_ids=["A_2"])
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_find_list", _fake_build_find_list)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_find_list", _fake_build_find_list)
 
     message = _Message("!find dentist", user_id=11, channel_id=22)
     config = {
         "surfacing": {"output": {"show_ids_daily_weekly": False}},
         "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
-    handled = asyncio.run(discord_bot._handle_command(message, "!find dentist", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!find dentist", "R_1", config))
 
     assert handled is True
     assert captured["show_ids_daily_weekly"] is False
@@ -361,7 +361,7 @@ def test_handle_command_find_does_not_override_digest_id_flag(monkeypatch) -> No
 
 def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         return None
@@ -373,13 +373,13 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch) -> No
         captured["show_ids_daily_weekly"] = config.get("surfacing", {}).get("output", {}).get("show_ids_daily_weekly")
         return "**Title:** Call dentist\n\n(ID: A_2)"
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_item_detail", _fake_build_item_detail)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_item_detail", _fake_build_item_detail)
 
     message = _Message("!show 1", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_2"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
@@ -388,7 +388,7 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch) -> No
         "surfacing": {"output": {"show_ids_daily_weekly": False}},
         "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
-    handled = asyncio.run(discord_bot._handle_command(message, "!show 1", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!show 1", "R_1", config))
 
     assert handled is True
     assert captured["show_ids_daily_weekly"] is False
@@ -397,7 +397,7 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch) -> No
 
 def test_handle_command_status_stores_numbered_cursor(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         return None
@@ -406,15 +406,15 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch) -> None:
         captured["response"] = content
 
     def _fake_build_daily_digest(objects_root, config):
-        return discord_bot.DailyDigest(
+        return flow.DailyDigest(
             generated_at=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
             sections=[
-                discord_bot.DigestSection(
+                flow.DigestSection(
                     title="Admin due today",
                     lines=["Call dentist - due Mon Feb 16 (today)", "Pay rent - due Mon Feb 16 (today)"],
                     object_ids=["A_1", "A_2"],
                 ),
-                discord_bot.DigestSection(
+                flow.DigestSection(
                     title="Projects needing attention",
                     lines=["Blocked launch - blocked: Waiting on vendor"],
                     object_ids=["P_1"],
@@ -422,13 +422,13 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch) -> None:
             ],
         )
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_daily_digest", _fake_build_daily_digest)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_daily_digest", _fake_build_daily_digest)
 
     message = _Message("!status", user_id=11, channel_id=22)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!status", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!status", "R_1", config))
 
     assert handled is True
     assert "\n1. Call dentist" in str(captured["response"])
@@ -437,13 +437,13 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch) -> None:
     assert "\n3. Blocked launch" in str(captured["response"])
     assert "\n   • blocked: Waiting on vendor" in str(captured["response"])
     assert "!done <number>" in str(captured["response"])
-    key = discord_bot._cursor_key(message)
-    assert discord_bot._RESULT_CURSORS[key].object_ids == ["A_1", "A_2", "P_1"]
+    key = flow._cursor_key(message)
+    assert flow._RESULT_CURSORS[key].object_ids == ["A_1", "A_2", "P_1"]
 
 
 def test_handle_command_done_resolves_number_after_status(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         return None
@@ -452,10 +452,10 @@ def test_handle_command_done_resolves_number_after_status(monkeypatch) -> None:
         return None
 
     def _fake_build_daily_digest(objects_root, config):
-        return discord_bot.DailyDigest(
+        return flow.DailyDigest(
             generated_at=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
             sections=[
-                discord_bot.DigestSection(
+                flow.DigestSection(
                     title="Admin due today",
                     lines=["Call dentist - due Mon Feb 16 (today)", "Pay rent - due Mon Feb 16 (today)"],
                     object_ids=["A_1", "A_2"],
@@ -480,16 +480,16 @@ def test_handle_command_done_resolves_number_after_status(monkeypatch) -> None:
         captured["op"] = op
         return True
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_daily_digest", _fake_build_daily_digest)
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_daily_digest", _fake_build_daily_digest)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!status", user_id=11, channel_id=22)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
 
-    handled_status = asyncio.run(discord_bot._handle_command(message, "!status", "R_1", config))
-    handled_done = asyncio.run(discord_bot._handle_command(message, "!done 2", "R_2", config))
+    handled_status = asyncio.run(flow._handle_command(message, "!status", "R_1", config))
+    handled_done = asyncio.run(flow._handle_command(message, "!done 2", "R_2", config))
 
     assert handled_status is True
     assert handled_done is True
@@ -499,7 +499,7 @@ def test_handle_command_done_resolves_number_after_status(monkeypatch) -> None:
 
 def test_handle_command_done_resolves_number_from_parent_cursor_when_in_thread(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         return None
@@ -508,10 +508,10 @@ def test_handle_command_done_resolves_number_from_parent_cursor_when_in_thread(m
         return None
 
     def _fake_build_daily_digest(objects_root, config):
-        return discord_bot.DailyDigest(
+        return flow.DailyDigest(
             generated_at=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
             sections=[
-                discord_bot.DigestSection(
+                flow.DigestSection(
                     title="Admin due today",
                     lines=["Call dermatologist - due Mon Feb 16 (today)"],
                     object_ids=["A_1"],
@@ -536,17 +536,17 @@ def test_handle_command_done_resolves_number_from_parent_cursor_when_in_thread(m
         captured["op"] = op
         return True
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_daily_digest", _fake_build_daily_digest)
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_daily_digest", _fake_build_daily_digest)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     parent_message = _Message("!status", user_id=11, channel_id=22)
     thread_message = _Message("!done 1", user_id=11, channel_id=999, parent_id=22)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
 
-    handled_status = asyncio.run(discord_bot._handle_command(parent_message, "!status", "R_1", config))
-    handled_done = asyncio.run(discord_bot._handle_command(thread_message, "!done 1", "R_2", config))
+    handled_status = asyncio.run(flow._handle_command(parent_message, "!status", "R_1", config))
+    handled_done = asyncio.run(flow._handle_command(thread_message, "!done 1", "R_2", config))
 
     assert handled_status is True
     assert handled_done is True
@@ -556,7 +556,7 @@ def test_handle_command_done_resolves_number_from_parent_cursor_when_in_thread(m
 
 def test_handle_command_weekly_stores_numbered_cursor(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         return None
@@ -565,15 +565,15 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch) -> None:
         captured["response"] = content
 
     def _fake_build_weekly_review(objects_root, config):
-        return discord_bot.WeeklyReview(
+        return flow.WeeklyReview(
             generated_at=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
             sections=[
-                discord_bot.DigestSection(
+                flow.DigestSection(
                     title="Completed this week",
                     lines=["New unscheduled admin - admin, updated Mon Feb 16 (today)"],
                     object_ids=["A_10"],
                 ),
-                discord_bot.DigestSection(
+                flow.DigestSection(
                     title="People overdue for contact",
                     lines=["Alex - next contact Sun Feb 15 (yesterday)"],
                     object_ids=["P_20"],
@@ -581,13 +581,13 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch) -> None:
             ],
         )
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "build_weekly_review", _fake_build_weekly_review)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "build_weekly_review", _fake_build_weekly_review)
 
     message = _Message("!weekly", user_id=11, channel_id=22)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!weekly", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!weekly", "R_1", config))
 
     assert handled is True
     assert "\n1. New unscheduled admin" in str(captured["response"])
@@ -595,13 +595,13 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch) -> None:
     assert "\n2. Alex" in str(captured["response"])
     assert "\n   • next contact Sun Feb 15 (yesterday)" in str(captured["response"])
     assert "!append <number> <text>" in str(captured["response"])
-    key = discord_bot._cursor_key(message)
-    assert discord_bot._RESULT_CURSORS[key].object_ids == ["A_10", "P_20"]
+    key = flow._cursor_key(message)
+    assert flow._RESULT_CURSORS[key].object_ids == ["A_10", "P_20"]
 
 
 def test_handle_command_done_resolves_numbered_target(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_apply_command_operation(
         message,
@@ -621,17 +621,17 @@ def test_handle_command_done_resolves_numbered_target(monkeypatch) -> None:
         captured["fields"] = fields
         return True
 
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 2", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_1", "A_2"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!done 2", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!done 2", "R_1", config))
 
     assert handled is True
     assert captured["target_id"] == "A_2"
@@ -643,7 +643,7 @@ def test_handle_command_done_resolves_numbered_target(monkeypatch) -> None:
 
 def test_handle_command_append_resolves_numbered_target(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_apply_command_operation(
         message,
@@ -666,18 +666,18 @@ def test_handle_command_append_resolves_numbered_target(monkeypatch) -> None:
         captured["source_view"] = source_view
         return True
 
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!append 1 Added note", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_9"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="status",
     )
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!append 1 Added note", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!append 1 Added note", "R_1", config))
 
     assert handled is True
     assert captured["target_id"] == "A_9"
@@ -690,7 +690,7 @@ def test_handle_command_append_resolves_numbered_target(monkeypatch) -> None:
 
 def test_handle_command_fix_resolves_numbered_target(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_apply_command_operation(
         message,
@@ -714,18 +714,18 @@ def test_handle_command_fix_resolves_numbered_target(monkeypatch) -> None:
         captured["source_view"] = source_view
         return True
 
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message('!fix 2 next_action="Call back"', user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_1", "A_2"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="find",
     )
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, '!fix 2 next_action="Call back"', "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, '!fix 2 next_action="Call back"', "R_1", config))
 
     assert handled is True
     assert captured["target_id"] == "A_2"
@@ -739,7 +739,7 @@ def test_handle_command_fix_resolves_numbered_target(monkeypatch) -> None:
 
 def test_handle_command_done_number_without_cursor_shows_guidance(monkeypatch) -> None:
     calls: list[str] = []
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -750,13 +750,13 @@ def test_handle_command_done_number_without_cursor_shows_guidance(monkeypatch) -
     async def _fake_apply_command_operation(*args, **kwargs):
         raise AssertionError("apply should not run when no numbered cursor exists")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 1", user_id=11, channel_id=22)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!done 1", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!done 1", "R_1", config))
 
     assert handled is True
     assert "swap:⏳:⚠️" in calls
@@ -765,7 +765,7 @@ def test_handle_command_done_number_without_cursor_shows_guidance(monkeypatch) -
 
 def test_handle_command_done_number_expired_cursor_shows_guidance(monkeypatch, caplog) -> None:
     calls: list[str] = []
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -776,13 +776,13 @@ def test_handle_command_done_number_expired_cursor_shows_guidance(monkeypatch, c
     async def _fake_apply_command_operation(*args, **kwargs):
         raise AssertionError("apply should not run when cursor is expired")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 1", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_1"],
         expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
         source_view="recent",
@@ -790,7 +790,7 @@ def test_handle_command_done_number_expired_cursor_shows_guidance(monkeypatch, c
 
     caplog.set_level(logging.INFO)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!done 1", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!done 1", "R_1", config))
 
     assert handled is True
     assert "swap:⏳:⚠️" in calls
@@ -800,7 +800,7 @@ def test_handle_command_done_number_expired_cursor_shows_guidance(monkeypatch, c
 
 def test_handle_command_done_number_out_of_range_shows_guidance(monkeypatch) -> None:
     calls: list[str] = []
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -811,19 +811,19 @@ def test_handle_command_done_number_out_of_range_shows_guidance(monkeypatch) -> 
     async def _fake_apply_command_operation(*args, **kwargs):
         raise AssertionError("apply should not run when numbered target is out of range")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 2", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_1"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!done 2", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!done 2", "R_1", config))
 
     assert handled is True
     assert "swap:⏳:⚠️" in calls
@@ -832,7 +832,7 @@ def test_handle_command_done_number_out_of_range_shows_guidance(monkeypatch) -> 
 
 def test_handle_command_done_number_wrong_type_is_rejected_and_logged(monkeypatch, caplog) -> None:
     calls: list[str] = []
-    discord_bot._RESULT_CURSORS.clear()
+    flow._RESULT_CURSORS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -849,15 +849,15 @@ def test_handle_command_done_number_wrong_type_is_rejected_and_logged(monkeypatc
     def _fake_apply_operations(*args, **kwargs):
         raise AssertionError("apply_operations should not run for wrong-type !done")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(discord_bot, "apply_operations", _fake_apply_operations)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "find_object_path", _fake_find_object_path)
+    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
+    monkeypatch.setattr(flow, "apply_operations", _fake_apply_operations)
 
     message = _Message("!done 1", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["PR_1"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="weekly",
@@ -865,7 +865,7 @@ def test_handle_command_done_number_wrong_type_is_rejected_and_logged(monkeypatc
 
     caplog.set_level(logging.INFO)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!done 1", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!done 1", "R_1", config))
 
     assert handled is True
     assert "swap:⏳:⚠️" in calls
@@ -893,11 +893,11 @@ def test_handle_command_done_with_id_keeps_id_path(monkeypatch) -> None:
         captured["op"] = op
         return True
 
-    monkeypatch.setattr(discord_bot, "_apply_command_operation", _fake_apply_command_operation)
+    monkeypatch.setattr(flow, "_apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done A_1", user_id=11, channel_id=22)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!done A_1", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!done A_1", "R_1", config))
 
     assert handled is True
     assert captured["target_id"] == "A_1"
@@ -923,16 +923,16 @@ def test_handle_command_append_number_logs_resolved(monkeypatch, caplog) -> None
     async def _fake_refresh_index(objects_root, index_db, *, matching=None):
         return None
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(discord_bot, "apply_operations", _fake_apply_operations)
-    monkeypatch.setattr(discord_bot, "_refresh_index_async", _fake_refresh_index)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "find_object_path", _fake_find_object_path)
+    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
+    monkeypatch.setattr(flow, "apply_operations", _fake_apply_operations)
+    monkeypatch.setattr(flow, "_refresh_index_async", _fake_refresh_index)
 
     message = _Message("!append 1 update", user_id=11, channel_id=22)
-    key = discord_bot._cursor_key(message)
-    discord_bot._RESULT_CURSORS[key] = discord_bot._ResultCursor(
+    key = flow._cursor_key(message)
+    flow._RESULT_CURSORS[key] = flow._ResultCursor(
         object_ids=["A_1"],
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="status",
@@ -940,7 +940,7 @@ def test_handle_command_append_number_logs_resolved(monkeypatch, caplog) -> None
 
     caplog.set_level(logging.INFO)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!append 1 update", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!append 1 update", "R_1", config))
 
     assert handled is True
     assert any("numbered_mutation_resolved" in rec.message and "command=append" in rec.message for rec in caplog.records)
@@ -964,15 +964,15 @@ def test_apply_command_operation_rejects_disallowed_fix_field(monkeypatch) -> No
     def _fake_apply_operations(*args, **kwargs):
         raise AssertionError("apply_operations should not be called for invalid !fix fields")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(discord_bot, "apply_operations", _fake_apply_operations)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "find_object_path", _fake_find_object_path)
+    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
+    monkeypatch.setattr(flow, "apply_operations", _fake_apply_operations)
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
     handled = asyncio.run(
-        discord_bot._apply_command_operation(
+        flow._apply_command_operation(
             object(),
             "R_1",
             config,
@@ -1006,15 +1006,15 @@ def test_apply_command_operation_rejects_invalid_fix_enum(monkeypatch) -> None:
     def _fake_apply_operations(*args, **kwargs):
         raise AssertionError("apply_operations should not be called for invalid !fix values")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
-    monkeypatch.setattr(discord_bot, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(discord_bot, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(discord_bot, "apply_operations", _fake_apply_operations)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "find_object_path", _fake_find_object_path)
+    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
+    monkeypatch.setattr(flow, "apply_operations", _fake_apply_operations)
 
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
     handled = asyncio.run(
-        discord_bot._apply_command_operation(
+        flow._apply_command_operation(
             object(),
             "R_1",
             config,
@@ -1032,7 +1032,7 @@ def test_apply_command_operation_rejects_invalid_fix_enum(monkeypatch) -> None:
 
 def test_handle_command_clear_archive_starts_confirmation(monkeypatch) -> None:
     calls: list[str] = []
-    discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
+    flow._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -1040,15 +1040,15 @@ def test_handle_command_clear_archive_starts_confirmation(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     message = _Message("!clear-archive", user_id=100, channel_id=200)
     config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
-    handled = asyncio.run(discord_bot._handle_command(message, "!clear-archive", "R_1", config))
+    handled = asyncio.run(flow._handle_command(message, "!clear-archive", "R_1", config))
 
     assert handled is True
-    assert discord_bot._archive_clear_key(message) in discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS
+    assert flow._archive_clear_key(message) in flow._ARCHIVE_CLEAR_CONFIRMATIONS
     assert "swap:⏳:❓" in calls
     assert any("Reply with `DELETE`" in call for call in calls)
 
@@ -1056,7 +1056,7 @@ def test_handle_command_clear_archive_starts_confirmation(monkeypatch) -> None:
 def test_handle_message_delete_clears_archive_when_pending(monkeypatch, tmp_path: Path) -> None:
     calls: list[str] = []
     reminder_calls: list[bool] = []
-    discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
+    flow._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
 
     archive_root = tmp_path / "archive"
     archive_root.mkdir()
@@ -1070,30 +1070,30 @@ def test_handle_message_delete_clears_archive_when_pending(monkeypatch, tmp_path
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "_safe_add_reaction", _fake_safe_add_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_safe_add_reaction", _fake_safe_add_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     message = _Message("DELETE", user_id=100, channel_id=200)
-    discord_bot._start_archive_clear_confirmation(message)
+    flow._start_archive_clear_confirmation(message)
 
     handled_config = {
         "archive_root": str(archive_root),
-        discord_bot._DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY: lambda *, clear_state=False: reminder_calls.append(clear_state),
+        flow._DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY: lambda *, clear_state=False: reminder_calls.append(clear_state),
     }
-    asyncio.run(discord_bot._handle_message(message, handled_config))
+    asyncio.run(flow._handle_message(message, handled_config))
 
     assert (archive_root / ".git").exists()
     assert not (archive_root / "events").exists()
     assert not (archive_root / "state.db").exists()
     assert "react:✅" in calls
     assert any("Archive cleared. Removed 2 top-level entries" in call for call in calls)
-    assert discord_bot._archive_clear_key(message) not in discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS
+    assert flow._archive_clear_key(message) not in flow._ARCHIVE_CLEAR_CONFIRMATIONS
     assert reminder_calls == [True]
 
 
 def test_handle_message_delete_without_pending_shows_warning(monkeypatch) -> None:
     calls: list[str] = []
-    discord_bot._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
+    flow._ARCHIVE_CLEAR_CONFIRMATIONS.clear()
 
     async def _fake_safe_add_reaction(message, emoji):
         calls.append(f"react:{emoji}")
@@ -1101,11 +1101,11 @@ def test_handle_message_delete_without_pending_shows_warning(monkeypatch) -> Non
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "_safe_add_reaction", _fake_safe_add_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "_safe_add_reaction", _fake_safe_add_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     message = _Message("DELETE", user_id=100, channel_id=200)
-    asyncio.run(discord_bot._handle_message(message, {"archive_root": "/tmp/archive"}))
+    asyncio.run(flow._handle_message(message, {"archive_root": "/tmp/archive"}))
 
     assert "react:⚠️" in calls
     assert any("No pending archive clear request." in call for call in calls)
@@ -1133,11 +1133,11 @@ def test_nl_route_executes_read_command(monkeypatch) -> None:
         captured["command"] = content
         return True
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_handle_command", _fake_handle_command)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_handle_command", _fake_handle_command)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("show my last 3 notes", user_id=11, channel_id=22),
             content="show my last 3 notes",
             raw_id="R_1",
@@ -1173,11 +1173,11 @@ def test_nl_route_overrides_show_my_notes_to_recent(monkeypatch) -> None:
         captured["command"] = content
         return True
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_handle_command", _fake_handle_command)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_handle_command", _fake_handle_command)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("show me my notes", user_id=11, channel_id=22),
             content="show me my notes",
             raw_id="R_1",
@@ -1215,12 +1215,12 @@ def test_nl_route_clarifies_ambiguous_read_intent(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("show my dentist note", user_id=11, channel_id=22),
             content="show my dentist note",
             raw_id="R_1",
@@ -1255,11 +1255,11 @@ def test_nl_route_falls_through_on_low_confidence(monkeypatch) -> None:
         calls.append("handle")
         return True
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_handle_command", _fake_handle_command)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_handle_command", _fake_handle_command)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("status maybe", user_id=11, channel_id=22),
             content="status maybe",
             raw_id="R_1",
@@ -1293,12 +1293,12 @@ def test_nl_route_blocks_explicit_only_intent(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("delete everything", user_id=11, channel_id=22),
             content="delete everything",
             raw_id="R_1",
@@ -1356,11 +1356,11 @@ def test_nl_route_queues_mutation_confirmation(monkeypatch) -> None:
         captured["confidence"] = confidence
         return True
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("mark item 2 done", user_id=11, channel_id=22),
             content="mark item 2 done",
             raw_id="R_1",
@@ -1417,12 +1417,12 @@ def test_nl_route_blocks_mutation_when_disabled(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(discord_bot, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(discord_bot, "_send_response", _fake_send_response)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("append this to A_1", user_id=11, channel_id=22),
             content="append this to A_1",
             raw_id="R_1",
@@ -1455,11 +1455,11 @@ def test_nl_route_uses_configured_v1_prompt_path(monkeypatch) -> None:
             raw_text="{}",
         )
 
-    monkeypatch.setattr(discord_bot, "load_prompt", _fake_load_prompt)
-    monkeypatch.setattr(discord_bot, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(flow, "load_prompt", _fake_load_prompt)
+    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
 
     handled = asyncio.run(
-        discord_bot._maybe_route_nl_command(
+        flow._maybe_route_nl_command(
             message=_Message("noop", user_id=11, channel_id=22),
             content="noop",
             raw_id="R_1",
