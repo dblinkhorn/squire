@@ -7,7 +7,6 @@ from pathlib import Path
 
 class Source(str, Enum):
     discord = "discord"
-    slack = "slack"
     webhook = "webhook"
 
 

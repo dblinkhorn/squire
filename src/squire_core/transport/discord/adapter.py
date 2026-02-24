@@ -94,7 +94,3 @@ class DiscordSquireBot(DiscordSchedulerMixin, discord.Client):
             self._last_dm_channel_id = message.channel.id
             self._last_dm_user_id = message.author.id
         await self._message_handler(message, self._config)
-
-
-# Stage-5 compatibility alias; callers can migrate to DiscordSquireBot.
-SquireBot = DiscordSquireBot

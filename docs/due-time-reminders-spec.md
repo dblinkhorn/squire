@@ -139,7 +139,7 @@ Covers cross-day offsets and next-day reminders without waiting for next midnigh
 
 ## Runtime Architecture
 
-Use three async tasks managed by `SquireBot`:
+Use three async tasks managed by `DiscordSquireBot`:
 
 1. Reminder dispatch loop: sleeps until next event or wake signal.
 2. Midnight rebuild loop: signals schedule rebuild at local midnight.
@@ -219,7 +219,7 @@ If any fail, skip and log `ineligible`.
 After successful canonical writes that can affect reminders, call a single notifier helper, for example:
 
 ```python
-_notify_due_time_reminder_schedule_changed()
+runtime.notify_due_time_reminder_schedule_changed()
 ```
 
 Required call sites:

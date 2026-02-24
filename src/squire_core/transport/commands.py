@@ -166,7 +166,7 @@ class CommandRuntime(Protocol):
     ) -> None:
         ...
 
-    def notify_due_time_reminder_schedule_changed(self, config: dict[str, Any], *, clear_state: bool = False) -> None:
+    def notify_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
         ...
 
     def extract_target_ids_from_derived(self, derived: dict[str, Any]) -> list[str]:
@@ -522,7 +522,7 @@ async def handle_command(
             await runtime.send_response(context, "Failed to apply pending action. Check logs for details.")
             return True
         await runtime.refresh_index_async(objects_root, index_db, matching=matching_config)
-        runtime.notify_due_time_reminder_schedule_changed(config)
+        runtime.notify_due_time_reminder_schedule_changed()
         touched_ids = runtime.extract_target_ids_from_derived(pending.derived)
         touched_ids.extend(runtime.extract_ids_from_written_paths(result.written_paths))
         runtime.record_affinity_touches(runtime.cursor_key(context), touched_ids, matching=matching_config)

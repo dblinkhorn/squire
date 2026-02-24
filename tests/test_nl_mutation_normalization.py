@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from squire_core.transport.discord import flow
 from squire_core.config_utils import NLCommandRoutingConfig
+from squire_core.transport import routing as transport_routing
 
 
 def _routing_config() -> NLCommandRoutingConfig:
@@ -19,7 +19,7 @@ def _routing_config() -> NLCommandRoutingConfig:
 
 
 def test_normalize_set_fields_requires_canonical_field_candidates() -> None:
-    fields, reason, notes = flow._normalize_set_fields(
+    fields, reason, notes = transport_routing.normalize_set_fields(
         object_type="admin",
         field_updates=[
             {
@@ -42,7 +42,7 @@ def test_normalize_set_fields_requires_canonical_field_candidates() -> None:
 
 
 def test_normalize_set_fields_prefers_due_at_when_time_hint_present() -> None:
-    fields, reason, _ = flow._normalize_set_fields(
+    fields, reason, _ = transport_routing.normalize_set_fields(
         object_type="admin",
         field_updates=[
             {
@@ -65,7 +65,7 @@ def test_normalize_set_fields_prefers_due_at_when_time_hint_present() -> None:
 
 
 def test_normalize_nl_mutation_plan_input_accepts_object_id_target() -> None:
-    plan, error = flow._normalize_nl_mutation_plan_input(
+    plan, error = transport_routing.normalize_nl_mutation_plan_input(
         {
             "schema_version": 1,
             "operations": [
@@ -96,7 +96,7 @@ def test_normalize_nl_mutation_plan_input_accepts_object_id_target() -> None:
 
 
 def test_normalize_nl_mutation_plan_input_supports_multi_operation_targets() -> None:
-    plan, error = flow._normalize_nl_mutation_plan_input(
+    plan, error = transport_routing.normalize_nl_mutation_plan_input(
         {
             "schema_version": 1,
             "operations": [
@@ -138,7 +138,7 @@ def test_normalize_nl_mutation_plan_input_supports_multi_operation_targets() -> 
 
 
 def test_normalize_set_fields_returns_field_unknown_for_invalid_field() -> None:
-    fields, reason, _ = flow._normalize_set_fields(
+    fields, reason, _ = transport_routing.normalize_set_fields(
         object_type="people",
         field_updates=[
             {

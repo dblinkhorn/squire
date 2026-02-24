@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from squire_core.transport.contracts import TransportMessageContext
-from squire_core.transport.discord import flow
+from squire_core.transport import commands as transport_commands
+from squire_core.transport import routing as transport_routing
+from squire_core.transport.discord import message_entry
+from squire_core.transport.state import RuntimeStateStore
 
 
 class _Author:
@@ -39,6 +42,7 @@ class _Message:
 
 def test_discord_handle_command_builds_transport_context(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    runtime_state = RuntimeStateStore()
 
     async def _fake_handle_command(*, runtime, context, content, raw_id, config):
         del runtime, raw_id, config
@@ -46,10 +50,18 @@ def test_discord_handle_command_builds_transport_context(monkeypatch) -> None:
         captured["content"] = content
         return True
 
-    monkeypatch.setattr(flow._transport_commands, "handle_command", _fake_handle_command)
+    monkeypatch.setattr(transport_commands, "handle_command", _fake_handle_command)
 
     message = _Message(content="!help")
-    handled = asyncio.run(flow._handle_command(message, message.content, "R_1", {}))
+    handled = asyncio.run(
+        message_entry.handle_command(
+            message,
+            message.content,
+            "R_1",
+            {},
+            runtime_state=runtime_state,
+        )
+    )
 
     assert handled is True
     assert captured["content"] == "!help"
@@ -64,6 +76,7 @@ def test_discord_handle_command_builds_transport_context(monkeypatch) -> None:
 
 def test_discord_nl_router_builds_transport_context(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    runtime_state = RuntimeStateStore()
 
     async def _fake_maybe_route_nl_command(*, runtime, context, content, raw_id, config, provider, model):
         del runtime, raw_id, config, provider, model
@@ -71,17 +84,18 @@ def test_discord_nl_router_builds_transport_context(monkeypatch) -> None:
         captured["content"] = content
         return True
 
-    monkeypatch.setattr(flow._transport_routing, "maybe_route_nl_command", _fake_maybe_route_nl_command)
+    monkeypatch.setattr(transport_routing, "maybe_route_nl_command", _fake_maybe_route_nl_command)
 
     message = _Message(content="mark item done")
     handled = asyncio.run(
-        flow._maybe_route_nl_command(
+        message_entry.maybe_route_nl_command(
             message=message,
             content=message.content,
             raw_id="R_2",
             config={},
             provider=SimpleNamespace(),
             model="gpt-5-mini",
+            runtime_state=runtime_state,
         )
     )
 

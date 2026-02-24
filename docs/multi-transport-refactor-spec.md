@@ -31,7 +31,7 @@ Primary objective: modularize once so future transports can be added on top of r
 
 1. Redesigning command UX or NL policy semantics.
 2. Changing canonical storage, index schema, or reminder business rules.
-3. Implementing Slack adapter/runtime behavior in this staged refactor.
+3. Implementing additional transport adapter/runtime behavior in this staged refactor (for example Slack).
 4. Broad architecture rewrite outside transport boundaries.
 5. Requiring a console-script packaging change in this refactor (existing `make`-driven startup remains acceptable).
 
@@ -71,7 +71,7 @@ These clusters define extraction targets.
 
 1. `core domain` (existing: canonical store, indexer, surfacing, operation apply, pending actions, decision flow).
 2. `transport shared runtime` (new: command orchestration, NL routing, state/cursor management, reminder schedule helpers, bootstrap helpers).
-3. `transport adapters` (Discord, Slack): event ingestion, platform identity/channel resolution, message send/edit/reaction/action translation, platform UI components.
+3. `transport adapters` (Discord and future transports, for example Slack): event ingestion, platform identity/channel resolution, message send/edit/reaction/action translation, platform UI components.
 
 ### Proposed Package Map
 
@@ -93,10 +93,6 @@ src/squire_core/
       adapter.py
       views.py
       scheduler.py
-    slack/
-      __init__.py
-      adapter.py
-      scheduler.py   (optional in v1)
 ```
 
 Notes:
@@ -117,7 +113,7 @@ Example shape:
 ```python
 @dataclass
 class TransportMessageContext:
-    source: str  # "discord" | "slack"
+    source: str  # e.g. "discord"
     user_id: str
     channel_id: str
     thread_id: str | None
@@ -182,7 +178,7 @@ Includes:
 
 Keep in adapter:
 
-1. extraction of platform-specific cursor keys from native message object (Discord/Slack object to standard keys)
+1. extraction of platform-specific cursor keys from native message object (Discord/future transport object to standard keys)
 
 ### B) Bootstrap, Health, and Runtime Parsing Helpers
 
@@ -391,7 +387,7 @@ Scope:
 1. reduce Discord adapter to thin event-translation and IO layer
 2. move Discord-only views/scheduler into `transport/discord/*`
 3. keep `discord_bot.py` as compatibility wrapper/small shim while call sites are migrated
-4. use explicit Discord-specific adapter naming (`DiscordSquireBot`); keep `SquireBot` as a temporary compatibility alias during migration
+4. use explicit Discord-specific adapter naming (`DiscordSquireBot`) and remove temporary naming aliases after migration
 
 Acceptance criteria:
 
@@ -456,10 +452,6 @@ Recorded findings inventory (2026-02-22 audit):
 3. likely orphaned transport helpers/protocol aliases (no call sites found in repo scan):
    - `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py`: `TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`
    - `/Users/dblinkhorn/squire/src/squire_core/transport/state.py`: `NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`
-4. Slack scaffold modules currently unreferenced by runtime:
-   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/adapter.py`
-   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/scheduler.py`
-   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/__init__.py`
 
 ### Stage 7A: Safe Hygiene and Verification Inventory (Pre-Hardening)
 
@@ -485,7 +477,6 @@ Completion notes (2026-02-22):
 2. refreshed deferred-inventory decisions with confidence:
    - `/Users/dblinkhorn/squire/src/squire_core/transport/contracts.py` (`TransportIO`, `SendTextFn`, `AddReactionFn`, `SendPendingControlsFn`) remain deferred with **medium** confidence they are orphaned; held for Stage 8/7B to avoid pre-hardening contract churn
    - `/Users/dblinkhorn/squire/src/squire_core/transport/state.py` (`NLRouteIntentV1`, `get_result_cursor`, `get_archive_clear_confirmation`) remain deferred with **medium-high** confidence they are orphaned; held until Stage 8 determines final shared contract shape
-   - `/Users/dblinkhorn/squire/src/squire_core/transport/slack/{adapter.py,scheduler.py,__init__.py}` were deferred with **high** confidence runtime-unreferenced; later superseded by the Stage 7B decision to keep Slack scaffolds out of this refactor scope.
 
 ### Stage 7B: Orphan Removal and Contract Pruning (Post-Hardening)
 
@@ -493,7 +484,7 @@ Scope:
 
 1. after Stage 8, remove or wire orphaned helpers/symbols based on the hardened boundary design
 2. remove any temporary compatibility/deprecation scaffolding proven unnecessary after Stage 8
-3. keep Slack adapter scaffolds explicitly out of scope for this refactor; do not track them as Stage 7B action items
+3. keep additional transport implementation explicitly out of scope for this refactor; do not track it as Stage 7B action items
 
 Acceptance criteria:
 
@@ -510,7 +501,7 @@ Completion notes (2026-02-23):
 2. verification evidence:
    - repo symbol scan found no call sites before removal
    - focused validation passed: `56 passed` (`tests/test_transport_commands.py`, `tests/test_transport_routing.py`, `tests/test_discord_contract_bridge.py`, `tests/test_discord_commands.py`, `tests/test_nl_command_routing_config.py`, `tests/test_nl_mutation_normalization.py`, `tests/test_nl_multi_operation_clarification.py`)
-3. Slack-specific scaffold decisions remain intentionally outside this refactor scope and are not tracked as remaining Stage 7B work.
+3. additional transport implementation remains intentionally outside this refactor scope and is not tracked as remaining Stage 7B work.
 
 ## Stage 8: Transport Boundary Hardening (Modularity Intent Completion)
 
@@ -535,7 +526,7 @@ Scope:
 
 Implementation guidance:
 
-1. shared modules (`transport/commands.py`, `transport/routing.py`, `transport/state.py`) should not import or type against `discord.py`/Slack SDK objects
+1. shared modules (`transport/commands.py`, `transport/routing.py`, `transport/state.py`) should not import or type against `discord.py` or future transport SDK objects
 2. adapter modules should own all SDK object translation and UI concerns
 3. any temporary compatibility wrappers must be documented with explicit removal criteria and targeted follow-up stage
 4. apply the Stage 7 removal-safety proviso to any boundary-hardening deletions (verify first, then remove)
@@ -643,7 +634,7 @@ Post-Stage-6 sequencing requirement (completed 2026-02-23):
 - run focused tests first, then broader suite
 - update `.agent/context.md` with only durable decisions and unresolved risks
 
-4. Slack adapter implementation remains out of scope for this staged refactor and is tracked as a separate follow-on effort, not as remaining work inside this refactor sequence.
+4. Additional transport integrations (for example Slack) remain out of scope for this staged refactor and are tracked as separate follow-on efforts, not as remaining work inside this refactor sequence.
 
 ## Success Definition
 

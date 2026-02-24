@@ -10,16 +10,25 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
 from squire_core.config_utils import NLCommandRoutingConfig, load_matching_config, load_nl_command_routing_config
-from squire_core.derived_event_store import write_derived_event
 from squire_core.id_utils import generate_prefixed_id
 from squire_core.pending_actions import PendingAction, write_pending_action
-from squire_core.schema_loader import load_json_schema, validate_json
 from squire_core.timezone_utils import resolve_timezone
 from squire_core.transport.contracts import TransportMessageContext
+from squire_core.transport.tracing import (
+    build_nl_trace_operation as _build_nl_trace_operation,
+    build_unresolved_scope_from_entries as _build_unresolved_scope_from_entries,
+    summarize_unresolved_scope as _summarize_unresolved_scope,
+)
+from squire_core.transport.validation import (
+    FIX_ALLOWED_FIELDS as _FIX_ALLOWED_FIELDS,
+    FIX_DATE_FIELDS as _FIX_DATE_FIELDS,
+    FIX_DATETIME_FIELDS as _FIX_DATETIME_FIELDS,
+    FIX_ENUM_VALUES as _FIX_ENUM_VALUES,
+    validate_fix_updates as _validate_fix_updates,
+)
 
 _NL_ROUTE_MEDIUM_CONFIDENCE = 0.5
 _NL_INTENT_SCHEMA_PATH = Path("config/schemas/nl_route_intent_v1.json")
-_NL_MUTATION_NORMALIZED_SCHEMA_PATH = Path("config/schemas/nl_mutation_normalized_v1.json")
 _NL_OUT_OF_SCOPE_CLARIFICATION_COPY = (
     "Before I can proceed with any other actions, I need clarification on the unresolved parts of the previous request. "
     "You may cancel your last action if you'd like to take a new action now."
@@ -78,66 +87,6 @@ _WEEKDAY_MAP = {
     "SUN": 6,
     "SUNDAY": 6,
 }
-_FIX_IMMUTABLE_FIELDS = {
-    "id",
-    "type",
-    "created_at",
-    "updated_at",
-    "source_event_ids",
-    "last_decision_id",
-}
-_FIX_ALLOWED_FIELDS = {
-    "admin": {
-        "title",
-        "status",
-        "next_action",
-        "due_date",
-        "due_at",
-        "priority",
-        "blocked_reason",
-        "completed_at",
-        "gcal_event_id",
-    },
-    "projects": {
-        "title",
-        "status",
-        "next_action",
-        "goal",
-        "due",
-        "blocked_reason",
-    },
-    "people": {
-        "title",
-        "name",
-        "context",
-        "follow_ups",
-        "last_contacted",
-        "next_contact",
-    },
-    "ideas": {
-        "title",
-        "one_liner",
-        "status",
-        "next_step",
-    },
-}
-_FIX_ENUM_VALUES = {
-    ("admin", "status"): {"open", "done", "blocked"},
-    ("admin", "priority"): {"low", "normal", "high"},
-    ("projects", "status"): {"planning", "in_progress", "blocked", "completed", "on_hold"},
-    ("ideas", "status"): {"seed", "incubating", "active", "parked", "done"},
-}
-_FIX_DATE_FIELDS = {
-    ("admin", "due_date"),
-    ("people", "last_contacted"),
-    ("people", "next_contact"),
-}
-_FIX_DATETIME_FIELDS = {
-    ("admin", "due_at"),
-    ("admin", "completed_at"),
-}
-
-
 @dataclass(frozen=True)
 class _NLRouteIntentV1:
     route: str
@@ -290,7 +239,7 @@ class RoutingRuntime(Protocol):
     def cursor_key(self, context: TransportMessageContext) -> tuple[int, int]:
         ...
 
-    def notify_due_time_reminder_schedule_changed(self, config: dict[str, Any], *, clear_state: bool = False) -> None:
+    def notify_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
         ...
 
     def now_iso(self) -> str:
@@ -941,68 +890,6 @@ def _resolve_field_for_update(*, object_type: str, update: dict[str, Any]) -> tu
     return None, "field_ambiguous", notes
 
 
-def _is_iso_date(value: str) -> bool:
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError:
-        return False
-    return parsed.isoformat() == value
-
-
-def _is_iso_datetime(value: str, *, require_timezone: bool) -> bool:
-    if "T" not in value:
-        return False
-    candidate = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        parsed = datetime.fromisoformat(candidate)
-    except ValueError:
-        return False
-    if require_timezone and parsed.tzinfo is None:
-        return False
-    return True
-
-
-def _validate_fix_updates(object_type: str, updates: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
-    allowed_fields = _FIX_ALLOWED_FIELDS.get(object_type)
-    if not allowed_fields:
-        return None, f"Unsupported object type for !fix: {object_type}"
-
-    validated: dict[str, Any] = {}
-    for raw_key, raw_value in updates.items():
-        key = str(raw_key).strip()
-        if not key:
-            return None, "Field name cannot be empty."
-        if key in _FIX_IMMUTABLE_FIELDS:
-            return None, f"Field `{key}` is not editable."
-        if key not in allowed_fields:
-            allowed = ", ".join(sorted(allowed_fields))
-            return None, f"Field `{key}` is not allowed for {object_type}. Allowed fields: {allowed}"
-        if not isinstance(raw_value, str):
-            return None, f"Field `{key}` must be provided as text."
-        value = raw_value.strip()
-        if not value:
-            return None, f"Field `{key}` cannot be empty."
-
-        enum_values = _FIX_ENUM_VALUES.get((object_type, key))
-        if enum_values and value not in enum_values:
-            allowed = ", ".join(sorted(enum_values))
-            return None, f"Invalid value for `{key}`. Allowed values: {allowed}"
-
-        if (object_type, key) in _FIX_DATE_FIELDS and not _is_iso_date(value):
-            return None, f"Invalid value for `{key}`. Use YYYY-MM-DD."
-        if (object_type, key) in _FIX_DATETIME_FIELDS and not _is_iso_datetime(value, require_timezone=True):
-            return None, f"Invalid value for `{key}`. Use ISO datetime with timezone offset."
-        if (object_type, key) == ("projects", "due"):
-            if not _is_iso_date(value) and not _is_iso_datetime(value, require_timezone=False):
-                return None, "Invalid value for `due`. Use YYYY-MM-DD or ISO datetime."
-
-        validated[key] = value
-
-    if not validated:
-        return None, "No valid fields provided."
-    return validated, None
-
-
 def normalize_set_fields(
     *,
     object_type: str,
@@ -1089,58 +976,6 @@ def _clarification_for_plan_reason(reason_code: str, *, object_type: str | None 
     )
 
 
-def _build_nl_trace_operation(entry: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "operation_id": entry.get("operation_id"),
-        "action_type": entry.get("action_type"),
-        "target_ref": entry.get("target_ref"),
-        "target_token": entry.get("target_token"),
-        "target_resolved_id": entry.get("target_resolved_id"),
-        "target_object_type": entry.get("target_object_type"),
-        "op_status": entry.get("op_status"),
-        "reason_code": entry.get("reason_code"),
-        "normalization_notes": entry.get("normalization_notes", []),
-        "normalized_fields": entry.get("normalized_fields", {}),
-        "proposed_operation": entry.get("proposed_operation"),
-    }
-
-
-def _build_unresolved_scope_from_entries(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    scope: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        if entry.get("op_status") != "unresolved":
-            continue
-        operation_id = _coerce_non_empty_str(entry.get("operation_id"))
-        if operation_id is None:
-            continue
-        target_token = _coerce_non_empty_str(entry.get("target_token"))
-        target_tokens: list[str] = []
-        if target_token:
-            target_tokens.append(target_token)
-        existing = scope.get(operation_id)
-        if existing is None:
-            scope[operation_id] = {
-                "action_type": _coerce_non_empty_str(entry.get("action_type")),
-                "target_tokens": target_tokens,
-                "reason_code": _coerce_non_empty_str(entry.get("reason_code")) or "clarification_insufficient",
-            }
-            continue
-        for token in target_tokens:
-            if token not in existing["target_tokens"]:
-                existing["target_tokens"].append(token)
-    return scope
-
-
-def _summarize_unresolved_scope(unresolved_scope: dict[str, dict[str, Any]]) -> str:
-    if not unresolved_scope:
-        return "Unresolved operations: none."
-    parts: list[str] = []
-    for operation_id, detail in unresolved_scope.items():
-        reason_code = _coerce_non_empty_str(detail.get("reason_code")) or "clarification_insufficient"
-        parts.append(f"{operation_id} ({reason_code})")
-    return "Unresolved operations: " + ", ".join(parts)
-
-
 def _is_clarification_plan_in_scope(
     *,
     clarification_plan_input: dict[str, Any],
@@ -1217,22 +1052,6 @@ def _action_phrase_for_entry(entry: dict[str, Any]) -> str:
     if action_type == "append_body":
         return f'Append to "{title}"'
     return f'Update "{title}"'
-
-
-def write_nl_mutation_normalized_trace(*, config: dict[str, Any], raw_event_id: str, payload: dict[str, Any]) -> None:
-    derived_root = Path(config.get("paths", {}).get("events_derived", "events/derived"))
-    try:
-        schema = load_json_schema(_NL_MUTATION_NORMALIZED_SCHEMA_PATH)
-        validate_json(schema, payload)
-        write_derived_event(
-            derived=payload,
-            raw_text="",
-            derived_root=derived_root,
-            raw_event_id=raw_event_id,
-            label="nl_mutation_normalized",
-        )
-    except Exception as exc:
-        logging.warning("nl_mutation_normalized_write_failed id=%s error=%s", raw_event_id, exc)
 
 
 async def queue_nl_mutation_confirmation(
@@ -1635,7 +1454,7 @@ async def queue_nl_mutation_confirmation(
         author_id=author_id,
         matching=matching_config,
         affinity_key=runtime.cursor_key(context),
-        on_canonical_change=lambda: runtime.notify_due_time_reminder_schedule_changed(config),
+        on_canonical_change=lambda: runtime.notify_due_time_reminder_schedule_changed(),
     )
     lines: list[str] = []
     if len(resolved_entries) == 1:
