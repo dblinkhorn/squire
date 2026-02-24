@@ -4,7 +4,18 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from squire_core.transport.discord import flow
+from squire_core.transport import routing as transport_routing
+from squire_core.transport.discord.command_contract import NL_OUT_OF_SCOPE_CLARIFICATION_COPY
+from squire_core.transport.discord.context import build_transport_context
+from squire_core.transport.discord import message_entry
+from squire_core.transport.state import (
+    RuntimeStateStore,
+    get_nl_clarification_context,
+    store_nl_clarification_context,
+)
+from squire_core.transport.targeting import cursor_key
+from squire_core.transport.discord import runtime_adapter_command as command_adapter
+from squire_core.transport.discord import runtime_adapter_routing as routing_adapter
 from squire_core.config_utils import load_nl_command_routing_config
 
 
@@ -51,13 +62,15 @@ def _mutation_plan_payload(*, operations: list[dict[str, object]], confidence: f
 
 def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
     calls: list[str] = []
+    state = RuntimeStateStore()
     message = _Message("what now", user_id=10, channel_id=20)
-    flow._NL_CLARIFICATION_CONTEXTS.clear()
-    flow._store_nl_clarification_context(
-        message=message,
+    store_nl_clarification_context(
+        cursor_key(message),
         raw_event_id="R_prev",
         unresolved_scope={"op_1": {"action_type": "set_fields", "target_tokens": ["1"], "reason_code": "field_ambiguous"}},
         base_plan_input={"operations": []},
+        ttl_seconds=600,
+        state_store=state,
     )
 
     async def _fake_interpret_text_async(*args, **kwargs):
@@ -85,33 +98,34 @@ def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
     async def _fake_send_response(message, content, thread_title=None, view=None):
         calls.append(f"send:{content}")
 
-    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(flow, "load_prompt", _fake_load_prompt)
-    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
+    monkeypatch.setattr(routing_adapter, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(routing_adapter, "load_prompt", _fake_load_prompt)
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
     handled = asyncio.run(
-        flow._maybe_route_nl_command(
+        message_entry.maybe_route_nl_command(
             message=message,
             content=message.content,
             raw_id="R_now",
             config={},
             provider=object(),
             model="gpt-5-mini",
+            runtime_state=state,
         )
     )
 
     assert handled is True
     assert "swap:⏳:⚠️" in calls
-    assert any(flow._NL_OUT_OF_SCOPE_CLARIFICATION_COPY in call for call in calls)
+    assert any(NL_OUT_OF_SCOPE_CLARIFICATION_COPY in call for call in calls)
     assert any("Unresolved operations: op_1 (field_ambiguous)" in call for call in calls)
-    assert flow._load_nl_clarification_context(message) is None
+    assert get_nl_clarification_context(cursor_key(message), state_store=state) is None
 
 
 def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    state = RuntimeStateStore()
     message = _Message("clarify", user_id=11, channel_id=21)
-    flow._NL_CLARIFICATION_CONTEXTS.clear()
     base_plan = {
         "operations": [
             {
@@ -143,11 +157,13 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
         "object_type_hint": None,
         "raw_user_phrases": {},
     }
-    flow._store_nl_clarification_context(
-        message=message,
+    store_nl_clarification_context(
+        cursor_key(message),
         raw_event_id="R_prev",
         unresolved_scope={"op_2": {"action_type": "set_fields", "target_tokens": ["2"], "reason_code": "field_ambiguous"}},
         base_plan_input=base_plan,
+        ttl_seconds=600,
+        state_store=state,
     )
 
     async def _fake_interpret_text_async(*args, **kwargs):
@@ -184,7 +200,8 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
 
     async def _fake_queue_nl_mutation_confirmation(
         *,
-        message,
+        runtime,
+        context,
         raw_id,
         config,
         plan_input,
@@ -197,18 +214,19 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
         captured["operation_ids"] = [operation["operation_id"] for operation in plan_input["operations"]]
         return True
 
-    monkeypatch.setattr(flow, "interpret_text_async", _fake_interpret_text_async)
-    monkeypatch.setattr(flow, "load_prompt", _fake_load_prompt)
-    monkeypatch.setattr(flow, "_queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
+    monkeypatch.setattr(routing_adapter, "interpret_text_async", _fake_interpret_text_async)
+    monkeypatch.setattr(routing_adapter, "load_prompt", _fake_load_prompt)
+    monkeypatch.setattr(transport_routing, "queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
 
     handled = asyncio.run(
-        flow._maybe_route_nl_command(
+        message_entry.maybe_route_nl_command(
             message=message,
             content=message.content,
             raw_id="R_now",
             config={},
             provider=object(),
             model="gpt-5-mini",
+            runtime_state=state,
         )
     )
 
@@ -220,6 +238,7 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
 def test_multi_operation_conflict_marks_operation_conflict(monkeypatch) -> None:
     trace_payload: dict[str, object] = {}
     responses: list[str] = []
+    state = RuntimeStateStore()
     message = _Message("conflict", user_id=12, channel_id=22)
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
@@ -237,11 +256,11 @@ def test_multi_operation_conflict_marks_operation_conflict(monkeypatch) -> None:
     def _fake_write_trace(*, config, raw_event_id, payload):
         trace_payload.update(payload)
 
-    monkeypatch.setattr(flow, "_swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(flow, "_send_response", _fake_send_response)
-    monkeypatch.setattr(flow, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(flow, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(flow, "_write_nl_mutation_normalized_trace", _fake_write_trace)
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
+    monkeypatch.setattr(routing_adapter, "find_object_path", _fake_find_object_path)
+    monkeypatch.setattr(routing_adapter, "load_frontmatter", _fake_load_frontmatter)
+    monkeypatch.setattr(routing_adapter, "_write_nl_mutation_normalized_trace", _fake_write_trace)
 
     plan_input = {
         "operations": [
@@ -287,9 +306,16 @@ def test_multi_operation_conflict_marks_operation_conflict(monkeypatch) -> None:
         "raw_user_phrases": {},
     }
 
+    runtime = routing_adapter._DiscordRoutingRuntime(
+        message,
+        state,
+        command_runtime_factory=command_adapter._DiscordCommandRuntime,
+    )
+    context = build_transport_context(message)
     handled = asyncio.run(
-        flow._queue_nl_mutation_confirmation(
-            message=message,
+        transport_routing.queue_nl_mutation_confirmation(
+            runtime=runtime,
+            context=context,
             raw_id="R_conflict",
             config={},
             plan_input=plan_input,

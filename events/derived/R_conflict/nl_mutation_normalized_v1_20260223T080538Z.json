@@ -1,0 +1,126 @@
+{
+  "operations": [
+    {
+      "action_type": "set_fields",
+      "normalization_notes": [
+        "unknown_id:A_1"
+      ],
+      "normalized_fields": {},
+      "op_status": "cancelled_unresolved",
+      "operation_id": "op_1",
+      "proposed_operation": null,
+      "reason_code": "target_unknown_id",
+      "target_object_type": null,
+      "target_ref": {
+        "target_ref": {
+          "kind": "object_id",
+          "value": "A_1"
+        },
+        "target_token": "A_1"
+      },
+      "target_resolved_id": "A_1",
+      "target_token": "A_1"
+    },
+    {
+      "action_type": "set_fields",
+      "normalization_notes": [
+        "unknown_id:A_1"
+      ],
+      "normalized_fields": {},
+      "op_status": "cancelled_unresolved",
+      "operation_id": "op_2",
+      "proposed_operation": null,
+      "reason_code": "target_unknown_id",
+      "target_object_type": null,
+      "target_ref": {
+        "target_ref": {
+          "kind": "object_id",
+          "value": "A_1"
+        },
+        "target_token": "A_1"
+      },
+      "target_resolved_id": "A_1",
+      "target_token": "A_1"
+    }
+  ],
+  "plan_input": {
+    "clarification_reason": null,
+    "confidence": 0.9,
+    "object_type_hint": null,
+    "operations": [
+      {
+        "action_type": "set_fields",
+        "append_text": null,
+        "clarification_reason": null,
+        "confidence": 0.9,
+        "field_updates": [
+          {
+            "field_candidates": {
+              "alternates": [],
+              "primary": {
+                "confidence": 0.9,
+                "field_id": "title"
+              }
+            },
+            "source_phrase": "title",
+            "value_text": "First title"
+          }
+        ],
+        "operation_id": "op_1",
+        "raw_user_phrases": {},
+        "requires_clarification": false,
+        "target_refs": [
+          {
+            "target_ref": {
+              "kind": "object_id",
+              "value": "A_1"
+            },
+            "target_token": "A_1"
+          }
+        ]
+      },
+      {
+        "action_type": "set_fields",
+        "append_text": null,
+        "clarification_reason": null,
+        "confidence": 0.9,
+        "field_updates": [
+          {
+            "field_candidates": {
+              "alternates": [],
+              "primary": {
+                "confidence": 0.9,
+                "field_id": "title"
+              }
+            },
+            "source_phrase": "title",
+            "value_text": "Second title"
+          }
+        ],
+        "operation_id": "op_2",
+        "raw_user_phrases": {},
+        "requires_clarification": false,
+        "target_refs": [
+          {
+            "target_ref": {
+              "kind": "object_id",
+              "value": "A_1"
+            },
+            "target_token": "A_1"
+          }
+        ]
+      }
+    ],
+    "raw_user_phrases": {},
+    "requires_clarification": false
+  },
+  "raw_event_id": "R_conflict",
+  "schema_version": 1,
+  "summary": {
+    "cancelled_unresolved_count": 2,
+    "resolved_count": 0,
+    "total_operations": 2,
+    "unresolved_count": 0
+  },
+  "validation_outcome": "blocked"
+}

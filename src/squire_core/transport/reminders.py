@@ -6,12 +6,11 @@ import json
 import logging
 from datetime import datetime, timezone, tzinfo
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from squire_core.surfacing import DueTimeReminderEvent
 from squire_core.transport.state import DueTimeReminderScheduleConfig, DueTimeReminderSentLedgerEntry
 
-DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY = "_due_time_reminder_notify"
 DUE_TIME_REMINDER_LEDGER_FILENAME = "due_time_reminder_sent_ledger_v1.json"
 DUE_TIME_REMINDER_DEFAULT_OFFSETS_MINUTES = (90, 15)
 
@@ -195,8 +194,11 @@ def flush_due_time_reminder_ledger_entries(
     tmp_path.replace(path)
 
 
-def notify_due_time_reminder_schedule_changed(config: dict[str, Any], *, clear_state: bool = False) -> None:
-    callback = config.get(DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY)
+def invoke_due_time_reminder_notifier(
+    callback: Callable[..., Any] | None,
+    *,
+    clear_state: bool = False,
+) -> None:
     if not callable(callback):
         return
     try:

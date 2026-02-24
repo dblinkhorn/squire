@@ -35,7 +35,6 @@ from squire_core.transport.reminders import (
 )
 from squire_core.transport.state import DueTimeReminderSentLedgerEntry
 
-_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY = "_due_time_reminder_notify"
 _DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS = 48
 _DUE_TIME_REMINDER_HORIZON_HOURS = 36
 _DUE_TIME_REMINDER_EMPTY_QUEUE_WAIT_SECONDS = 300
@@ -85,7 +84,6 @@ class DiscordSchedulerMixin:
         self._due_time_reminder_heap: list[tuple[datetime, datetime, str, int, DueTimeReminderEvent]] = []
         self._due_time_reminder_sent_ledger: dict[str, DueTimeReminderSentLedgerEntry] = {}
         self._due_time_reminder_reset_requested = False
-        self._config[_DUE_TIME_REMINDER_NOTIFY_CONFIG_KEY] = self._on_due_time_reminder_schedule_changed
 
     def _coerce_int(self, value: Any) -> int | None:
         if isinstance(value, int):
@@ -112,6 +110,9 @@ class DiscordSchedulerMixin:
         if clear_state:
             self._due_time_reminder_reset_requested = True
         self._due_time_reminder_schedule_changed.set()
+
+    def request_due_time_reminder_schedule_refresh(self, *, clear_state: bool = False) -> None:
+        self._on_due_time_reminder_schedule_changed(clear_state=clear_state)
 
     @staticmethod
     def _due_time_reminder_heap_item(

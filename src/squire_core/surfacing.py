@@ -717,6 +717,13 @@ def _render_type_label(object_type: str) -> str:
     return mapping.get(object_type, object_type)
 
 
+def _humanize_machine_value(value: str) -> str:
+    normalized = value.strip().replace("_", " ").replace("-", " ").lower()
+    if not normalized:
+        return value.strip()
+    return normalized[0].upper() + normalized[1:]
+
+
 def _list_row_metadata(item: CanonicalItem, *, tz: tzinfo, reference_date: date) -> list[str]:
     parts: list[str] = [_render_type_label(item.object_type)]
 
@@ -1171,7 +1178,7 @@ def build_item_detail(
     if not isinstance(title, str) or not isinstance(object_type, str):
         return None
 
-    lines = [f"**Title:** {title}", f"**Type:** {_render_type_label(object_type)}"]
+    lines = [f"**Title:** {title}", f"**Type:** {_humanize_machine_value(_render_type_label(object_type))}"]
 
     field_map = [
         ("status", "Status"),
@@ -1184,7 +1191,10 @@ def build_item_detail(
     for key, label in field_map:
         value = frontmatter.get(key)
         if isinstance(value, str) and value.strip():
-            lines.append(f"**{label}:** {value.strip()}")
+            rendered = value.strip()
+            if key in {"status", "priority"}:
+                rendered = _humanize_machine_value(rendered)
+            lines.append(f"**{label}:** {rendered}")
 
     body = _load_body(path)
     if body:

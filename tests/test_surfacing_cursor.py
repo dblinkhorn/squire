@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from squire_core.transport.discord import flow
+from squire_core.transport.state import ResultCursor, RuntimeStateStore
+from squire_core.transport.targeting import cursor_key, resolve_result_cursor, store_result_cursor
 
 
 class _Author:
@@ -22,27 +23,27 @@ class _Message:
 
 
 def test_result_cursor_store_and_resolve() -> None:
-    flow._RESULT_CURSORS.clear()
+    state = RuntimeStateStore()
     message = _Message()
 
     config = {"surfacing": {"pull": {"cursor_ttl_minutes": 45}}}
-    flow._store_result_cursor(message, config, ["A_1", "A_2"])
+    store_result_cursor(message, config, ["A_1", "A_2"], state_store=state)
 
-    assert flow._resolve_result_cursor(message, 1) == "A_1"
-    assert flow._resolve_result_cursor(message, 2) == "A_2"
-    assert flow._resolve_result_cursor(message, 3) is None
+    assert resolve_result_cursor(message, 1, state_store=state) == "A_1"
+    assert resolve_result_cursor(message, 2, state_store=state) == "A_2"
+    assert resolve_result_cursor(message, 3, state_store=state) is None
 
 
 
 def test_result_cursor_expires() -> None:
-    flow._RESULT_CURSORS.clear()
+    state = RuntimeStateStore()
     message = _Message()
-    key = flow._cursor_key(message)
+    key = cursor_key(message)
 
-    flow._RESULT_CURSORS[key] = flow._ResultCursor(
+    state.result_cursors[key] = ResultCursor(
         object_ids=["A_1"],
         expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
     )
 
-    assert flow._resolve_result_cursor(message, 1) is None
-    assert key not in flow._RESULT_CURSORS
+    assert resolve_result_cursor(message, 1, state_store=state) is None
+    assert key not in state.result_cursors

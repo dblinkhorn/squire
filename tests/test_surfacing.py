@@ -466,9 +466,35 @@ def test_build_find_list_and_item_detail(tmp_path: Path) -> None:
     detail = build_item_detail(objects_root, surfaced.object_ids[0], config)
     assert detail is not None
     assert "**Title:** Call dentist" in detail
-    assert "**Type:** admin" in detail
+    assert "**Type:** Admin" in detail
+    assert "**Status:** Open" in detail
     assert "(ID:" not in detail
     assert "**Notes:**" in detail
+
+
+def test_build_item_detail_humanizes_machine_values(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="PR_WEB",
+                object_type="projects",
+                title="Personal website refresh",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-22T00:00:00+00:00",
+            ),
+            "status": "in_progress",
+            "next_action": "Draft new homepage copy",
+        },
+        body="Draft new homepage copy",
+    )
+
+    detail = build_item_detail(objects_root, "PR_WEB", {"timezone": "UTC"})
+    assert detail is not None
+    assert "**Type:** Project" in detail
+    assert "**Status:** In progress" in detail
+    assert "**Next action:** Draft new homepage copy" in detail
 
 
 

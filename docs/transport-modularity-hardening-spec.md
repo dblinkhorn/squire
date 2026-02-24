@@ -28,7 +28,7 @@ This prevents truly additive transport implementation and keeps high coupling in
 
 ## Non-Goals
 
-1. Implement Slack runtime behavior in this workstream.
+1. Implement additional transport runtime behavior in this workstream (for example Slack).
 2. Redesign user command semantics or NL policy semantics.
 3. Change canonical storage/index schemas.
 4. Introduce compatibility aliases as permanent architecture.

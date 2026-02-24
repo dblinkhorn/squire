@@ -35,7 +35,7 @@ ID visibility for scheduled outputs and ID-inclusive manual pull lists. It is re
 The approved refactor direction introduces shared modules for transport-agnostic runtime behavior (for example command
 orchestration, NL routing/normalization, cursor/clarification state handling, and reminder scheduling helpers).
 
-These modules are intended to be reused across Discord, Slack, and future interfaces.
+These modules are intended to be reused across Discord and future interfaces (for example Slack).
 
 ## Transport Adapters (Refactor Direction)
 
@@ -59,10 +59,18 @@ event translation (`discord.Client` lifecycle hooks) and Discord message/reactio
 Discord UI views (`PendingActionView`, `MutationPendingView`, `AutoApplyFeedbackView`) and interaction callbacks.
 3. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/scheduler.py`:
 digest/reminder scheduling loops and Discord delivery channel resolution.
-4. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/flow.py`:
-Discord message lifecycle handling and Discord-specific orchestration that adapts shared transport contracts to Discord IO.
-5. `/Users/dblinkhorn/squire/src/squire_core/runtime.py`:
-transport-agnostic composition entrypoint that delegates to configured transport runtime flow.
+4. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/context.py`:
+Discord message-to-contract translation (`TransportMessageContext`).
+5. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/io.py`:
+Discord send/reaction IO wrappers over adapter primitives.
+6. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/runtime.py`:
+Discord runtime entrypoint used by `/Users/dblinkhorn/squire/src/squire_core/runtime.py`.
+7. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/runtime_adapter_{command,routing,inbound}.py`:
+Discord adapter bridge implementations for command/routing/inbound runtime protocols, with injected `RuntimeStateStore` state seams.
+8. `/Users/dblinkhorn/squire/src/squire_core/transport/discord/message_entry.py`:
+Discord message ingress handlers (command dispatch, NL-route dispatch, and `DELETE` archive-clear confirmation handling).
+9. `/Users/dblinkhorn/squire/src/squire_core/runtime.py`:
+transport-agnostic composition entrypoint that delegates to a selected transport runtime via `transport/runtime_registry.py`.
 
 ## Optional Providers
 

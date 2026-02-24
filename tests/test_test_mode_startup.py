@@ -6,8 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from squire_core.transport.discord import flow
 from squire_core.config_utils import normalize_archive_config
+from squire_core.transport.bootstrap import (
+    apply_test_archive_root_override,
+    run_test_mode_reset_seed,
+)
 
 
 def _config_for(root: Path) -> dict[str, object]:
@@ -24,7 +27,7 @@ def test_run_test_mode_reset_seed_skips_non_test_env(tmp_path: Path) -> None:
     root = tmp_path / "archive"
     config = _config_for(root)
 
-    result = flow._run_test_mode_reset_seed(config, env_value="dev")
+    result = run_test_mode_reset_seed(config, env_value="dev")
 
     assert result is None
     assert not root.exists()
@@ -38,7 +41,7 @@ def test_apply_test_archive_root_override_skips_non_test_env(tmp_path: Path) -> 
         "paths": {"objects_root": "objects"},
     }
 
-    updated = flow._apply_test_archive_root_override(config, env_value="dev")
+    updated = apply_test_archive_root_override(config, env_value="dev")
 
     assert updated == config
 
@@ -54,7 +57,7 @@ def test_apply_test_archive_root_override_applies_in_test_env(tmp_path: Path) ->
         },
     }
 
-    updated = flow._apply_test_archive_root_override(config, env_value="test")
+    updated = apply_test_archive_root_override(config, env_value="test")
 
     assert updated["archive_root"] == str(tmp_path / "squire-test-archive")
     paths = updated.get("paths")
@@ -68,7 +71,7 @@ def test_run_test_mode_reset_seed_rejects_unsafe_archive_root() -> None:
     config = _config_for(root)
 
     with pytest.raises(ValueError, match="test-safe"):
-        flow._run_test_mode_reset_seed(config, env_value="test")
+        run_test_mode_reset_seed(config, env_value="test")
 
 
 def test_run_test_mode_reset_seed_accepts_test_archive_root_override(tmp_path: Path) -> None:
@@ -86,9 +89,9 @@ def test_run_test_mode_reset_seed_accepts_test_archive_root_override(tmp_path: P
         },
     }
 
-    overridden = flow._apply_test_archive_root_override(config, env_value="test")
+    overridden = apply_test_archive_root_override(config, env_value="test")
     normalized = normalize_archive_config(overridden)
-    stats = flow._run_test_mode_reset_seed(
+    stats = run_test_mode_reset_seed(
         normalized,
         env_value="test",
         now=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
@@ -107,7 +110,7 @@ def test_run_test_mode_reset_seed_runs_reset_seed_and_rebuild(tmp_path: Path) ->
     (root / "old-file.txt").write_text("remove-me\n", encoding="utf-8")
     config = _config_for(root)
 
-    stats = flow._run_test_mode_reset_seed(
+    stats = run_test_mode_reset_seed(
         config,
         env_value="test",
         now=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),

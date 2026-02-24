@@ -9,6 +9,7 @@ Required or optional environment variables include:
 - `HEALTH_HOST` (optional, default `0.0.0.0`)
 - `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
 - `SQUIRE_ENV` (optional; set to `test` to enable startup reset+seed mode for smoke testing)
+- `SQUIRE_TRANSPORT` (optional, default `discord`; selects runtime transport via `transport/runtime_registry.py`)
 
 ## config.yaml
 

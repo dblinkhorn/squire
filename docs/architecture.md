@@ -13,7 +13,7 @@ The system runs as a single deployable service (squire-core) with modular intern
 The approved direction is to split runtime behavior into:
 
 1. transport-agnostic shared runtime/application modules
-2. transport adapter modules (Discord, Slack, future interfaces)
+2. transport adapter modules (Discord and future interfaces, for example Slack)
 
 Design intent:
 
@@ -24,8 +24,11 @@ Design intent:
 Runtime composition:
 
 1. `/Users/dblinkhorn/squire/src/squire_core/runtime.py` is the runtime composition root and startup entrypoint.
-2. Discord-specific runtime flow and adapter code is split under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`:
-`flow.py` (message lifecycle + shared-contract orchestration), `adapter.py` (client lifecycle/IO), `views.py` (Discord UI interactions), and `scheduler.py` (digest/reminder loops).
+2. Runtime transport selection resolves through `/Users/dblinkhorn/squire/src/squire_core/transport/runtime_registry.py` (currently defaults to `discord`, configurable with `SQUIRE_TRANSPORT`).
+3. Discord transport entrypoint resolves through `/Users/dblinkhorn/squire/src/squire_core/transport/discord/runtime.py`.
+4. Discord-specific adapter code is split under `/Users/dblinkhorn/squire/src/squire_core/transport/discord/`:
+`adapter.py` (client lifecycle/IO), `context.py` (Discord message to `TransportMessageContext` translation), `io.py` (Discord IO wrappers), `views.py` (Discord UI interactions), and `scheduler.py` (digest/reminder loops).
+5. Discord runtime owns startup wiring and runtime-adapter class composition, including process-scoped `RuntimeStateStore` injection; Discord message ingress lives in `/Users/dblinkhorn/squire/src/squire_core/transport/discord/message_entry.py`.
 
 ## Trust Model
 
