@@ -29,7 +29,7 @@ On startup, the bot:
 4. If `SQUIRE_ENV=test`, validates test-safe archive guardrails, clears archive contents (preserving `.git`), seeds deterministic canonical fixtures, and rebuilds the SQLite index.
    If `test_archive_root` is configured, test mode uses that root instead of `archive_root`.
 5. Otherwise, rebuilds the SQLite index if it is missing.
-6. If semantic matching is enabled, runs semantic index sync against the same SQLite database.
+6. If semantic matching is enabled and semantic provider initialization/probe succeeds, runs semantic index sync against the same SQLite database; otherwise semantic matching is auto-disabled and startup continues with lexical-only matching.
 7. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
 8. Connects to Discord and starts message handling and scheduled digest loops.
 
