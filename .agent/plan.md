@@ -1,3 +1,3 @@
 Plan (active)
 
-1. No active items. Shared-state fallback, Slack scaffolding removal, and compatibility-surface cleanup are complete.
+1. No active items. `matching.semantic_provider` override support is implemented, documented, and validated.

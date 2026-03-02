@@ -5,12 +5,6 @@ Purpose:
 - Track non-spec, high-level future ideas outside runtime reference docs.
 - Keep user-facing docs (`README.md`, `docs/*.md` reference guides) focused on implemented behavior only.
 
-## Near-Term Priorities
-
-- Natural-language command routing with LLM intent interpretation for read + mutation intents,
-  using confirmation-first mutation handling and explicit-only destructive controls.
-- Numbered mutation ergonomics (`!done 2`, `!append 3 ...`, `!fix 1 ...`).
-
 ## Command UX Ideas
 
 - Potential follow-on commands: `!due [days]`, `!archive`, `!help`, `!rebuild-index`.
@@ -31,11 +25,6 @@ Purpose:
   - rename Discord run targets to explicit transport names: `run-discord-bot` and `run-discord-bot-test`
   - do not add Slack make targets until Slack integration is actually implemented
   - do not keep legacy aliases (`run-bot`, `run-bot-test`) once the rename lands
-
-## Extensibility Ideas
-
-- Formal provider interfaces for alternate ingest channels and model backends.
-- Clear plugin boundaries for extension without changing core runtime modules.
 
 ## Routing Hardening Ideas
 

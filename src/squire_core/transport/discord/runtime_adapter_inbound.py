@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from squire_core.config_utils import MatchingConfig
 from squire_core.interpreter import interpret_text_async
-from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.llm.prompts import load_prompt
 from squire_core.operation_apply import apply_operations
 from squire_core.transport import routing as _transport_routing
@@ -39,11 +39,14 @@ class _DiscordInboundRuntime:
         message: Any,
         state_store: RuntimeStateStore,
         routing_runtime_factory: RoutingRuntimeFactory,
+        llm_provider: Any = None,
+        embedding_provider: Any = None,
         due_time_reminder_notifier: Callable[..., Any] | None = None,
     ) -> None:
         self._message = message
         self._state_store = state_store
         self._routing_runtime_factory = routing_runtime_factory
+        self._embedding_provider = embedding_provider or llm_provider
         self._due_time_reminder_notifier = due_time_reminder_notifier
 
     async def maybe_route_nl_command(
@@ -53,7 +56,7 @@ class _DiscordInboundRuntime:
         content: str,
         raw_id: str,
         config: dict[str, Any],
-        provider: OpenAIProvider,
+        provider: LLMProvider | AsyncLLMProvider,
         model: str,
     ) -> bool:
         routing_runtime = self._routing_runtime_factory(
@@ -101,7 +104,7 @@ class _DiscordInboundRuntime:
     async def interpret_text_async(
         self,
         *,
-        provider: OpenAIProvider,
+        provider: LLMProvider | AsyncLLMProvider,
         text: str,
         model: str,
         system_prompt: str,
@@ -165,7 +168,12 @@ class _DiscordInboundRuntime:
         *,
         matching: MatchingConfig | None = None,
     ) -> None:
-        await _refresh_index_async(objects_root, index_db, matching=matching)
+        await _refresh_index_async(
+            objects_root,
+            index_db,
+            matching=matching,
+            embedding_provider=self._embedding_provider,
+        )
 
     def notify_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
         _invoke_due_time_reminder_notifier(
@@ -227,7 +235,12 @@ class _DiscordInboundRuntime:
             matching=matching,
             affinity_key=affinity_key,
             on_canonical_change=lambda: _invoke_due_time_reminder_notifier(self._due_time_reminder_notifier),
-            refresh_index_async=lambda root, db: _refresh_index_async(root, db, matching=matching),
+            refresh_index_async=lambda root, db: _refresh_index_async(
+                root,
+                db,
+                matching=matching,
+                embedding_provider=self._embedding_provider,
+            ),
             extract_target_ids_from_derived=_extract_target_ids_from_derived,
             extract_ids_from_written_paths=_extract_ids_from_written_paths,
             record_affinity_touches=lambda key, ids, match: _state_record_affinity_touches(

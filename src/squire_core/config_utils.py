@@ -25,8 +25,6 @@ _DEFAULT_MATCHING_CONFIG = {
     "recency_weight": 0.15,
     "affinity_weight": 0.25,
     "semantic_weight": 0.15,
-    "semantic_provider": "openai",
-    "semantic_model": "text-embedding-3-small",
     "candidate_multiplier": 4,
     "max_candidate_pool": 20,
     "affinity_recent_ids_per_thread": 20,
@@ -46,8 +44,6 @@ _DEFAULT_NL_COMMAND_ROUTING_CONFIG = {
     "mutation_confirm_min_confidence": 0.75,
     "max_recent_limit": 25,
 }
-
-
 @dataclass(frozen=True)
 class DecisionConfig:
     auto_apply_threshold: float
@@ -88,6 +84,12 @@ class NLCommandRoutingConfig:
     max_recent_limit: int
 
 
+@dataclass(frozen=True)
+class LLMConfig:
+    provider: str
+    model: str
+
+
 def load_config(path: str | Path) -> dict[str, Any]:
     config_path = Path(path)
     if not config_path.exists():
@@ -121,6 +123,28 @@ def normalize_archive_config(config: dict[str, Any]) -> dict[str, Any]:
 
     config["archive_root"] = str(archive_root)
     return config
+
+
+def load_llm_config(config: dict[str, Any]) -> LLMConfig:
+    raw = config.get("llm")
+    if not isinstance(raw, dict):
+        raise ValueError("llm block is required in config.yaml.")
+    provider_value = raw.get("provider")
+    if not isinstance(provider_value, str) or not provider_value.strip():
+        raise ValueError("llm.provider is required in config.yaml.")
+    provider = str(provider_value).strip().lower()
+    if not provider:
+        raise ValueError("llm.provider is required in config.yaml.")
+    model_value = raw.get("model")
+    if not isinstance(model_value, str) or not model_value.strip():
+        raise ValueError("llm.model is required in config.yaml.")
+    model = str(model_value).strip()
+    if not model:
+        raise ValueError("llm.model is required in config.yaml.")
+    return LLMConfig(
+        provider=provider,
+        model=model,
+    )
 
 
 def load_decision_config(config: dict[str, Any]) -> DecisionConfig:
@@ -183,19 +207,29 @@ def load_matching_config(config: dict[str, Any]) -> MatchingConfig:
     if not isinstance(candidate_limit, (int, float)):
         candidate_limit = _DEFAULT_MATCHING_CONFIG["candidate_limit"]
 
-    semantic_provider = str(raw.get("semantic_provider", _DEFAULT_MATCHING_CONFIG["semantic_provider"])).strip().lower()
-    if not semantic_provider:
-        semantic_provider = str(_DEFAULT_MATCHING_CONFIG["semantic_provider"])
+    llm_provider = load_llm_config(config).provider
+    semantic_provider_raw = raw.get("semantic_provider")
+    semantic_provider = llm_provider
+    if semantic_provider_raw is not None:
+        if not isinstance(semantic_provider_raw, str) or not semantic_provider_raw.strip():
+            raise ValueError("matching.semantic_provider must be a non-empty string when provided.")
+        semantic_provider = semantic_provider_raw.strip().lower()
 
-    semantic_model = str(raw.get("semantic_model", _DEFAULT_MATCHING_CONFIG["semantic_model"])).strip()
-    if not semantic_model:
-        semantic_model = str(_DEFAULT_MATCHING_CONFIG["semantic_model"])
+    semantic_weight = _get_float("semantic_weight")
+    semantic_model_raw = raw.get("semantic_model")
+    semantic_model = ""
+    if semantic_weight > 0:
+        if not isinstance(semantic_model_raw, str) or not semantic_model_raw.strip():
+            raise ValueError("matching.semantic_model is required when matching.semantic_weight > 0.")
+        semantic_model = semantic_model_raw.strip()
+    elif isinstance(semantic_model_raw, str):
+        semantic_model = semantic_model_raw.strip()
 
     return MatchingConfig(
         lexical_weight=_get_float("lexical_weight"),
         recency_weight=_get_float("recency_weight"),
         affinity_weight=_get_float("affinity_weight"),
-        semantic_weight=_get_float("semantic_weight"),
+        semantic_weight=semantic_weight,
         semantic_provider=semantic_provider,
         semantic_model=semantic_model,
         candidate_multiplier=max(1, _get_int("candidate_multiplier")),

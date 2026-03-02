@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Any, Protocol
 
 from squire_core.canonical_store import load_frontmatter
 from squire_core.config_utils import MatchingConfig
 from squire_core.indexer import rebuild_index
-from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.llm.registry import get_sync_embedding_provider, provider_name
 from squire_core.matching import sync_semantic_index
 from squire_core.transport.contracts import TransportMessageContext
 from squire_core.transport.validation import validate_fix_updates
@@ -109,6 +108,7 @@ def refresh_index(
     index_db: str | Path,
     *,
     matching: MatchingConfig | None = None,
+    embedding_provider: Any = None,
 ) -> None:
     try:
         rebuild_index(objects_root, index_db)
@@ -119,20 +119,19 @@ def refresh_index(
 
     if not matching or matching.semantic_weight <= 0:
         return
-    if matching.semantic_provider != "openai":
-        logging.warning("semantic_sync_skipped reason=unsupported_provider provider=%s", matching.semantic_provider)
-        return
-    try:
-        provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
-    except Exception as exc:
-        logging.warning("semantic_sync_skipped reason=provider_init_failed error=%s", exc)
+    sync_embedding_provider = get_sync_embedding_provider(embedding_provider)
+    if sync_embedding_provider is None:
+        logging.warning(
+            "semantic_sync_skipped reason=embedding_unavailable provider=%s",
+            provider_name(embedding_provider) if embedding_provider is not None else "none",
+        )
         return
     try:
         stats = sync_semantic_index(
             objects_root=objects_root,
             db_path=index_db,
             matching_config=matching,
-            embedding_provider=provider,
+            embedding_provider=sync_embedding_provider,
         )
         logging.info(
             "semantic_sync_ok path=%s indexed=%s unchanged=%s removed=%s metadata_reset=%s duration_ms=%s",
@@ -152,12 +151,14 @@ async def refresh_index_async(
     index_db: str | Path,
     *,
     matching: MatchingConfig | None = None,
+    embedding_provider: Any = None,
 ) -> None:
     await asyncio.to_thread(
         refresh_index,
         objects_root,
         index_db,
         matching=matching,
+        embedding_provider=embedding_provider,
     )
 
 

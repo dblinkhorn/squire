@@ -141,6 +141,7 @@ def test_pending_action_view_shows_confirmation_buttons() -> None:
 def test_handle_command_confirm_refreshes_index(monkeypatch, runtime_state: RuntimeStateStore) -> None:
     calls: list[str] = []
     reminder_calls: list[bool] = []
+    embedding_provider_calls: list[object | None] = []
 
     async def _fake_swap_reaction(message, remove_emoji, add_emoji):
         calls.append(f"swap:{remove_emoji}:{add_emoji}")
@@ -171,8 +172,9 @@ def test_handle_command_confirm_refreshes_index(monkeypatch, runtime_state: Runt
         calls.append(f"status:{status}")
         return pending
 
-    def _fake_refresh_index(objects_root, index_db, *, matching=None):
+    def _fake_refresh_index(objects_root, index_db, *, matching=None, embedding_provider=None):
         calls.append(f"refresh:{objects_root}:{index_db}")
+        embedding_provider_calls.append(embedding_provider)
 
     monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
@@ -182,12 +184,14 @@ def test_handle_command_confirm_refreshes_index(monkeypatch, runtime_state: Runt
     monkeypatch.setattr(command_adapter, "_refresh_index", _fake_refresh_index)
 
     config = {
-        "paths": {
-            "objects_root": "/tmp/objects",
-            "index_db": "/tmp/index.sqlite",
-            "pending_actions": "/tmp/pending",
-        },
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
+    paths = config.get("paths")
+    if isinstance(paths, dict):
+        paths["pending_actions"] = "/tmp/pending"
+    embedding_provider = object()
 
     handled = asyncio.run(
         message_entry.handle_command(
@@ -196,6 +200,7 @@ def test_handle_command_confirm_refreshes_index(monkeypatch, runtime_state: Runt
             "R_1",
             config,
             runtime_state=runtime_state,
+            embedding_provider=embedding_provider,
             due_time_reminder_notifier=lambda *, clear_state=False: reminder_calls.append(clear_state),
         )
     )
@@ -204,6 +209,7 @@ def test_handle_command_confirm_refreshes_index(monkeypatch, runtime_state: Runt
     assert "status:confirmed" in calls
     assert "refresh:/tmp/objects:/tmp/index.sqlite" in calls
     assert any(call.startswith("send:Applied pending action PA_1.") for call in calls)
+    assert embedding_provider_calls == [embedding_provider]
     assert reminder_calls == [False]
 
 
@@ -235,7 +241,11 @@ def test_handle_command_fix_parses_quoted_values(monkeypatch, runtime_state: Run
 
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             object(),
@@ -268,7 +278,11 @@ def test_handle_command_help_sends_help_message(monkeypatch, runtime_state: Runt
     monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             _Message("!help"),
@@ -297,7 +311,11 @@ def test_handle_command_help_topic_sends_detail(monkeypatch, runtime_state: Runt
     monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             _Message("!help done"),
@@ -327,7 +345,11 @@ def test_handle_command_help_unknown_topic_warns(monkeypatch, runtime_state: Run
     monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             _Message("!help nope"),
@@ -362,6 +384,8 @@ def test_handle_command_recent_does_not_override_digest_id_flag(monkeypatch, run
 
     message = _Message("!recent", user_id=11, channel_id=22)
     config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
         "surfacing": {"output": {"show_ids_daily_weekly": False}},
         "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
@@ -396,6 +420,8 @@ def test_handle_command_find_does_not_override_digest_id_flag(monkeypatch, runti
 
     message = _Message("!find dentist", user_id=11, channel_id=22)
     config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
         "surfacing": {"output": {"show_ids_daily_weekly": False}},
         "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
@@ -441,6 +467,8 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch, runti
     )
 
     config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
         "surfacing": {"output": {"show_ids_daily_weekly": False}},
         "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
     }
@@ -485,7 +513,11 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch, runtime_state
     monkeypatch.setattr(command_adapter, "build_daily_digest", _fake_build_daily_digest)
 
     message = _Message("!status", user_id=11, channel_id=22)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!status", "R_1", config, runtime_state=runtime_state)
     )
@@ -547,7 +579,11 @@ def test_handle_command_done_resolves_number_after_status(monkeypatch, runtime_s
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!status", user_id=11, channel_id=22)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
 
     handled_status = asyncio.run(
         message_entry.handle_command(message, "!status", "R_1", config, runtime_state=runtime_state)
@@ -611,7 +647,11 @@ def test_handle_command_done_resolves_number_from_parent_cursor_when_in_thread(
 
     parent_message = _Message("!status", user_id=11, channel_id=22)
     thread_message = _Message("!done 1", user_id=11, channel_id=999, parent_id=22)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
 
     handled_status = asyncio.run(
         message_entry.handle_command(parent_message, "!status", "R_1", config, runtime_state=runtime_state)
@@ -658,7 +698,11 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch, runtime_state
     monkeypatch.setattr(command_adapter, "build_weekly_review", _fake_build_weekly_review)
 
     message = _Message("!weekly", user_id=11, channel_id=22)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!weekly", "R_1", config, runtime_state=runtime_state)
     )
@@ -705,7 +749,11 @@ def test_handle_command_done_resolves_numbered_target(monkeypatch, runtime_state
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!done 2", "R_1", config, runtime_state=runtime_state)
     )
@@ -754,7 +802,11 @@ def test_handle_command_append_resolves_numbered_target(monkeypatch, runtime_sta
         source_view="status",
     )
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             message,
@@ -811,7 +863,11 @@ def test_handle_command_fix_resolves_numbered_target(monkeypatch, runtime_state:
         source_view="find",
     )
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             message,
@@ -852,7 +908,11 @@ def test_handle_command_done_number_without_cursor_shows_guidance(
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 1", user_id=11, channel_id=22)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!done 1", "R_1", config, runtime_state=runtime_state)
     )
@@ -890,7 +950,11 @@ def test_handle_command_done_number_expired_cursor_shows_guidance(
     )
 
     caplog.set_level(logging.INFO)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!done 1", "R_1", config, runtime_state=runtime_state)
     )
@@ -927,7 +991,11 @@ def test_handle_command_done_number_out_of_range_shows_guidance(
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!done 2", "R_1", config, runtime_state=runtime_state)
     )
@@ -973,7 +1041,11 @@ def test_handle_command_done_number_wrong_type_is_rejected_and_logged(
     )
 
     caplog.set_level(logging.INFO)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!done 1", "R_1", config, runtime_state=runtime_state)
     )
@@ -1008,7 +1080,11 @@ def test_handle_command_done_with_id_keeps_id_path(monkeypatch, runtime_state: R
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done A_1", user_id=11, channel_id=22)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!done A_1", "R_1", config, runtime_state=runtime_state)
     )
@@ -1036,7 +1112,8 @@ def test_handle_command_append_number_logs_resolved(
     def _fake_apply_operations(*args, **kwargs):
         return SimpleNamespace(written_paths=[Path("/tmp/admin/A_1.md")])
 
-    async def _fake_refresh_index(objects_root, index_db, *, matching=None):
+    async def _fake_refresh_index(objects_root, index_db, *, matching=None, embedding_provider=None):
+        del matching, embedding_provider
         return None
 
     monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
@@ -1055,7 +1132,11 @@ def test_handle_command_append_number_logs_resolved(
     )
 
     caplog.set_level(logging.INFO)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             message,
@@ -1094,7 +1175,11 @@ def test_apply_command_operation_rejects_disallowed_fix_field(monkeypatch, runti
     monkeypatch.setattr(command_adapter, "load_frontmatter", _fake_load_frontmatter)
     monkeypatch.setattr(command_adapter, "apply_operations", _fake_apply_operations)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     message = object()
     runtime = command_adapter._DiscordCommandRuntime(
         message,
@@ -1143,7 +1228,11 @@ def test_apply_command_operation_rejects_invalid_fix_enum(monkeypatch, runtime_s
     monkeypatch.setattr(command_adapter, "load_frontmatter", _fake_load_frontmatter)
     monkeypatch.setattr(command_adapter, "apply_operations", _fake_apply_operations)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     message = object()
     runtime = command_adapter._DiscordCommandRuntime(
         message,
@@ -1182,7 +1271,11 @@ def test_handle_command_clear_archive_starts_confirmation(monkeypatch, runtime_s
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
     message = _Message("!clear-archive", user_id=100, channel_id=200)
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(message, "!clear-archive", "R_1", config, runtime_state=runtime_state)
     )
@@ -1265,6 +1358,48 @@ def test_handle_message_delete_without_pending_shows_warning(monkeypatch, runtim
 
     assert "react:⚠️" in calls
     assert any("No pending archive clear request." in call for call in calls)
+
+
+def test_handle_message_passes_embedding_provider_to_inbound(
+    monkeypatch, tmp_path: Path, runtime_state: RuntimeStateStore
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_safe_add_reaction(message, emoji):
+        del message, emoji
+
+    async def _fake_handle_non_command_message(**kwargs):
+        captured["provider"] = kwargs.get("provider")
+        captured["embedding_provider"] = kwargs.get("embedding_provider")
+        captured["model"] = kwargs.get("model")
+
+    monkeypatch.setattr(message_entry, "_safe_add_reaction", _fake_safe_add_reaction)
+    monkeypatch.setattr(message_entry._transport_inbound, "handle_non_command_message", _fake_handle_non_command_message)
+
+    llm_provider = object()
+    embedding_provider = object()
+    message = _Message("capture this", user_id=33, channel_id=44)
+    message.id = 123
+    message.created_at = datetime.now(timezone.utc)
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "paths": {"events_raw": str(tmp_path / "events" / "raw")},
+    }
+
+    asyncio.run(
+        message_entry.handle_message(
+            message,
+            config,
+            runtime_state=runtime_state,
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
+            llm_model="gpt-5-mini",
+        )
+    )
+
+    assert captured["provider"] is llm_provider
+    assert captured["embedding_provider"] is embedding_provider
+    assert captured["model"] == "gpt-5-mini"
 
 
 def test_nl_route_executes_read_command(monkeypatch, runtime_state: RuntimeStateStore) -> None:

@@ -273,7 +273,11 @@ def test_handle_command_weekly(monkeypatch) -> None:
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
     monkeypatch.setattr(command_adapter, "build_weekly_review", _fake_build_weekly_review)
 
-    config = {"paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"}}
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
     handled = asyncio.run(
         message_entry.handle_command(
             object(),

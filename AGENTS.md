@@ -73,8 +73,6 @@ Use this section to decide which docs are relevant for the current task.
   - `docs/deployment.md`
 - Surfacing/digest or review behavior:
   - `docs/surfacing.md`
-- Extensibility or integration direction:
-  - `docs/extensibility.md`
 
 ## Canonical Docs Index
 
@@ -87,7 +85,6 @@ Use this section to decide which docs are relevant for the current task.
 - `docs/surfacing.md` - Implemented digest/review/list surfacing behavior.
 - `docs/configuration.md` - Environment variables and `config.yaml` options.
 - `docs/deployment.md` - Deployment and startup behavior.
-- `docs/extensibility.md` - Current extensibility limits and future direction.
 
 ## Implementation Gate
 

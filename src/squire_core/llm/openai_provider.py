@@ -18,6 +18,8 @@ _T = TypeVar("_T")
 
 
 class OpenAIProvider:
+    provider_name = "openai"
+
     def __init__(
         self,
         api_key: str | None = None,

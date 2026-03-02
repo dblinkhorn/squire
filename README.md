@@ -55,7 +55,7 @@ For complete command semantics, see [`docs/commands.md`](docs/commands.md).
 
 - Docker and Docker Compose
 - A Discord bot token
-- An OpenAI API key
+- `OPENAI_API_KEY`
 
 ### Step 1: Create config and env files
 
@@ -135,7 +135,7 @@ Runtime logs are split by severity:
 
 - Python 3.11+
 - A Discord bot token
-- An OpenAI API key
+- `OPENAI_API_KEY`
 
 ### Step 1: Create and activate a virtual environment
 
@@ -248,4 +248,3 @@ docker compose up -d
 - [`docs/modules.md`](docs/modules.md)
 - [`docs/querying.md`](docs/querying.md)
 - [`docs/surfacing.md`](docs/surfacing.md)
-- [`docs/extensibility.md`](docs/extensibility.md)

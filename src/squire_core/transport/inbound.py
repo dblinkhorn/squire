@@ -11,7 +11,7 @@ from squire_core.decision_flow import apply_decision_to_derived, evaluate_decisi
 from squire_core.derived_event_store import write_derived_event
 from squire_core.id_utils import generate_prefixed_id
 from squire_core.interpreter import InterpretationValidationError
-from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.pending_actions import PendingAction, write_pending_action
 from squire_core.timezone_utils import (
     format_reference_date,
@@ -31,7 +31,7 @@ class InboundRuntime(Protocol):
         content: str,
         raw_id: str,
         config: dict[str, Any],
-        provider: OpenAIProvider,
+        provider: LLMProvider | AsyncLLMProvider,
         model: str,
     ) -> bool:
         ...
@@ -58,7 +58,7 @@ class InboundRuntime(Protocol):
     async def interpret_text_async(
         self,
         *,
-        provider: OpenAIProvider,
+        provider: LLMProvider | AsyncLLMProvider,
         text: str,
         model: str,
         system_prompt: str,
@@ -144,9 +144,10 @@ async def handle_non_command_message(
     content: str,
     raw_id: str,
     config: dict[str, Any],
-    provider: OpenAIProvider,
+    provider: LLMProvider | AsyncLLMProvider,
     model: str,
     schema_map: dict[str, Path],
+    embedding_provider: LLMProvider | AsyncLLMProvider | None = None,
 ) -> None:
     nl_routed = await runtime.maybe_route_nl_command(
         context=context,
@@ -291,6 +292,7 @@ async def handle_non_command_message(
         affinity_scores = runtime.load_affinity_scores(affinity_key, matching=matching_config)
         decision_result = await matching_pipeline.run_matching_decision(
             provider=provider,
+            embedding_provider=embedding_provider,
             model=model,
             raw_event_id=raw_id,
             object_type=object_type,

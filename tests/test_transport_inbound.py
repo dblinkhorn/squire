@@ -149,8 +149,13 @@ def test_inbound_low_confidence_classification_sends_clarification(tmp_path: Pat
     context = _context()
     config = {
         "llm": {
+            "provider": "openai",
+            "model": "gpt-5-mini",
             "classify_prompt_path": "config/prompts/classify.txt",
             "interpreter_prompt_path": "config/prompts/extract.txt",
+        },
+        "matching": {
+            "semantic_weight": 0,
         },
         "paths": {
             "events_derived": str(tmp_path / "events" / "derived"),

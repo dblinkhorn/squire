@@ -10,7 +10,7 @@ import discord
 from squire_core.canonical_store import find_object_path, load_frontmatter
 from squire_core.config_utils import NLCommandRoutingConfig
 from squire_core.interpreter import interpret_text_async
-from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.llm.prompts import load_prompt
 from squire_core.transport import commands as _transport_commands
 from squire_core.transport import routing as _transport_routing
@@ -51,11 +51,14 @@ class _DiscordRoutingRuntime:
         message: Any,
         state_store: RuntimeStateStore,
         command_runtime_factory: CommandRuntimeFactory,
+        llm_provider: Any = None,
+        embedding_provider: Any = None,
         due_time_reminder_notifier: Callable[..., Any] | None = None,
     ) -> None:
         self._message = message
         self._state_store = state_store
         self._command_runtime_factory = command_runtime_factory
+        self._embedding_provider = embedding_provider or llm_provider
         self._due_time_reminder_notifier = due_time_reminder_notifier
 
     def load_prompt(self, path: str) -> str:
@@ -64,7 +67,7 @@ class _DiscordRoutingRuntime:
     async def interpret_text_async(
         self,
         *,
-        provider: OpenAIProvider,
+        provider: LLMProvider | AsyncLLMProvider,
         text: str,
         model: str,
         system_prompt: str,
@@ -255,7 +258,12 @@ class _DiscordRoutingRuntime:
             matching=matching,
             affinity_key=affinity_key,
             on_canonical_change=on_canonical_change,
-            refresh_index_async=lambda root, db: _refresh_index_async(root, db, matching=matching),
+            refresh_index_async=lambda root, db: _refresh_index_async(
+                root,
+                db,
+                matching=matching,
+                embedding_provider=self._embedding_provider,
+            ),
             extract_target_ids_from_derived=_extract_target_ids_from_derived,
             extract_ids_from_written_paths=_extract_ids_from_written_paths,
             record_affinity_touches=lambda key, ids, match: _state_record_affinity_touches(

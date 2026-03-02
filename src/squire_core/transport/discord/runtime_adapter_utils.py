@@ -17,11 +17,13 @@ def refresh_index(
     index_db: str | Path,
     *,
     matching: MatchingConfig | None = None,
+    embedding_provider: Any = None,
 ) -> None:
     _transport_mutations.refresh_index(
         objects_root,
         index_db,
         matching=matching,
+        embedding_provider=embedding_provider,
     )
 
 
@@ -30,12 +32,14 @@ async def refresh_index_async(
     index_db: str | Path,
     *,
     matching: MatchingConfig | None = None,
+    embedding_provider: Any = None,
 ) -> None:
     await asyncio.to_thread(
         refresh_index,
         objects_root,
         index_db,
         matching=matching,
+        embedding_provider=embedding_provider,
     )
 
 

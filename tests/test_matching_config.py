@@ -15,7 +15,12 @@ except ModuleNotFoundError as exc:
 
 class MatchingConfigTests(unittest.TestCase):
     def test_defaults(self) -> None:
-        matching = load_matching_config({})
+        matching = load_matching_config(
+            {
+                "llm": {"provider": "openai", "model": "gpt-5-mini"},
+                "matching": {"semantic_model": "text-embedding-3-small"},
+            }
+        )
         self.assertEqual(
             matching,
             MatchingConfig(
@@ -39,9 +44,11 @@ class MatchingConfigTests(unittest.TestCase):
 
     def test_overrides(self) -> None:
         config = {
+            "llm": {"provider": "openai", "model": "gpt-5-mini"},
             "decision": {"candidate_limit": 2},
             "matching": {
                 "semantic_weight": 0.35,
+                "semantic_provider": "openai",
                 "semantic_model": "text-embedding-3-large",
                 "candidate_multiplier": 6,
                 "candidate_limit": 4,
@@ -49,6 +56,7 @@ class MatchingConfigTests(unittest.TestCase):
         }
         matching = load_matching_config(config)
         self.assertEqual(matching.semantic_weight, 0.35)
+        self.assertEqual(matching.semantic_provider, "openai")
         self.assertEqual(matching.semantic_model, "text-embedding-3-large")
         self.assertEqual(matching.candidate_multiplier, 6)
         self.assertEqual(matching.candidate_limit, 4)

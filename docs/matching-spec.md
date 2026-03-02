@@ -192,7 +192,6 @@ matching:
   recency_weight: 0.15
   affinity_weight: 0.25
   semantic_weight: 0.15
-  semantic_provider: "openai"
   semantic_model: "text-embedding-3-small"
   candidate_multiplier: 4
   max_candidate_pool: 20
@@ -207,7 +206,7 @@ matching:
 Notes:
 
 - `semantic_weight` ships with a conservative non-zero default and can be adjusted per deployment.
-- `semantic_provider`/`semantic_model` default to OpenAI for initial rollout because Squire already depends on OpenAI for interpretation.
+- Semantic embeddings use `matching.semantic_provider` when configured (otherwise `llm.provider`); `semantic_model` selects the embedding model under that provider.
 - `candidate_limit` controls post-fusion shortlist size; `candidate_multiplier` and `max_candidate_pool` control pre-fusion recall depth.
 - Weight values are normalized at runtime across active signals.
 
