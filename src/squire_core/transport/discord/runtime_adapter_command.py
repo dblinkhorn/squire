@@ -61,8 +61,14 @@ def _refresh_index(
     index_db: str | Path,
     *,
     matching: MatchingConfig | None = None,
+    embedding_provider: Any = None,
 ) -> None:
-    _refresh_index_util(objects_root, index_db, matching=matching)
+    _refresh_index_util(
+        objects_root,
+        index_db,
+        matching=matching,
+        embedding_provider=embedding_provider,
+    )
 
 
 async def _refresh_index_async(
@@ -70,12 +76,14 @@ async def _refresh_index_async(
     index_db: str | Path,
     *,
     matching: MatchingConfig | None = None,
+    embedding_provider: Any = None,
 ) -> None:
     await asyncio.to_thread(
         _refresh_index,
         objects_root,
         index_db,
         matching=matching,
+        embedding_provider=embedding_provider,
     )
 
 
@@ -126,10 +134,13 @@ class _DiscordCommandRuntime:
         self,
         message: Any,
         state_store: RuntimeStateStore,
+        llm_provider: Any = None,
+        embedding_provider: Any = None,
         due_time_reminder_notifier: Callable[..., Any] | None = None,
     ) -> None:
         self._message = message
         self._state_store = state_store
+        self._embedding_provider = embedding_provider or llm_provider
         self._due_time_reminder_notifier = due_time_reminder_notifier
 
     @property
@@ -331,7 +342,12 @@ class _DiscordCommandRuntime:
         *,
         matching: MatchingConfig | None = None,
     ) -> None:
-        await _refresh_index_async(objects_root, index_db, matching=matching)
+        await _refresh_index_async(
+            objects_root,
+            index_db,
+            matching=matching,
+            embedding_provider=self._embedding_provider,
+        )
 
     def notify_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
         _invoke_due_time_reminder_notifier(

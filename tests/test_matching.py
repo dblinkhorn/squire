@@ -47,8 +47,10 @@ def test_sync_semantic_index_is_incremental_and_removes_archived(tmp_path: Path)
     provider = _FakeEmbeddingProvider()
     matching = load_matching_config(
         {
+            "llm": {"provider": "openai", "model": "gpt-5-mini"},
             "matching": {
                 "semantic_weight": 0.5,
+                "semantic_model": "text-embedding-3-small",
                 "semantic_text_schema_version": 1,
             }
         }
@@ -111,7 +113,12 @@ Call dentist tomorrow.
 
 def test_build_matching_candidates_async_returns_none_when_retrieval_unavailable(tmp_path: Path) -> None:
     db_path = tmp_path / "missing.sqlite"
-    matching = load_matching_config({"matching": {"semantic_weight": 0.4}})
+    matching = load_matching_config(
+        {
+            "llm": {"provider": "openai", "model": "gpt-5-mini"},
+            "matching": {"semantic_weight": 0.4, "semantic_model": "text-embedding-3-small"},
+        }
+    )
     result = asyncio.run(
         build_matching_candidates_async(
             db_path=db_path,
@@ -134,8 +141,10 @@ def test_build_matching_candidates_async_hybrid_mode_uses_semantic_signal(tmp_pa
     async_provider = _FakeAsyncEmbeddingProvider()
     matching = load_matching_config(
         {
+            "llm": {"provider": "openai", "model": "gpt-5-mini"},
             "matching": {
                 "semantic_weight": 0.6,
+                "semantic_model": "text-embedding-3-small",
                 "lexical_weight": 0.4,
                 "candidate_limit": 5,
             }

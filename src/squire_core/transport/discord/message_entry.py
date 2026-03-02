@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import Any, Callable
 
 import discord
 
+from squire_core.config_utils import load_llm_config
 from squire_core.id_utils import generate_prefixed_id
-from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
+from squire_core.llm.registry import create_provider
 from squire_core.raw_event import RawEvent, Source, write_raw_event
 from squire_core.transport import commands as _transport_commands
 from squire_core.transport import inbound as _transport_inbound
@@ -44,11 +45,15 @@ def _generate_raw_id() -> str:
 def _build_command_runtime(
     message: Any,
     runtime_state: RuntimeStateStore,
+    llm_provider: Any,
+    embedding_provider: Any,
     due_time_reminder_notifier: DueTimeReminderNotifier | None,
 ) -> _DiscordCommandRuntime:
     return _DiscordCommandRuntime(
         message,
         runtime_state,
+        llm_provider=llm_provider,
+        embedding_provider=embedding_provider,
         due_time_reminder_notifier=due_time_reminder_notifier,
     )
 
@@ -56,12 +61,25 @@ def _build_command_runtime(
 def _build_routing_runtime(
     message: Any,
     runtime_state: RuntimeStateStore,
+    llm_provider: Any,
+    embedding_provider: Any,
     due_time_reminder_notifier: DueTimeReminderNotifier | None,
 ) -> _DiscordRoutingRuntime:
+    command_runtime_factory = (
+        lambda current_message, state_store, notifier: _build_command_runtime(
+            current_message,
+            state_store,
+            llm_provider,
+            embedding_provider,
+            notifier,
+        )
+    )
     return _DiscordRoutingRuntime(
         message,
         runtime_state,
-        command_runtime_factory=_build_command_runtime,
+        command_runtime_factory=command_runtime_factory,
+        llm_provider=llm_provider,
+        embedding_provider=embedding_provider,
         due_time_reminder_notifier=due_time_reminder_notifier,
     )
 
@@ -69,12 +87,25 @@ def _build_routing_runtime(
 def _build_inbound_runtime(
     message: Any,
     runtime_state: RuntimeStateStore,
+    llm_provider: Any,
+    embedding_provider: Any,
     due_time_reminder_notifier: DueTimeReminderNotifier | None,
 ) -> _DiscordInboundRuntime:
+    routing_runtime_factory = (
+        lambda current_message, state_store, notifier: _build_routing_runtime(
+            current_message,
+            state_store,
+            llm_provider,
+            embedding_provider,
+            notifier,
+        )
+    )
     return _DiscordInboundRuntime(
         message,
         runtime_state,
-        routing_runtime_factory=_build_routing_runtime,
+        routing_runtime_factory=routing_runtime_factory,
+        llm_provider=llm_provider,
+        embedding_provider=embedding_provider,
         due_time_reminder_notifier=due_time_reminder_notifier,
     )
 
@@ -104,10 +135,18 @@ async def handle_command(
     config: dict[str, Any],
     *,
     runtime_state: RuntimeStateStore,
+    llm_provider: Any = None,
+    embedding_provider: Any = None,
     due_time_reminder_notifier: DueTimeReminderNotifier | None = None,
 ) -> bool:
     context = build_transport_context(message)
-    runtime = _build_command_runtime(message, runtime_state, due_time_reminder_notifier)
+    runtime = _build_command_runtime(
+        message,
+        runtime_state,
+        llm_provider,
+        embedding_provider,
+        due_time_reminder_notifier,
+    )
     return await _transport_commands.handle_command(
         runtime=runtime,
         context=context,
@@ -123,13 +162,20 @@ async def maybe_route_nl_command(
     content: str,
     raw_id: str,
     config: dict[str, Any],
-    provider: OpenAIProvider,
+    provider: LLMProvider | AsyncLLMProvider,
     model: str,
     runtime_state: RuntimeStateStore,
+    embedding_provider: LLMProvider | AsyncLLMProvider | None = None,
     due_time_reminder_notifier: DueTimeReminderNotifier | None = None,
 ) -> bool:
     context = build_transport_context(message)
-    runtime = _build_routing_runtime(message, runtime_state, due_time_reminder_notifier)
+    runtime = _build_routing_runtime(
+        message,
+        runtime_state,
+        provider,
+        embedding_provider or provider,
+        due_time_reminder_notifier,
+    )
     return await _transport_routing.maybe_route_nl_command(
         runtime=runtime,
         context=context,
@@ -179,6 +225,9 @@ async def handle_message(
     config: dict[str, Any],
     *,
     runtime_state: RuntimeStateStore,
+    llm_provider: LLMProvider | AsyncLLMProvider | None = None,
+    embedding_provider: LLMProvider | AsyncLLMProvider | None = None,
+    llm_model: str | None = None,
     due_time_reminder_notifier: DueTimeReminderNotifier | None = None,
 ) -> None:
     if message.author.bot:
@@ -224,20 +273,42 @@ async def handle_message(
             raw_id,
             config,
             runtime_state=runtime_state,
+            llm_provider=llm_provider,
+            embedding_provider=embedding_provider,
             due_time_reminder_notifier=due_time_reminder_notifier,
         )
         if handled:
             return
 
-    model = config.get("llm", {}).get("interpreter_model")
+    try:
+        llm_config = load_llm_config(config)
+    except ValueError as exc:
+        await _discord_io.swap_reaction(message, "⏳", "⚠️")
+        await _send_response(message, str(exc))
+        return
+    model = llm_model or llm_config.model
     if not model:
         await _discord_io.swap_reaction(message, "⏳", "⚠️")
         await _send_response(message, "No interpreter model configured.")
         return
 
-    provider = OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+    provider = llm_provider
+    if provider is None:
+        try:
+            provider = create_provider(llm_config.provider)
+        except Exception as exc:
+            await _discord_io.swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, f"Failed to initialize configured LLM provider: {exc}")
+            return
+    active_embedding_provider = embedding_provider or provider
     context: TransportMessageContext = build_transport_context(message)
-    runtime = _build_inbound_runtime(message, runtime_state, due_time_reminder_notifier)
+    runtime = _build_inbound_runtime(
+        message,
+        runtime_state,
+        provider,
+        active_embedding_provider,
+        due_time_reminder_notifier,
+    )
     await _transport_inbound.handle_non_command_message(
         runtime=runtime,
         context=context,
@@ -247,6 +318,7 @@ async def handle_message(
         provider=provider,
         model=model,
         schema_map=SCHEMA_MAP,
+        embedding_provider=active_embedding_provider,
     )
 
 

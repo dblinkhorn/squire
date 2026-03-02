@@ -317,7 +317,10 @@ def test_multi_operation_conflict_marks_operation_conflict(monkeypatch) -> None:
             runtime=runtime,
             context=context,
             raw_id="R_conflict",
-            config={},
+            config={
+                "llm": {"provider": "openai", "model": "gpt-5-mini"},
+                "matching": {"semantic_weight": 0},
+            },
             plan_input=plan_input,
             confidence=0.9,
             routing=load_nl_command_routing_config({}),

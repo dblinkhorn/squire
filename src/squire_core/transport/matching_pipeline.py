@@ -11,7 +11,8 @@ from typing import Any
 from squire_core.config_utils import DecisionConfig, MatchingConfig
 from squire_core.derived_event_store import write_derived_event
 from squire_core.interpreter import InterpretationValidationError, interpret_text_async
-from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
+from squire_core.llm.registry import get_async_embedding_provider
 from squire_core.matching import build_matching_candidates_async
 
 
@@ -48,7 +49,7 @@ def build_decision_input(
 
 async def candidate_queries_from_llm(
     *,
-    provider: OpenAIProvider,
+    provider: LLMProvider | AsyncLLMProvider,
     model: str,
     prompt: str,
     message: str,
@@ -81,7 +82,8 @@ async def candidate_queries_from_llm(
 
 async def run_matching_decision(
     *,
-    provider: OpenAIProvider,
+    provider: LLMProvider | AsyncLLMProvider,
+    embedding_provider: LLMProvider | AsyncLLMProvider | None,
     model: str,
     raw_event_id: str,
     object_type: str,
@@ -106,7 +108,10 @@ async def run_matching_decision(
         )
         if llm_queries:
             queries = llm_queries
-    semantic_provider = provider if matching_config.semantic_weight > 0 and matching_config.semantic_provider == "openai" else None
+    active_embedding_provider = embedding_provider or provider
+    semantic_provider = (
+        get_async_embedding_provider(active_embedding_provider) if matching_config.semantic_weight > 0 else None
+    )
     retrieval = await build_matching_candidates_async(
         db_path=index_db,
         queries=queries,

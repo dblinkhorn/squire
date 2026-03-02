@@ -25,17 +25,22 @@ On startup, the bot:
 
 1. Loads `.env` values (including `DISCORD_TOKEN` and `OPENAI_API_KEY`).
 2. Validates and normalizes archive paths from `config.yaml`.
-3. If `SQUIRE_ENV=test`, validates test-safe archive guardrails, clears archive contents (preserving `.git`), seeds deterministic canonical fixtures, and rebuilds the SQLite index.
+3. Validates required LLM config keys (`llm.provider`, `llm.model`), applies `matching.semantic_provider` (defaults to `llm.provider` when omitted), and validates `matching.semantic_model` when semantic matching is enabled (`matching.semantic_weight > 0`).
+4. If `SQUIRE_ENV=test`, validates test-safe archive guardrails, clears archive contents (preserving `.git`), seeds deterministic canonical fixtures, and rebuilds the SQLite index.
    If `test_archive_root` is configured, test mode uses that root instead of `archive_root`.
-4. Otherwise, rebuilds the SQLite index if it is missing.
-5. If semantic matching is enabled, runs semantic index sync against the same SQLite database.
-6. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
-7. Connects to Discord and starts message handling and scheduled digest loops.
+5. Otherwise, rebuilds the SQLite index if it is missing.
+6. If semantic matching is enabled, runs semantic index sync against the same SQLite database.
+7. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
+8. Connects to Discord and starts message handling and scheduled digest loops.
 
 ## Quick Start (Compose)
 
 1. Create `config.yaml` from `config.yaml.example`.
-2. Set `archive_root: "/data/archive"` in `config.yaml`.
+2. Set `archive_root: "/data/archive"` in `config.yaml` and confirm required keys are present:
+   - `llm.provider`
+   - `llm.model`
+   - `matching.semantic_provider` (optional; defaults to `llm.provider`)
+   - `matching.semantic_model` (if `matching.semantic_weight > 0`)
 3. Ensure `.env` contains:
    - `DISCORD_TOKEN=...`
    - `OPENAI_API_KEY=...`

@@ -8,7 +8,7 @@
 ## Product Scope (Current)
 
 - Primary runtime interface is Discord.
-- Primary LLM provider is OpenAI.
+- Runtime uses one active LLM provider selected by `config.yaml` (`llm.provider`, `llm.model`); current implemented provider support is OpenAI.
 - Natural-language command routing is in active use for read and mutation intents.
 - High-level future ideas belong in `.agent/future-plans.md`.
 
@@ -32,8 +32,18 @@
 ### Matching and Retrieval
 
 - Hybrid lexical + semantic retrieval is active with conservative defaults.
+- Semantic retrieval can use `matching.semantic_provider` + `matching.semantic_model`; when `semantic_provider` is omitted it defaults to `llm.provider`.
+- Runtime now threads a dedicated embedding provider through startup semantic sync and command/mutation index refresh flows (separate from primary interpret provider).
+- If semantic provider init/probe fails at startup, semantic matching is auto-disabled with warning and runtime falls back to lexical-only matching.
 - Deterministic auto-apply gates include minimum score and margin checks.
 - When retrieval is degraded/unavailable, runtime follows safe fallbacks (no unsafe auto-apply).
+
+### LLM Config Validation
+
+- `llm.provider` and `llm.model` are required config keys; startup fails fast when either is missing/empty.
+- Legacy `llm.interpreter_model` fallback is removed.
+- `matching.semantic_model` is required when `matching.semantic_weight > 0`; startup fails fast if missing/empty.
+- `matching.semantic_provider` is optional; when provided it must be a non-empty string and is normalized to lowercase.
 
 ### Test-Mode Startup
 

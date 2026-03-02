@@ -5,7 +5,7 @@
 Required or optional environment variables include:
 
 - `DISCORD_TOKEN` (required)
-- `OPENAI_API_KEY` (required)
+- `OPENAI_API_KEY` (required when `llm.provider: openai`)
 - `HEALTH_HOST` (optional, default `0.0.0.0`)
 - `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
 - `SQUIRE_ENV` (optional; set to `test` to enable startup reset+seed mode for smoke testing)
@@ -17,7 +17,8 @@ Configuration specifies LLM behavior, confidence thresholds, daily/weekly digest
 
 LLM settings in `config.yaml`:
 
-- `llm.interpreter_model`: model name used for classify/extract/decision/candidate-query interpretation calls.
+- `llm.provider` (required): single active LLM backend for runtime operations. Current allowed value: `openai`.
+- `llm.model` (required): model name used for classify/extract/decision/candidate-query interpretation calls.
 - `llm.classify_prompt_path`: classify prompt path.
 - `llm.interpreter_prompt_path`: extraction prompt path.
 - `llm.decision_prompt_path`: decision prompt path for update/append routing.
@@ -46,7 +47,8 @@ Matching settings in `config.yaml` (hybrid lexical/semantic retrieval and determ
 - matching.lexical_weight / matching.recency_weight / matching.affinity_weight / matching.semantic_weight: component weights for fused candidate scoring.
   `matching.semantic_weight` ships at a conservative default of `0.15`.
 
-- matching.semantic_provider / matching.semantic_model: embedding provider/model for semantic retrieval (OpenAI-first rollout).
+- `matching.semantic_provider`: optional provider for semantic embeddings. When omitted, it defaults to `llm.provider`.
+- `matching.semantic_model`: embedding model for semantic retrieval. This key is required when `matching.semantic_weight > 0`. Startup probes embedding support for the selected semantic provider/model; if the probe fails, semantic matching is auto-disabled with a warning and runtime falls back to lexical-only matching.
 - matching.candidate_multiplier / matching.max_candidate_pool / matching.candidate_limit: pre-fusion recall depth and post-fusion shortlist size.
 - matching.affinity_recent_ids_per_thread / matching.affinity_ttl_days / matching.affinity_max_boost: conversation-affinity memory window and max additive contribution.
 - matching.auto_min_score / matching.auto_min_margin: deterministic auto-apply score and margin gates (in addition to decision confidence thresholds).
@@ -68,6 +70,8 @@ Prompt files are stored under `config/prompts/` and referenced by path in `confi
 
 ```yaml
 llm:
+  provider: "openai"
+  model: "gpt-5-mini"
   classify_prompt_path: "config/prompts/classify_v1.txt"
   interpreter_prompt_path: "config/prompts/extract_v1.txt"
   decision_prompt_path: "config/prompts/decision_v1.txt"
