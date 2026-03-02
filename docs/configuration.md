@@ -47,8 +47,8 @@ Matching settings in `config.yaml` (hybrid lexical/semantic retrieval and determ
 - matching.lexical_weight / matching.recency_weight / matching.affinity_weight / matching.semantic_weight: component weights for fused candidate scoring.
   `matching.semantic_weight` ships at a conservative default of `0.15`.
 
-- `matching.semantic_provider`: optional provider for semantic embeddings. When omitted, it defaults to `llm.provider`.
-- `matching.semantic_model`: embedding model for semantic retrieval. This key is required when `matching.semantic_weight > 0`. Startup probes embedding support for the selected semantic provider/model; if the probe fails, semantic matching is auto-disabled with a warning and runtime falls back to lexical-only matching.
+- `matching.semantic_provider`: optional provider for semantic embeddings. When omitted, it defaults to `llm.provider`. Current implemented provider support is `openai`.
+- `matching.semantic_model`: embedding model for semantic retrieval. This key is required when `matching.semantic_weight > 0`. Startup validates semantic provider initialization and probes embedding support for the selected semantic provider/model; if either step fails, semantic matching is auto-disabled with a warning and runtime falls back to lexical-only matching.
 - matching.candidate_multiplier / matching.max_candidate_pool / matching.candidate_limit: pre-fusion recall depth and post-fusion shortlist size.
 - matching.affinity_recent_ids_per_thread / matching.affinity_ttl_days / matching.affinity_max_boost: conversation-affinity memory window and max additive contribution.
 - matching.auto_min_score / matching.auto_min_margin: deterministic auto-apply score and margin gates (in addition to decision confidence thresholds).

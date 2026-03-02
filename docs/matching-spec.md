@@ -40,7 +40,7 @@ Use multiple signals to build a better shortlist before decisioning:
    - conversation affinity boost (recently touched object IDs in current DM/thread)
 3. Optional semantic retrieval (phase 2):
    - local embedding index over canonical objects (derived artifact, rebuildable)
-   - initial embedding provider/model should use the existing OpenAI integration for fast rollout
+   - semantic provider/model are config-driven (`matching.semantic_provider`, `matching.semantic_model`); provider defaults to `llm.provider` when omitted
    - fuse lexical and semantic signals with deterministic weighted scoring.
 
 Deterministic scoring model:
@@ -192,6 +192,7 @@ matching:
   recency_weight: 0.15
   affinity_weight: 0.25
   semantic_weight: 0.15
+  semantic_provider: "openai" # optional; defaults to llm.provider when omitted
   semantic_model: "text-embedding-3-small"
   candidate_multiplier: 4
   max_candidate_pool: 20
