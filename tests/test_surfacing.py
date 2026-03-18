@@ -100,6 +100,20 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
         objects_root,
         {
             **_base_frontmatter(
+                object_id="ADM004",
+                object_type="admin",
+                title="Clean desk",
+                created_at="2026-01-05T00:00:00+00:00",
+                updated_at="2026-01-13T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Clean desk",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
                 object_id="PR001",
                 object_type="projects",
                 title="Launch beta",
@@ -144,11 +158,21 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     assert any("Pay rent" in line for line in sections["Admin overdue"])
     assert any("Call vet" in line for line in sections["Admin due today"])
     assert any("Submit report" in line for line in sections["Admin due soon"])
+    assert any("Clean desk" in line for line in sections["Open admin without due dates"])
     assert any("Launch beta" in line for line in sections["Projects needing attention"])
     assert any("Alex" in line for line in sections["People to follow up"])
+    assert [section.title for section in digest.sections] == [
+        "Admin overdue",
+        "Admin due today",
+        "Admin due soon",
+        "Open admin without due dates",
+        "Projects needing attention",
+        "People to follow up",
+    ]
     assert section_objects["Admin overdue"] == ["ADM001"]
     assert section_objects["Admin due today"] == ["ADM002"]
     assert section_objects["Admin due soon"] == ["ADM003"]
+    assert section_objects["Open admin without due dates"] == ["ADM004"]
     assert section_objects["Projects needing attention"] == ["PR001"]
     assert section_objects["People to follow up"] == ["P001"]
 
@@ -161,12 +185,14 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     assert "🔴 **Admin overdue**" in rendered
     assert "🟠 **Admin due today**" in rendered
     assert "🟡 **Admin due soon**" in rendered
+    assert "📂 **Open admin without due dates**" in rendered
     assert "🧱 **Projects needing attention**" in rendered
     assert "🤝 **People to follow up**" in rendered
     assert "────────────" in rendered
     assert "• Pay rent - due Tue Jan 20 (2 days ago)" in rendered
     assert "• Call vet - due Thu Jan 22 at 3:00 PM (today)" in rendered
     assert "• Submit report - due Fri Jan 23 (tomorrow)" in rendered
+    assert "• Clean desk - open, unscheduled" in rendered
 
 
 def test_daily_digest_render_all_clear_sections(tmp_path: Path) -> None:
@@ -178,7 +204,7 @@ def test_daily_digest_render_all_clear_sections(tmp_path: Path) -> None:
     rendered = digest.render()
 
     assert rendered.startswith("📌 **Daily digest** · Mon Feb 9")
-    assert rendered.count("• All clear") == 5
+    assert rendered.count("• All clear") == 6
 
 
 def test_daily_digest_can_include_ids(tmp_path: Path) -> None:
@@ -212,6 +238,38 @@ def test_daily_digest_can_include_ids(tmp_path: Path) -> None:
     digest = build_daily_digest(objects_root, config, now=now)
     due_today = next(section for section in digest.sections if section.title == "Admin due today")
     assert any("ADM900" in line for line in due_today.lines)
+
+
+def test_daily_digest_unscheduled_section_can_include_ids(tmp_path: Path) -> None:
+    now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM901",
+                object_type="admin",
+                title="Review inbox",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-10T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Review inbox",
+        },
+    )
+
+    config = {
+        "timezone": "UTC",
+        "surfacing": {
+            "output": {"show_ids_daily_weekly": True},
+            "admin": {"due_soon_days": 1},
+        },
+    }
+
+    digest = build_daily_digest(objects_root, config, now=now)
+    unscheduled = next(section for section in digest.sections if section.title == "Open admin without due dates")
+    assert any("ADM901" in line for line in unscheduled.lines)
 
 
 def test_build_due_time_reminder_events_filters_and_offsets(tmp_path: Path) -> None:

@@ -3,7 +3,8 @@
 ## Push (Scheduled)
 
 The v1 daily digest includes overdue and due-today admin items (plus any due soon within the configured window),
-projects needing attention (blocked/stale), and people with `next_contact` due.
+open admin items without due dates beneath the scheduled admin sections, projects needing attention (blocked/stale),
+and people with `next_contact` due.
 Sections are list-only and do not include suggested next actions. Digests include a compact summary count line,
 emoji-prefixed section headers, and human-readable date rendering with near-term relative labels.
 Daily digest empty sections are shown as `All clear` for predictable scanning.
@@ -36,6 +37,7 @@ ID behavior:
 Surfacing rules are configurable in `config.yaml`. Default behavior is:
 
 - Admin: overdue, due-today, and due-soon sections.
+- Admin: an additional open-without-due-dates section appears after the scheduled admin sections.
 - Projects: surfaced when status is blocked or stale.
 - Ideas: included in the weekly review when `surfacing.ideas.weekly_review` is true.
 - People: surfaced when `next_contact` is due.

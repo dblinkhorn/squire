@@ -958,6 +958,11 @@ def build_daily_digest(
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
     )
+    unscheduled_admin_lines, unscheduled_admin_ids = _build_open_admin_without_due_lines(
+        admin_items,
+        tz=tz,
+        include_ids=surfacing.show_ids_daily_weekly,
+    )
     project_lines, project_ids = _build_project_attention_lines(
         project_items,
         now=now,
@@ -979,6 +984,11 @@ def build_daily_digest(
         DigestSection(title="Admin overdue", lines=overdue_lines, object_ids=[entry.object_id for entry in overdue_sorted]),
         DigestSection(title="Admin due today", lines=today_lines, object_ids=[entry.object_id for entry in today_sorted]),
         DigestSection(title="Admin due soon", lines=soon_lines, object_ids=[entry.object_id for entry in soon_sorted]),
+        DigestSection(
+            title="Open admin without due dates",
+            lines=unscheduled_admin_lines,
+            object_ids=unscheduled_admin_ids,
+        ),
         DigestSection(title="Projects needing attention", lines=project_lines, object_ids=project_ids),
         DigestSection(title="People to follow up", lines=people_lines, object_ids=people_ids),
     ]
