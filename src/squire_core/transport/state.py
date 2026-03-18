@@ -549,7 +549,7 @@ def _split_section_row_metadata(section_title: str, line: str) -> tuple[str, lis
         "Projects needing attention": [" - blocked", " - stale "],
         "People to follow up": [" - next contact "],
         "Completed this week": [" - "],
-        "Open admin without due dates": [" - "],
+        "Admin without due dates": [" - "],
         "Blocked or stale projects": [" - blocked", " - stale "],
         "People overdue for contact": [" - next contact "],
         "Ideas updated recently": [" - updated "],
@@ -571,7 +571,7 @@ def _split_section_row_metadata(section_title: str, line: str) -> tuple[str, lis
 
 
 def _split_metadata_items(section_title: str, metadata_value: str) -> list[str]:
-    multi_item_sections = {"Completed this week", "Open admin without due dates"}
+    multi_item_sections = {"Completed this week"}
     if section_title not in multi_item_sections:
         return [metadata_value]
     return [part.strip() for part in metadata_value.split(",") if part.strip()]

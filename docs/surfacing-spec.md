@@ -55,7 +55,7 @@ Schedule:
 Sections:
 
 - Completed this week (done/archived/completed notes in last 7 days)
-- Open admin items without due dates (oldest first)
+- Admin items without due dates (oldest first; open and blocked only)
 - Blocked/stale projects
 - People overdue for contact
 - Ideas updated recently (optional)

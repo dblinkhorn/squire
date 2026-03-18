@@ -130,7 +130,7 @@ _SECTION_EMOJI = {
     "Projects needing attention": "🧱",
     "People to follow up": "🤝",
     "Completed this week": "✅",
-    "Open admin without due dates": "📂",
+    "Admin without due dates": "📂",
     "Blocked or stale projects": "🧱",
     "People overdue for contact": "🤝",
     "Ideas updated recently": "💡",
@@ -142,7 +142,7 @@ _SECTION_DIVIDER_WIDTH = {
     "Projects needing attention": 24,
     "People to follow up": 18,
     "Completed this week": 19,
-    "Open admin without due dates": 27,
+    "Admin without due dates": 22,
     "Blocked or stale projects": 24,
     "People overdue for contact": 25,
     "Ideas updated recently": 21,
@@ -345,10 +345,35 @@ def _format_human_time(target: datetime) -> str:
     return f"{hour}:{target.minute:02d} {suffix}"
 
 
-def _format_human_datetime(target: datetime, reference: date, *, include_relative: bool = True) -> str:
+def _format_compact_elapsed_duration(target: datetime, reference: datetime) -> str | None:
+    delta_seconds = int((reference - target).total_seconds())
+    if delta_seconds <= 0 or delta_seconds >= 24 * 60 * 60:
+        return None
+    total_minutes = delta_seconds // 60
+    if total_minutes <= 0:
+        return None
+    hours, minutes = divmod(total_minutes, 60)
+    if hours == 0:
+        return f"{minutes}m"
+    if minutes == 0:
+        return f"{hours}h"
+    return f"{hours}h {minutes}m"
+
+
+def _format_human_datetime(
+    target: datetime,
+    reference: date,
+    *,
+    include_relative: bool = True,
+    reference_datetime: datetime | None = None,
+) -> str:
     rendered = f"{_format_human_date(target.date(), reference, include_relative=False)} at {_format_human_time(target)}"
     if not include_relative:
         return rendered
+    if reference_datetime is not None:
+        compact_elapsed = _format_compact_elapsed_duration(target, reference_datetime)
+        if compact_elapsed:
+            return f"{rendered} ({compact_elapsed})"
     relative = _relative_date_label(target.date(), reference)
     if relative:
         return f"{rendered} ({relative})"
@@ -486,19 +511,46 @@ def _due_bucket(entry: AdminEntry, now: datetime, due_soon_days: int) -> str | N
     return None
 
 
-def _format_due(entry: AdminEntry, *, reference_date: date) -> str:
+def _format_due(
+    entry: AdminEntry,
+    *,
+    reference_date: date,
+    include_relative: bool = True,
+    reference_datetime: datetime | None = None,
+) -> str:
     if entry.due_at:
-        return _format_human_datetime(entry.due_at, reference_date)
+        return _format_human_datetime(
+            entry.due_at,
+            reference_date,
+            include_relative=include_relative,
+            reference_datetime=reference_datetime,
+        )
     if entry.due_date:
-        return _format_human_date(entry.due_date, reference_date)
+        return _format_human_date(entry.due_date, reference_date, include_relative=include_relative)
     return "No due date"
 
 
-def _format_admin_due_lines(entries: list[AdminEntry], include_ids: bool, *, reference_date: date) -> list[str]:
+def _format_admin_due_lines(
+    entries: list[AdminEntry],
+    include_ids: bool,
+    *,
+    reference_date: date,
+    include_relative: bool = True,
+    omit_date_for_same_day: bool = False,
+    reference_datetime: datetime | None = None,
+) -> list[str]:
     lines: list[str] = []
     for entry in entries:
         title = _format_title(entry.title, entry.object_id, include_ids)
-        lines.append(f"{title} - due {_format_due(entry, reference_date=reference_date)}")
+        if omit_date_for_same_day and entry.due_date == reference_date:
+            if entry.due_at:
+                lines.append(f"{title} - due {_format_human_time(entry.due_at)}")
+            else:
+                lines.append(title)
+            continue
+        lines.append(
+            f"{title} - due {_format_due(entry, reference_date=reference_date, include_relative=include_relative, reference_datetime=reference_datetime)}"
+        )
     return lines
 
 
@@ -622,7 +674,7 @@ def _build_completed_this_week_lines(
     return lines, object_ids
 
 
-def _build_open_admin_without_due_lines(
+def _build_admin_without_due_lines(
     entries: list[AdminEntry],
     *,
     tz: tzinfo,
@@ -633,7 +685,7 @@ def _build_open_admin_without_due_lines(
     unscheduled = [
         entry
         for entry in entries
-        if entry.status == "open" and entry.due_at is None and entry.due_date is None
+        if entry.status in {"open", "blocked"} and entry.due_at is None and entry.due_date is None
     ]
     unscheduled.sort(key=lambda entry: entry.created_at or entry.updated_at or min_dt)
 
@@ -641,7 +693,13 @@ def _build_open_admin_without_due_lines(
     object_ids: list[str] = []
     for entry in unscheduled[:limit]:
         title = _format_title(entry.title, entry.object_id, include_ids)
-        lines.append(f"{title} - open, unscheduled")
+        if entry.status == "blocked":
+            if entry.blocked_reason:
+                lines.append(f"{title} - blocked: {entry.blocked_reason}")
+            else:
+                lines.append(f"{title} - blocked")
+        else:
+            lines.append(title)
         object_ids.append(entry.object_id)
     return lines, object_ids
 
@@ -945,18 +1003,26 @@ def build_daily_digest(
         overdue_sorted,
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
+        reference_datetime=now,
     )
     today_sorted = _sort_due(today)
     today_lines = _format_admin_due_lines(
         today_sorted,
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
+        include_relative=False,
+        omit_date_for_same_day=True,
     )
     soon_sorted = _sort_due(soon)
     soon_lines = _format_admin_due_lines(
         soon_sorted,
         surfacing.show_ids_daily_weekly,
         reference_date=now.date(),
+    )
+    unscheduled_admin_lines, unscheduled_admin_ids = _build_admin_without_due_lines(
+        admin_items,
+        tz=tz,
+        include_ids=surfacing.show_ids_daily_weekly,
     )
     project_lines, project_ids = _build_project_attention_lines(
         project_items,
@@ -979,6 +1045,11 @@ def build_daily_digest(
         DigestSection(title="Admin overdue", lines=overdue_lines, object_ids=[entry.object_id for entry in overdue_sorted]),
         DigestSection(title="Admin due today", lines=today_lines, object_ids=[entry.object_id for entry in today_sorted]),
         DigestSection(title="Admin due soon", lines=soon_lines, object_ids=[entry.object_id for entry in soon_sorted]),
+        DigestSection(
+            title="Admin without due dates",
+            lines=unscheduled_admin_lines,
+            object_ids=unscheduled_admin_ids,
+        ),
         DigestSection(title="Projects needing attention", lines=project_lines, object_ids=project_ids),
         DigestSection(title="People to follow up", lines=people_lines, object_ids=people_ids),
     ]
@@ -1012,7 +1083,7 @@ def build_weekly_review(
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
     )
-    unscheduled_admin_lines, unscheduled_admin_ids = _build_open_admin_without_due_lines(
+    unscheduled_admin_lines, unscheduled_admin_ids = _build_admin_without_due_lines(
         admin_items,
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
@@ -1043,7 +1114,7 @@ def build_weekly_review(
     sections.extend(
         [
             DigestSection(
-                title="Open admin without due dates",
+                title="Admin without due dates",
                 lines=unscheduled_admin_lines,
                 object_ids=unscheduled_admin_ids,
             ),

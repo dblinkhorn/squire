@@ -158,7 +158,7 @@
 - Plan-size guardrails (max operations per plan / max targets per operation) are intentionally deferred for now.
   - Track this in `.agent/future-plans.md` under routing hardening.
 - Due-time reminder scheduler assumes single-process runtime ownership of queue/ledger writes.
-- Investigate daily status surfacing gap: admin items without `due_date` are reported as not surfacing reliably in daily status output.
+- Daily digest now includes `Open admin without due dates` beneath the scheduled admin sections, matching weekly review treatment for unscheduled open admin items.
 
 ## Canonical References
 
