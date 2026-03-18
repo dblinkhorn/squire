@@ -117,7 +117,7 @@ def test_run_test_mode_reset_seed_runs_reset_seed_and_rebuild(tmp_path: Path) ->
     )
 
     assert stats is not None
-    assert stats.admin_count == 7
+    assert stats.admin_count == 10
     assert stats.projects_count == 3
     assert stats.people_count == 2
     assert stats.ideas_count == 2
@@ -132,4 +132,4 @@ def test_run_test_mode_reset_seed_runs_reset_seed_and_rebuild(tmp_path: Path) ->
     finally:
         conn.close()
     assert object_count is not None
-    assert int(object_count[0]) == 14
+    assert int(object_count[0]) == 17

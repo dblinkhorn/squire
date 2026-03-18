@@ -20,7 +20,7 @@ Prefixes:
 
 ## Minimal Command Set (v1)
 
-`!status` returns the daily digest (admin overdue/today/soon sections, open admin without due dates beneath those scheduled sections, project attention, and people follow-ups).
+`!status` returns the daily digest (admin overdue/today/soon sections, admin without due dates beneath those scheduled sections, project attention, and people follow-ups).
 `!weekly` returns the weekly review sections on demand.
 `!help [command]` returns a compact command summary, or detailed usage for a specific command.
 `!recent [number]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and

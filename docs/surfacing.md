@@ -3,7 +3,7 @@
 ## Push (Scheduled)
 
 The v1 daily digest includes overdue and due-today admin items (plus any due soon within the configured window),
-open admin items without due dates beneath the scheduled admin sections, projects needing attention (blocked/stale),
+admin items without due dates beneath the scheduled admin sections, projects needing attention (blocked/stale),
 and people with `next_contact` due.
 Sections are list-only and do not include suggested next actions. Digests include a compact summary count line,
 emoji-prefixed section headers, and human-readable date rendering with near-term relative labels.
@@ -13,8 +13,8 @@ Due-time reminders can also surface open/blocked admin items with `due_at` at co
 The default offsets are `90` and `15` minutes when the key is omitted; set `schedule.due_time_reminder_offsets_minutes: []`
 to disable. These reminders are separate from the daily digest and are intended for time-specific nudges throughout the day.
 
-Weekly review is also supported on a separate weekly schedule. It includes completed notes this week, open unscheduled
-admin items, blocked/stale projects, people overdue for contact, and optional recently updated ideas.
+Weekly review is also supported on a separate weekly schedule. It includes completed notes this week, admin items
+without due dates, blocked/stale projects, people overdue for contact, and optional recently updated ideas.
 The `Completed this week` section is omitted when empty; other weekly sections still use `All clear` when applicable.
 
 ## Pull (Interactive)
@@ -37,7 +37,7 @@ ID behavior:
 Surfacing rules are configurable in `config.yaml`. Default behavior is:
 
 - Admin: overdue, due-today, and due-soon sections.
-- Admin: an additional open-without-due-dates section appears after the scheduled admin sections.
+- Admin: an additional without-due-dates section appears after the scheduled admin sections.
 - Projects: surfaced when status is blocked or stale.
 - Ideas: included in the weekly review when `surfacing.ideas.weekly_review` is true.
 - People: surfaced when `next_contact` is due.

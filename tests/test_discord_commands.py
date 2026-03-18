@@ -497,7 +497,7 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch, runtime_state
             sections=[
                 DigestSection(
                     title="Admin due today",
-                    lines=["Call dentist - due Mon Feb 16 (today)", "Pay rent - due Mon Feb 16 (today)"],
+                    lines=["Call dentist", "Pay rent - due 4:00 PM"],
                     object_ids=["A_1", "A_2"],
                 ),
                 DigestSection(
@@ -524,13 +524,67 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch, runtime_state
 
     assert handled is True
     assert "\n1. Call dentist" in str(captured["response"])
-    assert "\n   • due Mon Feb 16 (today)" in str(captured["response"])
+    assert "\n   • due Mon Feb 16" not in str(captured["response"])
     assert "\n2. Pay rent" in str(captured["response"])
+    assert "\n   • due 4:00 PM" in str(captured["response"])
     assert "\n3. Blocked launch" in str(captured["response"])
     assert "\n   • blocked: Waiting on vendor" in str(captured["response"])
     assert "!done <number>" in str(captured["response"])
     key = cursor_key(message)
     assert runtime_state.result_cursors[key].object_ids == ["A_1", "A_2", "P_1"]
+
+
+def test_handle_command_status_admin_without_due_renders_blocked_metadata_only_when_present(
+    monkeypatch, runtime_state: RuntimeStateStore
+) -> None:
+    captured: dict[str, object] = {}
+    runtime_state.result_cursors.clear()
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        return None
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    def _fake_build_daily_digest(objects_root, config):
+        return DailyDigest(
+            generated_at=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
+            sections=[
+                DigestSection(
+                    title="Admin without due dates",
+                    lines=["Sort paper receipts", "Clean out downloads folder - blocked: Waiting on external drive cleanup"],
+                    object_ids=["A_9", "A_10"],
+                ),
+                DigestSection(
+                    title="Projects needing attention",
+                    lines=["Blocked launch - blocked: Waiting on vendor"],
+                    object_ids=["P_1"],
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
+    monkeypatch.setattr(command_adapter, "build_daily_digest", _fake_build_daily_digest)
+
+    message = _Message("!status", user_id=11, channel_id=22)
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
+    handled = asyncio.run(
+        message_entry.handle_command(message, "!status", "R_1", config, runtime_state=runtime_state)
+    )
+
+    assert handled is True
+    assert "\n1. Sort paper receipts" in str(captured["response"])
+    assert "\n2. Clean out downloads folder" in str(captured["response"])
+    assert "\n   • open" not in str(captured["response"])
+    assert "\n   • unscheduled" not in str(captured["response"])
+    assert "\n   • blocked: Waiting on external drive cleanup" in str(captured["response"])
+    assert "\n3. Blocked launch" in str(captured["response"])
+    assert "\n   • blocked: Waiting on vendor" in str(captured["response"])
 
 
 def test_handle_command_done_resolves_number_after_status(monkeypatch, runtime_state: RuntimeStateStore) -> None:
@@ -549,7 +603,7 @@ def test_handle_command_done_resolves_number_after_status(monkeypatch, runtime_s
             sections=[
                 DigestSection(
                     title="Admin due today",
-                    lines=["Call dentist - due Mon Feb 16 (today)", "Pay rent - due Mon Feb 16 (today)"],
+                    lines=["Call dentist", "Pay rent - due 4:00 PM"],
                     object_ids=["A_1", "A_2"],
                 )
             ],
@@ -616,7 +670,7 @@ def test_handle_command_done_resolves_number_from_parent_cursor_when_in_thread(
             sections=[
                 DigestSection(
                     title="Admin due today",
-                    lines=["Call dermatologist - due Mon Feb 16 (today)"],
+                    lines=["Call dermatologist"],
                     object_ids=["A_1"],
                 )
             ],

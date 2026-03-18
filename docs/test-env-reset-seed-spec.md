@@ -82,7 +82,9 @@ Required coverage:
   - overdue open,
   - due today open,
   - due soon open,
+  - items without due dates, including open and blocked examples,
   - timed (`due_at`) open,
+  - timed (`due_at`) overdue open,
   - timed (`due_at`) blocked,
   - blocked,
   - done (with `completed_at`).
