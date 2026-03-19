@@ -1,6 +1,6 @@
 # Squire
 
-![Squire logo](hero_logo.png)
+![Squire logo](banner.png)
 
 Squire is a self-hosted personal organizer you talk to through Discord.
 You send quick notes in a DM, and Squire turns them into structured notes you can review, search, and update later.
