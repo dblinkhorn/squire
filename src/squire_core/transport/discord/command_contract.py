@@ -20,7 +20,7 @@ NUMBERED_COMMAND_TIP = (
     "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value`"
 )
 NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT = (
-    "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value` · `!recent <number>` (up to 50)"
+    "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value` · `!recent <number> [category]` (up to 50)"
 )
 NUMBERED_LIST_ACTION_HELP_COPY = (
     "After this command shows a numbered list, you can use those numbers to take action on items (for example: "
@@ -31,7 +31,7 @@ HELP_COPY = (
     "- `!help [command]` - show this list or command details\n"
     "- `!status` - show daily digest\n"
     "- `!weekly` - show weekly review\n"
-    "- `!recent [number]` - list recent notes\n"
+    "- `!recent [number] [category]` - list recent notes\n"
     "- `!find <query>` - search notes\n"
     "- `!show <number>` - open one result\n"
     "- `!append <id|number> <text>` - append note text\n"
@@ -58,8 +58,8 @@ HELP_DETAILS = {
         + NUMBERED_LIST_ACTION_HELP_COPY
     ),
     "recent": (
-        "`!recent [number]`\n"
-        "Lists your recent notes. Use `!recent [number]` to show your most recent notes (up to 50).\n"
+        "`!recent [number] [category]`\n"
+        "Lists your recent notes. You can optionally add a limit, a category (`admin`, `project`, `person`, `idea`), or both (up to 50).\n"
         + NUMBERED_LIST_ACTION_HELP_COPY
     ),
     "find": (

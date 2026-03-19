@@ -11,6 +11,8 @@ Before capture, Squire can run natural-language command routing for command-like
 - unresolved mutation parts run a one-turn clarification flow scoped only to unresolved operations
 - explicit-only controls remain blocked from NL execution: `clear-archive`, `confirm`, `cancel`
 
+Any message beginning with `!` is treated as explicit-command input only. Unknown `!` commands are rejected locally with a suggestion when possible and do not fall through to note capture.
+
 Prefixes:
 
 - admin:
@@ -23,7 +25,7 @@ Prefixes:
 `!status` returns the daily digest (admin overdue/today/soon sections, admin without due dates beneath those scheduled sections, project attention, and people follow-ups).
 `!weekly` returns the weekly review sections on demand.
 `!help [command]` returns a compact command summary, or detailed usage for a specific command.
-`!recent [number]` shows the last N notes as a numbered list. `!find <query>` searches title and body via SQLite FTS and
+`!recent [number] [category]` shows the last N notes as a numbered list and can optionally filter to a category (`admin`, `project`, `person`, `idea`). `!find <query>` searches title and body via SQLite FTS and
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest numbered list
 (`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
 `!done <number>`, `!append <number> <text>`, and `!fix <number> ...` can resolve numbered rows from the latest
@@ -40,7 +42,7 @@ The following commands are currently implemented:
 - `!status`
 - `!weekly`
 - `!help [command]`
-- `!recent [number]`
+- `!recent [number] [category]`
 - `!find <query>`
 - `!show <number>`
 - `!append <id|number> <text>`

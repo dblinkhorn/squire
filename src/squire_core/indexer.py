@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -21,6 +22,12 @@ class LexicalCandidate:
     status: str | None
 
 
+@dataclass(frozen=True)
+class IndexRebuildStats:
+    indexed_count: int
+    skipped_count: int
+
+
 def _parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     if not content.startswith("---"):
         raise ValueError("Missing frontmatter")
@@ -39,10 +46,51 @@ def _iter_canonical_files(objects_root: str | Path) -> list[Path]:
     root = Path(objects_root)
     if not root.exists():
         return []
-    return [path for path in root.rglob("*.md") if path.is_file()]
+    return sorted((path for path in root.rglob("*.md") if path.is_file()), key=lambda path: path.as_posix())
 
 
-def rebuild_index(objects_root: str | Path, db_path: str | Path) -> None:
+def _build_index_row(frontmatter: dict[str, Any], body: str) -> tuple[str, str, str, str | None, str, int, str, str]:
+    object_id = frontmatter.get("id")
+    if not isinstance(object_id, str) or not object_id.strip():
+        raise ValueError("Missing required string field: id")
+
+    object_type = frontmatter.get("type")
+    if not isinstance(object_type, str) or not object_type.strip():
+        raise ValueError("Missing required string field: type")
+
+    title = frontmatter.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("Missing required string field: title")
+
+    updated_at = frontmatter.get("updated_at")
+    if not isinstance(updated_at, str) or not updated_at.strip():
+        raise ValueError("Missing required string field: updated_at")
+
+    status = frontmatter.get("status")
+    if status is not None and not isinstance(status, str):
+        status = str(status)
+
+    tags_value = frontmatter.get("tags", [])
+    if tags_value is None:
+        tags: list[str] = []
+    elif isinstance(tags_value, list):
+        tags = [str(item) for item in tags_value]
+    else:
+        raise ValueError("Field tags must be a list when present")
+
+    return (
+        object_id.strip(),
+        object_type.strip(),
+        title.strip(),
+        status,
+        updated_at.strip(),
+        1 if frontmatter.get("archived") else 0,
+        ",".join(tags),
+        body,
+    )
+
+
+def rebuild_index(objects_root: str | Path, db_path: str | Path) -> IndexRebuildStats:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -79,25 +127,25 @@ def rebuild_index(objects_root: str | Path, db_path: str | Path) -> None:
             """
         )
 
+        indexed_count = 0
+        skipped_count = 0
         for path in _iter_canonical_files(objects_root):
-            content = path.read_text(encoding="utf-8")
-            frontmatter, body = _parse_frontmatter(content)
-            cursor.execute(
-                """
-                INSERT INTO objects (id, type, title, status, updated_at, archived, tags, body)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    frontmatter.get("id"),
-                    frontmatter.get("type"),
-                    frontmatter.get("title"),
-                    frontmatter.get("status"),
-                    frontmatter.get("updated_at"),
-                    1 if frontmatter.get("archived") else 0,
-                    ",".join(frontmatter.get("tags", [])),
-                    body,
-                ),
-            )
+            try:
+                content = path.read_text(encoding="utf-8")
+                frontmatter, body = _parse_frontmatter(content)
+                row = _build_index_row(frontmatter, body)
+                cursor.execute(
+                    """
+                    INSERT INTO objects (id, type, title, status, updated_at, archived, tags, body)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    row,
+                )
+                indexed_count += 1
+            except Exception as exc:
+                skipped_count += 1
+                logging.warning("index_rebuild_skipped_file path=%s error=%s", path, exc)
+                continue
 
         cursor.execute(
             """
@@ -107,6 +155,14 @@ def rebuild_index(objects_root: str | Path, db_path: str | Path) -> None:
         )
 
         conn.commit()
+        if skipped_count:
+            logging.warning(
+                "index_rebuild_completed_with_skips path=%s indexed=%s skipped=%s",
+                db_path,
+                indexed_count,
+                skipped_count,
+            )
+        return IndexRebuildStats(indexed_count=indexed_count, skipped_count=skipped_count)
     finally:
         conn.close()
 

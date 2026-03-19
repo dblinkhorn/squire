@@ -374,8 +374,9 @@ def test_handle_command_recent_does_not_override_digest_id_flag(monkeypatch, run
     async def _fake_send_response(message, content, thread_title=None, view=None):
         captured["response"] = content
 
-    def _fake_build_recent_list(objects_root, config, limit=None):
+    def _fake_build_recent_list(objects_root, config, limit=None, object_type=None):
         captured["show_ids_daily_weekly"] = config.get("surfacing", {}).get("output", {}).get("show_ids_daily_weekly")
+        captured["object_type"] = object_type
         return SimpleNamespace(lines=["1. Pay rent (A_1) - admin"], object_ids=["A_1"])
 
     monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
@@ -395,6 +396,7 @@ def test_handle_command_recent_does_not_override_digest_id_flag(monkeypatch, run
 
     assert handled is True
     assert captured["show_ids_daily_weekly"] is False
+    assert captured["object_type"] is None
     assert "Pay rent (A_1)" in str(captured["response"])
     assert "!done <number>" in str(captured["response"])
     assert "!recent <number>" in str(captured["response"])
@@ -1454,6 +1456,52 @@ def test_handle_message_passes_embedding_provider_to_inbound(
     assert captured["provider"] is llm_provider
     assert captured["embedding_provider"] is embedding_provider
     assert captured["model"] == "gpt-5-mini"
+
+
+def test_handle_message_unknown_bang_command_does_not_fall_through_to_inbound(
+    monkeypatch, tmp_path: Path, runtime_state: RuntimeStateStore
+) -> None:
+    calls: list[str] = []
+
+    async def _fake_safe_add_reaction(message, emoji):
+        calls.append(f"react:{emoji}")
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        calls.append(f"send:{content}")
+
+    async def _fail_handle_non_command_message(**kwargs):
+        raise AssertionError("unknown ! command should not fall through to inbound capture")
+
+    def _fail_load_llm_config(config):
+        raise AssertionError("unknown ! command should not initialize llm config")
+
+    monkeypatch.setattr(message_entry, "_safe_add_reaction", _fake_safe_add_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
+    monkeypatch.setattr(message_entry._transport_inbound, "handle_non_command_message", _fail_handle_non_command_message)
+    monkeypatch.setattr(message_entry, "load_llm_config", _fail_load_llm_config)
+
+    message = _Message("!stats", user_id=33, channel_id=44)
+    message.id = 123
+    message.created_at = datetime.now(timezone.utc)
+    config = {
+        "paths": {"events_raw": str(tmp_path / "events" / "raw")},
+    }
+
+    asyncio.run(
+        message_entry.handle_message(
+            message,
+            config,
+            runtime_state=runtime_state,
+        )
+    )
+
+    assert "react:⏳" in calls
+    assert "swap:⏳:⚠️" in calls
+    assert any("Unknown command: !stats. Did you mean !status?" in call for call in calls)
 
 
 def test_nl_route_executes_read_command(monkeypatch, runtime_state: RuntimeStateStore) -> None:

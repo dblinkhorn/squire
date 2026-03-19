@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+from difflib import get_close_matches
 import logging
 import shlex
 from pathlib import Path
 from typing import Any, Protocol
 
 from squire_core.transport.contracts import TransportMessageContext
+
+
+_RECENT_CATEGORY_ALIASES = {
+    "admin": "admin",
+    "admins": "admin",
+    "project": "projects",
+    "projects": "projects",
+    "person": "people",
+    "people": "people",
+    "idea": "ideas",
+    "ideas": "ideas",
+}
+
+_RECENT_CATEGORY_DISPLAY = {
+    "admin": "admin",
+    "projects": "project",
+    "people": "people",
+    "ideas": "idea",
+}
 
 
 class _CommandTargetResolutionLike(Protocol):
@@ -92,6 +112,7 @@ class CommandRuntime(Protocol):
         config: dict[str, Any],
         *,
         limit: int | None = None,
+        object_type: str | None = None,
     ) -> _SurfacedListLike:
         ...
 
@@ -201,6 +222,35 @@ class CommandRuntime(Protocol):
         ...
 
 
+def _normalize_recent_category(value: str) -> str | None:
+    return _RECENT_CATEGORY_ALIASES.get(value.strip().lower())
+
+
+def _recent_usage() -> str:
+    return "Usage: !recent [number] [category]"
+
+
+def _valid_commands(runtime: CommandRuntime) -> list[str]:
+    return [f"!{name}" for name in runtime.help_details.keys()]
+
+
+def _suggest_command(runtime: CommandRuntime, attempted: str) -> str | None:
+    matches = get_close_matches(attempted.lower(), _valid_commands(runtime), n=1, cutoff=0.6)
+    if not matches:
+        return None
+    return matches[0]
+
+
+def _unknown_command_message(runtime: CommandRuntime, attempted: str) -> str:
+    lines = [f"Unknown command: {attempted}."]
+    suggestion = _suggest_command(runtime, attempted)
+    if suggestion:
+        lines[-1] += f" Did you mean {suggestion}?"
+    lines.append("")
+    lines.append("Run !help for a list of commands.")
+    return "\n".join(lines)
+
+
 async def handle_command(
     *,
     runtime: CommandRuntime,
@@ -213,7 +263,6 @@ async def handle_command(
     if not parts:
         return False
     command = parts[0].lower()
-    matching_config = runtime.load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
     if command == "!status":
@@ -264,27 +313,53 @@ async def handle_command(
         return True
     if command == "!recent":
         limit: int | None = None
-        if len(parts) > 2:
+        object_type: str | None = None
+        if len(parts) > 3:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !recent [number]")
+            await runtime.send_response(context, _recent_usage())
             return True
-        if len(parts) == 2:
-            parsed = runtime.parse_positive_int(parts[1])
-            if parsed is None:
-                await runtime.swap_reaction(context, "⏳", "⚠️")
-                await runtime.send_response(context, "Usage: !recent [number]")
-                return True
-            limit = parsed
-        surfaced = runtime.build_recent_list(objects_root, config, limit=limit)
+
+        for token in parts[1:]:
+            parsed = runtime.parse_positive_int(token)
+            if parsed is not None:
+                if limit is not None:
+                    await runtime.swap_reaction(context, "⏳", "⚠️")
+                    await runtime.send_response(context, _recent_usage())
+                    return True
+                limit = parsed
+                continue
+
+            normalized_category = _normalize_recent_category(token)
+            if normalized_category is not None:
+                if object_type is not None:
+                    await runtime.swap_reaction(context, "⏳", "⚠️")
+                    await runtime.send_response(context, _recent_usage())
+                    return True
+                object_type = normalized_category
+                continue
+
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await runtime.send_response(context, _recent_usage())
+            return True
+
+        surfaced = runtime.build_recent_list(objects_root, config, limit=limit, object_type=object_type)
+        recent_label = _RECENT_CATEGORY_DISPLAY.get(object_type, "recent")
         if not surfaced.lines:
             await runtime.swap_reaction(context, "⏳", "✅")
-            await runtime.send_response(context, "No recent notes found.")
+            if object_type:
+                await runtime.send_response(context, f"No recent {recent_label} notes found.")
+            else:
+                await runtime.send_response(context, "No recent notes found.")
             return True
         runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="recent")
         await runtime.swap_reaction(context, "⏳", "✅")
+        header = "Recent notes:"
+        if object_type:
+            header = f"Recent {recent_label} notes:"
         await runtime.send_response(
             context,
-            "Recent notes:\n"
+            header
+            + "\n"
             + "\n".join(surfaced.lines)
             + "\n\n"
             + runtime.numbered_command_tip_with_recent_limit,
@@ -490,6 +565,7 @@ async def handle_command(
             await runtime.swap_reaction(context, "⏳", "⚠️")
             await runtime.send_response(context, "Usage: !confirm <pending_id>")
             return True
+        matching_config = runtime.load_matching_config(config)
         pending_id = parts[1]
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
         pending = runtime.load_pending_action(pending_root, pending_id)
@@ -553,4 +629,6 @@ async def handle_command(
         await runtime.swap_reaction(context, "⏳", "✅")
         await runtime.send_response(context, f"Cancelled pending action {pending_id}.")
         return True
-    return False
+    await runtime.swap_reaction(context, "⏳", "⚠️")
+    await runtime.send_response(context, _unknown_command_message(runtime, command))
+    return True

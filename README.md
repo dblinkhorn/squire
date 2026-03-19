@@ -30,7 +30,7 @@ Core commands:
 
 - `!status` - show daily review now
 - `!weekly` - show weekly review now
-- `!recent [number]` - list recent notes
+- `!recent [number] [category]` - list recent notes
 - `!find <query>` - search notes
 - `!show <number>` - open one result from your latest numbered list
 - `!help [command]` - show available commands or detailed help for one command

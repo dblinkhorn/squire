@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from squire_core.transport.commands import handle_command
 
@@ -172,3 +173,233 @@ def test_handle_command_done_delegates_to_apply_operation() -> None:
     fields = captured["fields"]
     assert isinstance(fields, dict)
     assert fields == {"status": "done", "completed_at": "2026-02-21T12:00:00+00:00"}
+
+
+def test_handle_command_recent_accepts_limit_and_category() -> None:
+    captured: dict[str, object] = {}
+    calls: list[str] = []
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def parse_positive_int(self, value: str) -> int | None:
+            trimmed = value.strip()
+            return int(trimmed) if trimmed.isdigit() else None
+
+        def build_recent_list(self, objects_root, config, *, limit=None, object_type=None):
+            captured["limit"] = limit
+            captured["object_type"] = object_type
+            return SimpleNamespace(lines=["1. Pay rent"], object_ids=["A_1"])
+
+        def store_result_cursor(self, context, config, object_ids, *, source_view="unknown") -> None:
+            captured["cursor_ids"] = list(object_ids)
+            captured["source_view"] = source_view
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            calls.append(f"send:{content}")
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!recent 5 admin",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["limit"] == 5
+    assert captured["object_type"] == "admin"
+    assert captured["cursor_ids"] == ["A_1"]
+    assert captured["source_view"] == "recent"
+    assert calls == ["swap:⏳:✅", "send:Recent admin notes:\n1. Pay rent\n\ntip+recent"]
+
+
+def test_handle_command_recent_accepts_category_only() -> None:
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def parse_positive_int(self, value: str) -> int | None:
+            trimmed = value.strip()
+            return int(trimmed) if trimmed.isdigit() else None
+
+        def build_recent_list(self, objects_root, config, *, limit=None, object_type=None):
+            captured["limit"] = limit
+            captured["object_type"] = object_type
+            return SimpleNamespace(lines=["1. Person note"], object_ids=["P_1"])
+
+        def store_result_cursor(self, context, config, object_ids, *, source_view="unknown") -> None:
+            return None
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            return None
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            captured["response"] = content
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!recent person",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["limit"] is None
+    assert captured["object_type"] == "people"
+    assert str(captured["response"]).startswith("Recent people notes:\n1. Person note")
+
+
+def test_handle_command_recent_rejects_unknown_category() -> None:
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def parse_positive_int(self, value: str) -> int | None:
+            trimmed = value.strip()
+            return int(trimmed) if trimmed.isdigit() else None
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            captured["reaction"] = (remove_emoji, add_emoji)
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            captured["response"] = content
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!recent chores",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "⚠️")
+    assert captured["response"] == "Usage: !recent [number] [category]"
+
+
+def test_handle_command_unknown_command_suggests_closest_match() -> None:
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {
+            "help": "",
+            "status": "",
+            "weekly": "",
+            "recent": "",
+            "find": "",
+            "show": "",
+            "append": "",
+            "done": "",
+            "fix": "",
+            "confirm": "",
+            "cancel": "",
+            "clear-archive": "",
+        }
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            captured["reaction"] = (remove_emoji, add_emoji)
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            captured["response"] = content
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!stats",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "⚠️")
+    assert captured["response"] == "Unknown command: !stats. Did you mean !status?\n\nRun !help for a list of commands."
+
+
+def test_handle_command_unknown_command_without_close_match_shows_plain_error() -> None:
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {
+            "help": "",
+            "status": "",
+            "weekly": "",
+            "recent": "",
+            "find": "",
+            "show": "",
+            "append": "",
+            "done": "",
+            "fix": "",
+            "confirm": "",
+            "cancel": "",
+            "clear-archive": "",
+        }
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            captured["reaction"] = (remove_emoji, add_emoji)
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            captured["response"] = content
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!admin",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "⚠️")
+    assert captured["response"] == "Unknown command: !admin.\n\nRun !help for a list of commands."
