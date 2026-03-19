@@ -111,8 +111,8 @@ def refresh_index(
     embedding_provider: Any = None,
 ) -> None:
     try:
-        rebuild_index(objects_root, index_db)
-        logging.info("index_rebuilt path=%s", index_db)
+        stats = rebuild_index(objects_root, index_db)
+        logging.info("index_rebuilt path=%s indexed=%s skipped=%s", index_db, stats.indexed_count, stats.skipped_count)
     except Exception as exc:
         logging.exception("index_rebuild_failed error=%s", exc)
         return

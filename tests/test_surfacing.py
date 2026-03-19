@@ -560,6 +560,68 @@ def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:
     assert "(A_3)" not in surfaced.lines[1]
 
 
+def test_build_recent_list_filters_by_category(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="A_1",
+                object_type="admin",
+                title="Newest admin",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-26T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Handle admin",
+        },
+        body="Admin body",
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="I_1",
+                object_type="ideas",
+                title="Newest idea",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-27T00:00:00+00:00",
+            ),
+            "one_liner": "Idea body",
+        },
+        body="Idea body",
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="P_1",
+                object_type="people",
+                title="Older person",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-20T00:00:00+00:00",
+            ),
+            "name": "Older person",
+        },
+        body="Person body",
+    )
+
+    config = {"timezone": "UTC", "surfacing": {"pull": {"default_recent_limit": 10}}}
+
+    admin_only = build_recent_list(objects_root, config, object_type="admin")
+    assert admin_only.object_ids == ["A_1"]
+    assert len(admin_only.lines) == 1
+    assert admin_only.lines[0].startswith("1. Newest admin")
+    assert "\n   • admin" in admin_only.lines[0]
+
+    idea_only = build_recent_list(objects_root, config, object_type="ideas")
+    assert idea_only.object_ids == ["I_1"]
+    assert len(idea_only.lines) == 1
+    assert idea_only.lines[0].startswith("1. Newest idea")
+    assert "\n   • idea" in idea_only.lines[0]
+
+
 def test_build_find_list_and_item_detail(tmp_path: Path) -> None:
     objects_root = tmp_path / "objects"
     index_db = tmp_path / "index.sqlite"

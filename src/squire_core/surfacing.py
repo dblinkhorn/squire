@@ -1149,12 +1149,15 @@ def build_recent_list(
     config: dict[str, Any],
     *,
     limit: int | None = None,
+    object_type: str | None = None,
 ) -> SurfacedList:
     tz = resolve_timezone(config.get("timezone"))
     surfacing = load_surfacing_config(config)
     effective_limit = _clamp_limit(limit, surfacing.pull_default_recent_limit)
 
     items = [item for item in _load_items(objects_root) if not _is_archived(item.frontmatter.get("archived"))]
+    if object_type:
+        items = [item for item in items if item.object_type == object_type]
     items.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
     selected = items[:effective_limit]
     reference_date = datetime.now(tz).date()

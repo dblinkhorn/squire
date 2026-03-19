@@ -29,6 +29,17 @@
 - Cursor sources include `!recent`, `!find`, `!status`, and `!weekly`.
 - Thread-parent fallback is implemented so numbered follow-ups from thread replies resolve correctly.
 
+### Pull Surfacing
+
+- `!recent` now supports optional category filtering in addition to the existing limit:
+  - `!recent [number] [category]`
+  - `!recent [category]`
+- Accepted categories normalize singular/plural aliases onto canonical object types:
+  - `admin`
+  - `project` / `projects`
+  - `person` / `people`
+  - `idea` / `ideas`
+
 ### Matching and Retrieval
 
 - Hybrid lexical + semantic retrieval is active with conservative defaults.
@@ -44,6 +55,18 @@
 - Legacy `llm.interpreter_model` fallback is removed.
 - `matching.semantic_model` is required when `matching.semantic_weight > 0`; startup fails fast if missing/empty.
 - `matching.semantic_provider` is optional; when provided it must be a non-empty string and is normalized to lowercase.
+
+### Canonical Write Safety
+
+- Canonical frontmatter writes now use YAML serialization (`yaml.safe_dump`) instead of manual `key: value` string assembly.
+- The canonical writer normalizes designated free-text fields to strings before schema validation/write.
+- Canonical frontmatter now round-trips through the no-dates YAML loader before write; writes fail fast if serialized YAML does not deserialize back to the intended mapping.
+
+### Explicit Command Gate
+
+- Any message beginning with `!` now stays in explicit-command mode only.
+- Unknown `!` commands are rejected locally with a deterministic error and, when the fuzzy match is strong enough, a suggested valid command.
+- Unknown `!` commands do not fall through to note capture or NL/LLM routing.
 
 ### Test-Mode Startup
 
@@ -158,7 +181,8 @@
 - Plan-size guardrails (max operations per plan / max targets per operation) are intentionally deferred for now.
   - Track this in `.agent/future-plans.md` under routing hardening.
 - Due-time reminder scheduler assumes single-process runtime ownership of queue/ledger writes.
-- Daily digest now includes `Open admin without due dates` beneath the scheduled admin sections, matching weekly review treatment for unscheduled open admin items.
+- Canonical frontmatter parsing is still permissive at write time. Index rebuild is now tolerant of malformed canonical files and logs explicit warnings while skipping them, but malformed writes should still be prevented earlier in the write path as follow-on hardening.
+- Daily digest and weekly review now share the `Admin without due dates` section for open/blocked admin items lacking due dates.
 
 ## Canonical References
 

@@ -212,8 +212,9 @@ class _DiscordCommandRuntime:
         config: dict[str, Any],
         *,
         limit: int | None = None,
+        object_type: str | None = None,
     ) -> Any:
-        return build_recent_list(objects_root, config, limit=limit)
+        return build_recent_list(objects_root, config, limit=limit, object_type=object_type)
 
     def build_find_list(
         self,

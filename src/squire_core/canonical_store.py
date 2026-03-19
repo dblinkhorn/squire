@@ -16,25 +16,48 @@ class CanonicalObject:
     body: str
 
 
-def _format_frontmatter(frontmatter: dict[str, Any]) -> str:
-    lines = ["---"]
+_TEXT_FRONTMATTER_FIELDS = {
+    "title",
+    "name",
+    "context",
+    "follow_ups",
+    "next_action",
+    "goal",
+    "blocked_reason",
+    "one_liner",
+    "next_step",
+}
+
+
+def _normalize_frontmatter(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
     for key, value in frontmatter.items():
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{key}: []")
-            else:
-                lines.append(f"{key}:")
-                for item in value:
-                    if isinstance(item, dict):
-                        lines.append("  -")
-                        for sub_key, sub_value in item.items():
-                            lines.append(f"    {sub_key}: {sub_value}")
-                    else:
-                        lines.append(f"  - {item}")
-        else:
-            lines.append(f"{key}: {value}")
-    lines.append("---")
-    return "\n".join(lines)
+        if key in _TEXT_FRONTMATTER_FIELDS and value is not None and not isinstance(value, str):
+            normalized[key] = str(value)
+            continue
+        normalized[key] = value
+    return normalized
+
+
+def _parse_frontmatter_text(frontmatter_text: str) -> dict[str, Any]:
+    frontmatter = yaml.load(frontmatter_text, Loader=_NoDatesSafeLoader) or {}
+    if not isinstance(frontmatter, dict):
+        raise ValueError("Frontmatter must deserialize to a mapping")
+    return frontmatter
+
+
+def _format_frontmatter(frontmatter: dict[str, Any]) -> str:
+    normalized = _normalize_frontmatter(frontmatter)
+    dumped = yaml.safe_dump(
+        normalized,
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+    ).strip()
+    parsed = _parse_frontmatter_text(dumped)
+    if parsed != normalized:
+        raise ValueError("Frontmatter round-trip validation failed")
+    return f"---\n{dumped}\n---"
 
 
 _TYPE_DIR = {
@@ -84,7 +107,7 @@ def load_frontmatter(path: Path) -> dict[str, Any]:
     parts = content.split("---", 2)
     if len(parts) != 3:
         raise ValueError("Invalid frontmatter format")
-    frontmatter = yaml.load(parts[1], Loader=_NoDatesSafeLoader) or {}
+    frontmatter = _parse_frontmatter_text(parts[1])
     if frontmatter.get("tags") is None:
         frontmatter["tags"] = []
     if frontmatter.get("source_event_ids") is None:
@@ -98,10 +121,11 @@ def write_canonical_object(
     schema_path: str | Path,
     append_text: str | None = None,
 ) -> Path:
-    validate_json(load_json_schema(schema_path), canonical.frontmatter)
+    normalized_frontmatter = _normalize_frontmatter(canonical.frontmatter)
+    validate_json(load_json_schema(schema_path), normalized_frontmatter)
 
-    object_type = canonical.frontmatter["type"]
-    object_id = canonical.frontmatter["id"]
+    object_type = normalized_frontmatter["type"]
+    object_id = normalized_frontmatter["id"]
     output_path = _object_path(objects_root, object_type, object_id)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -118,6 +142,6 @@ def write_canonical_object(
     elif existing_body:
         body = existing_body.strip()
 
-    content = f"{_format_frontmatter(canonical.frontmatter)}\n\n{body}\n"
+    content = f"{_format_frontmatter(normalized_frontmatter)}\n\n{body}\n"
     output_path.write_text(content, encoding="utf-8")
     return output_path
