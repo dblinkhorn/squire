@@ -46,7 +46,7 @@ def _iter_canonical_files(objects_root: str | Path) -> list[Path]:
     root = Path(objects_root)
     if not root.exists():
         return []
-    return [path for path in root.rglob("*.md") if path.is_file()]
+    return sorted((path for path in root.rglob("*.md") if path.is_file()), key=lambda path: path.as_posix())
 
 
 def _build_index_row(frontmatter: dict[str, Any], body: str) -> tuple[str, str, str, str | None, str, int, str, str]:

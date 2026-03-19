@@ -83,10 +83,11 @@ This note conflicts on primary key.
     finally:
         conn.close()
 
-    assert rows == [("A_GOOD", "Call dentist")]
+    assert rows == [("A_GOOD", "Duplicate id")]
     assert "index_rebuild_skipped_file" in caplog.text
     assert "A_BAD.md" in caplog.text
     assert "A_MISSING_TITLE.md" in caplog.text
-    assert "A_DUPLICATE.md" in caplog.text
+    assert "A_GOOD.md" in caplog.text
+    assert "UNIQUE constraint failed: objects.id" in caplog.text
     assert "Missing required string field: title" in caplog.text
     assert "index_rebuild_completed_with_skips" in caplog.text
