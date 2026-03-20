@@ -8,6 +8,7 @@ import shlex
 from pathlib import Path
 from typing import Any, Protocol
 
+from squire_core import telemetry
 from squire_core.transport.contracts import TransportMessageContext
 
 
@@ -251,6 +252,23 @@ def _unknown_command_message(runtime: CommandRuntime, attempted: str) -> str:
     return "\n".join(lines)
 
 
+async def _send_traced_response(
+    runtime: CommandRuntime,
+    context: TransportMessageContext,
+    content: str,
+    *,
+    thread_title: str | None = None,
+    view: Any = None,
+) -> None:
+    with telemetry.start_span("response.send"):
+        await runtime.send_response(
+            context,
+            content,
+            thread_title=thread_title,
+            view=view,
+        )
+
+
 async def handle_command(
     *,
     runtime: CommandRuntime,
@@ -263,60 +281,82 @@ async def handle_command(
     if not parts:
         return False
     command = parts[0].lower()
+    root_span = telemetry.current_span()
+    telemetry.set_span_attributes(
+        {
+            "squire.command": command,
+            "squire.flow": "command",
+        },
+        span=root_span,
+    )
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
-    if command == "!status":
-        try:
-            digest = runtime.build_daily_digest(objects_root, config)
-        except Exception:
-            logging.exception("status_digest_failed id=%s", raw_id)
-            await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Failed to build status digest. Check logs for details.")
+    with telemetry.start_span("command.dispatch"):
+        if command == "!status":
+            try:
+                with telemetry.start_span("digest.build.status"):
+                    digest = runtime.build_daily_digest(objects_root, config)
+            except Exception as exc:
+                telemetry.record_exception(exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "status_build_failed", span=root_span)
+                logging.exception("status_digest_failed id=%s", raw_id)
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await _send_traced_response(runtime, context, "Failed to build status digest. Check logs for details.")
+                return True
+            rendered, cursor_object_ids = runtime.render_numbered_daily_digest_for_command(digest)
+            if cursor_object_ids:
+                runtime.store_result_cursor(context, config, cursor_object_ids, source_view="status")
+            telemetry.set_span_attribute("squire.outcome", "status_sent", span=root_span)
+            await runtime.swap_reaction(context, "⏳", "✅")
+            await _send_traced_response(runtime, context, rendered)
             return True
-        rendered, cursor_object_ids = runtime.render_numbered_daily_digest_for_command(digest)
-        if cursor_object_ids:
-            runtime.store_result_cursor(context, config, cursor_object_ids, source_view="status")
-        await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(context, rendered)
-        return True
-    if command == "!weekly":
-        try:
-            review = runtime.build_weekly_review(objects_root, config)
-        except Exception:
-            logging.exception("weekly_review_build_failed id=%s", raw_id)
-            await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Failed to build weekly review. Check logs for details.")
+        if command == "!weekly":
+            try:
+                with telemetry.start_span("review.build.weekly"):
+                    review = runtime.build_weekly_review(objects_root, config)
+            except Exception as exc:
+                telemetry.record_exception(exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "weekly_build_failed", span=root_span)
+                logging.exception("weekly_review_build_failed id=%s", raw_id)
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await _send_traced_response(runtime, context, "Failed to build weekly review. Check logs for details.")
+                return True
+            rendered, cursor_object_ids = runtime.render_numbered_weekly_review_for_command(review)
+            if cursor_object_ids:
+                runtime.store_result_cursor(context, config, cursor_object_ids, source_view="weekly")
+            telemetry.set_span_attribute("squire.outcome", "weekly_sent", span=root_span)
+            await runtime.swap_reaction(context, "⏳", "✅")
+            await _send_traced_response(runtime, context, rendered)
             return True
-        rendered, cursor_object_ids = runtime.render_numbered_weekly_review_for_command(review)
-        if cursor_object_ids:
-            runtime.store_result_cursor(context, config, cursor_object_ids, source_view="weekly")
-        await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(context, rendered)
-        return True
     if command == "!help":
         if len(parts) > 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !help [command]")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !help [command]")
             return True
         if len(parts) == 2:
             topic = runtime.normalize_help_topic(parts[1])
             help_detail = runtime.help_details.get(topic)
             if help_detail is None:
                 await runtime.swap_reaction(context, "⏳", "⚠️")
-                await runtime.send_response(context, f"Unknown command `{parts[1]}`. Run `!help` for a command list.")
+                telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                await _send_traced_response(runtime, context, f"Unknown command `{parts[1]}`. Run `!help` for a command list.")
                 return True
             await runtime.swap_reaction(context, "⏳", "✅")
-            await runtime.send_response(context, help_detail)
+            telemetry.set_span_attribute("squire.outcome", "help_sent", span=root_span)
+            await _send_traced_response(runtime, context, help_detail)
             return True
         await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(context, runtime.help_copy)
+        telemetry.set_span_attribute("squire.outcome", "help_sent", span=root_span)
+        await _send_traced_response(runtime, context, runtime.help_copy)
         return True
     if command == "!recent":
         limit: int | None = None
         object_type: str | None = None
         if len(parts) > 3:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, _recent_usage())
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, _recent_usage())
             return True
 
         for token in parts[1:]:
@@ -324,7 +364,8 @@ async def handle_command(
             if parsed is not None:
                 if limit is not None:
                     await runtime.swap_reaction(context, "⏳", "⚠️")
-                    await runtime.send_response(context, _recent_usage())
+                    telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                    await _send_traced_response(runtime, context, _recent_usage())
                     return True
                 limit = parsed
                 continue
@@ -333,30 +374,37 @@ async def handle_command(
             if normalized_category is not None:
                 if object_type is not None:
                     await runtime.swap_reaction(context, "⏳", "⚠️")
-                    await runtime.send_response(context, _recent_usage())
+                    telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                    await _send_traced_response(runtime, context, _recent_usage())
                     return True
                 object_type = normalized_category
                 continue
 
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, _recent_usage())
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, _recent_usage())
             return True
 
-        surfaced = runtime.build_recent_list(objects_root, config, limit=limit, object_type=object_type)
+        with telemetry.start_span("recent.build"):
+            surfaced = runtime.build_recent_list(objects_root, config, limit=limit, object_type=object_type)
         recent_label = _RECENT_CATEGORY_DISPLAY.get(object_type, "recent")
         if not surfaced.lines:
             await runtime.swap_reaction(context, "⏳", "✅")
             if object_type:
-                await runtime.send_response(context, f"No recent {recent_label} notes found.")
+                telemetry.set_span_attribute("squire.outcome", "recent_empty", span=root_span)
+                await _send_traced_response(runtime, context, f"No recent {recent_label} notes found.")
             else:
-                await runtime.send_response(context, "No recent notes found.")
+                telemetry.set_span_attribute("squire.outcome", "recent_empty", span=root_span)
+                await _send_traced_response(runtime, context, "No recent notes found.")
             return True
         runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="recent")
         await runtime.swap_reaction(context, "⏳", "✅")
         header = "Recent notes:"
         if object_type:
             header = f"Recent {recent_label} notes:"
-        await runtime.send_response(
+        telemetry.set_span_attribute("squire.outcome", "recent_sent", span=root_span)
+        await _send_traced_response(
+            runtime,
             context,
             header
             + "\n"
@@ -368,21 +416,27 @@ async def handle_command(
     if command == "!find":
         if len(parts) < 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !find <query>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !find <query>")
             return True
         query = content.split(None, 1)[1].strip()
         if not query:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !find <query>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !find <query>")
             return True
-        surfaced = runtime.build_find_list(objects_root, index_db, config, query)
+        with telemetry.start_span("find.build"):
+            surfaced = runtime.build_find_list(objects_root, index_db, config, query)
         if not surfaced.lines:
             await runtime.swap_reaction(context, "⏳", "✅")
-            await runtime.send_response(context, f'No matches found for "{query}".')
+            telemetry.set_span_attribute("squire.outcome", "find_empty", span=root_span)
+            await _send_traced_response(runtime, context, f'No matches found for "{query}".')
             return True
         runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="find")
         await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(
+        telemetry.set_span_attribute("squire.outcome", "find_sent", span=root_span)
+        await _send_traced_response(
+            runtime,
             context,
             "Matches:\n" + "\n".join(surfaced.lines) + "\n\n" + runtime.numbered_command_tip,
         )
@@ -390,33 +444,42 @@ async def handle_command(
     if command == "!show":
         if len(parts) != 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !show <number>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !show <number>")
             return True
         number = runtime.parse_positive_int(parts[1])
         if number is None:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !show <number>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !show <number>")
             return True
         object_id = runtime.resolve_result_cursor(context, number)
         if object_id is None:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(
+            telemetry.set_span_attribute("squire.outcome", "show_missing_cursor", span=root_span)
+            await _send_traced_response(
+                runtime,
                 context,
                 "No active result list for that number. Run !recent, !find, !status, or !weekly first.",
             )
             return True
-        detail = runtime.build_item_detail(objects_root, object_id, config)
+        telemetry.set_span_attribute("squire.row_number", number, span=root_span)
+        with telemetry.start_span("show.build"):
+            detail = runtime.build_item_detail(objects_root, object_id, config)
         if not detail:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "That note is no longer available.")
+            telemetry.set_span_attribute("squire.outcome", "show_missing_note", span=root_span)
+            await _send_traced_response(runtime, context, "That note is no longer available.")
             return True
         await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(context, detail)
+        telemetry.set_span_attribute("squire.outcome", "show_sent", span=root_span)
+        await _send_traced_response(runtime, context, detail)
         return True
     if command == "!append":
         if len(parts) < 3:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !append <id|number> <text>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !append <id|number> <text>")
             return True
         target_resolution = runtime.resolve_command_target(context, parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
@@ -429,18 +492,30 @@ async def handle_command(
             )
         if target_resolution.error:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, target_resolution.error)
+            telemetry.set_span_attribute("squire.source_view", target_resolution.source_view, span=root_span)
+            telemetry.set_span_attribute("squire.row_number", target_resolution.row_number, span=root_span)
+            telemetry.set_span_attribute("squire.outcome", "target_resolution_failed", span=root_span)
+            await _send_traced_response(runtime, context, target_resolution.error)
             return True
         target_id = target_resolution.target_id
         if not target_id:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !append <id|number> <text>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !append <id|number> <text>")
             return True
         text = content.split(None, 2)[2].strip()
         if not text:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !append <id|number> <text>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !append <id|number> <text>")
             return True
+        telemetry.set_span_attributes(
+            {
+                "squire.source_view": target_resolution.source_view,
+                "squire.row_number": target_resolution.row_number,
+            },
+            span=root_span,
+        )
         return await runtime.apply_command_operation(
             context,
             raw_id,
@@ -455,7 +530,8 @@ async def handle_command(
     if command == "!done":
         if len(parts) != 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !done <id|number>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !done <id|number>")
             return True
         target_resolution = runtime.resolve_command_target(context, parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
@@ -468,13 +544,22 @@ async def handle_command(
             )
         if target_resolution.error:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, target_resolution.error)
+            telemetry.set_span_attribute("squire.outcome", "target_resolution_failed", span=root_span)
+            await _send_traced_response(runtime, context, target_resolution.error)
             return True
         target_id = target_resolution.target_id
         if not target_id:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !done <id|number>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !done <id|number>")
             return True
+        telemetry.set_span_attributes(
+            {
+                "squire.source_view": target_resolution.source_view,
+                "squire.row_number": target_resolution.row_number,
+            },
+            span=root_span,
+        )
         return await runtime.apply_command_operation(
             context,
             raw_id,
@@ -491,11 +576,13 @@ async def handle_command(
             fix_parts = shlex.split(content)
         except ValueError:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Invalid !fix syntax. Quote values containing spaces.")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Invalid !fix syntax. Quote values containing spaces.")
             return True
         if len(fix_parts) < 3:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !fix <id|number> <field=value> [field=value ...]")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !fix <id|number> <field=value> [field=value ...]")
             return True
         target_resolution = runtime.resolve_command_target(context, fix_parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
@@ -508,18 +595,22 @@ async def handle_command(
             )
         if target_resolution.error:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, target_resolution.error)
+            telemetry.set_span_attribute("squire.outcome", "target_resolution_failed", span=root_span)
+            await _send_traced_response(runtime, context, target_resolution.error)
             return True
         target_id = target_resolution.target_id
         if not target_id:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !fix <id|number> <field=value> [field=value ...]")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !fix <id|number> <field=value> [field=value ...]")
             return True
         updates: dict[str, Any] = {}
         for token in fix_parts[2:]:
             if "=" not in token:
                 await runtime.swap_reaction(context, "⏳", "⚠️")
-                await runtime.send_response(
+                telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                await _send_traced_response(
+                    runtime,
                     context,
                     "Invalid !fix syntax. Use field=value and quote values containing spaces.",
                 )
@@ -529,13 +620,22 @@ async def handle_command(
             value = value.strip()
             if not key:
                 await runtime.swap_reaction(context, "⏳", "⚠️")
-                await runtime.send_response(context, "Field name cannot be empty.")
+                telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                await _send_traced_response(runtime, context, "Field name cannot be empty.")
                 return True
             updates[key] = value
         if not updates:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "No valid fields provided.")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "No valid fields provided.")
             return True
+        telemetry.set_span_attributes(
+            {
+                "squire.source_view": target_resolution.source_view,
+                "squire.row_number": target_resolution.row_number,
+            },
+            span=root_span,
+        )
         return await runtime.apply_command_operation(
             context,
             raw_id,
@@ -551,11 +651,15 @@ async def handle_command(
     if command == "!clear-archive":
         if len(parts) != 1:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !clear-archive")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !clear-archive")
             return True
-        runtime.start_archive_clear_confirmation(context)
+        with telemetry.start_span("archive.clear.confirmation.start"):
+            runtime.start_archive_clear_confirmation(context)
         await runtime.swap_reaction(context, "⏳", "❓")
-        await runtime.send_response(
+        telemetry.set_span_attribute("squire.outcome", "awaiting_delete_confirmation", span=root_span)
+        await _send_traced_response(
+            runtime,
             context,
             "This will permanently clear all archive data (except `.git`). Reply with `DELETE` within 2 minutes to confirm.",
         )
@@ -563,48 +667,59 @@ async def handle_command(
     if command == "!confirm":
         if len(parts) != 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !confirm <pending_id>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !confirm <pending_id>")
             return True
         matching_config = runtime.load_matching_config(config)
         pending_id = parts[1]
+        telemetry.set_span_attribute("squire.pending_action_id", pending_id, span=root_span)
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
         pending = runtime.load_pending_action(pending_root, pending_id)
         if not pending:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, f"Unknown pending action: {pending_id}")
+            telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+            await _send_traced_response(runtime, context, f"Unknown pending action: {pending_id}")
             return True
         if pending.status != "pending":
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, f"Pending action {pending_id} is {pending.status}.")
+            telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+            await _send_traced_response(runtime, context, f"Pending action {pending_id} is {pending.status}.")
             return True
         object_type = pending.object_type
         schema_path = runtime.schema_map.get(object_type)
         if not schema_path and object_type != "mixed":
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Pending action has an unsupported object type.")
+            telemetry.set_span_attribute("squire.outcome", "pending_unsupported_type", span=root_span)
+            await _send_traced_response(runtime, context, "Pending action has an unsupported object type.")
             return True
         try:
-            result = runtime.apply_operations(
-                pending.derived,
-                objects_root=objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=schema_path if schema_path else None,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception:
+            with telemetry.start_span("command.pending.apply"):
+                result = runtime.apply_operations(
+                    pending.derived,
+                    objects_root=objects_root,
+                    canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                    derived_schema_path=schema_path if schema_path else None,
+                    last_decision_id=pending.last_decision_id,
+                )
+        except Exception as exc:
+            telemetry.record_exception(exc, span=root_span)
+            telemetry.set_span_attribute("squire.outcome", "pending_apply_failed", span=root_span)
             logging.exception("pending_apply_failed id=%s", pending_id)
             runtime.update_pending_action_status(pending_root, pending_id, "failed")
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Failed to apply pending action. Check logs for details.")
+            await _send_traced_response(runtime, context, "Failed to apply pending action. Check logs for details.")
             return True
-        await runtime.refresh_index_async(objects_root, index_db, matching=matching_config)
+        with telemetry.start_span("index.refresh"):
+            await runtime.refresh_index_async(objects_root, index_db, matching=matching_config)
         runtime.notify_due_time_reminder_schedule_changed()
         touched_ids = runtime.extract_target_ids_from_derived(pending.derived)
         touched_ids.extend(runtime.extract_ids_from_written_paths(result.written_paths))
         runtime.record_affinity_touches(runtime.cursor_key(context), touched_ids, matching=matching_config)
         runtime.update_pending_action_status(pending_root, pending_id, "confirmed")
         await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(
+        telemetry.set_span_attribute("squire.outcome", "pending_confirmed", span=root_span)
+        await _send_traced_response(
+            runtime,
             context,
             f"Applied pending action {pending_id}. ({len(result.written_paths)} item(s) updated.)",
         )
@@ -612,23 +727,29 @@ async def handle_command(
     if command == "!cancel":
         if len(parts) != 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, "Usage: !cancel <pending_id>")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !cancel <pending_id>")
             return True
         pending_id = parts[1]
+        telemetry.set_span_attribute("squire.pending_action_id", pending_id, span=root_span)
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
         pending = runtime.load_pending_action(pending_root, pending_id)
         if not pending:
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, f"Unknown pending action: {pending_id}")
+            telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+            await _send_traced_response(runtime, context, f"Unknown pending action: {pending_id}")
             return True
         if pending.status != "pending":
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, f"Pending action {pending_id} is {pending.status}.")
+            telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+            await _send_traced_response(runtime, context, f"Pending action {pending_id} is {pending.status}.")
             return True
         runtime.update_pending_action_status(pending_root, pending_id, "cancelled")
         await runtime.swap_reaction(context, "⏳", "✅")
-        await runtime.send_response(context, f"Cancelled pending action {pending_id}.")
+        telemetry.set_span_attribute("squire.outcome", "pending_cancelled", span=root_span)
+        await _send_traced_response(runtime, context, f"Cancelled pending action {pending_id}.")
         return True
     await runtime.swap_reaction(context, "⏳", "⚠️")
-    await runtime.send_response(context, _unknown_command_message(runtime, command))
+    telemetry.set_span_attribute("squire.outcome", "unknown_command", span=root_span)
+    await _send_traced_response(runtime, context, _unknown_command_message(runtime, command))
     return True

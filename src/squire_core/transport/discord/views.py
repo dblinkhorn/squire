@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import discord
+from opentelemetry.trace import SpanKind
 
+from squire_core import telemetry
 from squire_core.config_utils import MatchingConfig
 from squire_core.decision_flow import DecisionRouting, apply_decision_to_derived
 from squire_core.operation_apply import apply_operations
@@ -167,6 +169,27 @@ async def _disable_view(
             await interaction.message.edit(**edit_kwargs)
     except (discord.HTTPException, discord.Forbidden, AttributeError):
         return
+
+
+def _interaction_attributes(
+    interaction: discord.Interaction,
+    *,
+    pending_id: str | None = None,
+    target_id: str | None = None,
+) -> dict[str, object]:
+    attributes: dict[str, object] = {
+        "squire.transport": "discord",
+    }
+    user = getattr(interaction, "user", None)
+    if user is not None:
+        user_id = getattr(user, "id", None)
+        if user_id is not None:
+            attributes["discord.user_id"] = str(user_id)
+    if pending_id:
+        attributes["squire.pending_action_id"] = pending_id
+    if target_id:
+        attributes["squire.target_id"] = target_id
+    return attributes
 
 
 def _force_create_derived(derived: dict[str, Any]) -> dict[str, Any]:
@@ -367,119 +390,175 @@ class PendingActionView(discord.ui.View):
         await self._cancel_pending(interaction)
 
     async def _apply_pending(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This confirmation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        derived = pending.derived
-        ops = derived.get("proposed_operations") or []
-        if (
-            self.selected_target_id
-            and self._default_target_id
-            and self.selected_target_id != self._default_target_id
-            and isinstance(ops, list)
-            and len(ops) == 1
-            and isinstance(ops[0], dict)
-        ):
-            updated_op = dict(ops[0])
-            updated_op["target_id"] = self.selected_target_id
-            derived = dict(derived)
-            derived["proposed_operations"] = [updated_op]
-        try:
-            result = apply_operations(
-                derived,
-                objects_root=self.objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=self.schema_path,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception:
-            logging.exception("pending_apply_failed id=%s", self.pending_id)
-            _write_pending_with_status(self.pending_root, pending, "failed", derived=derived, now_iso=self._now_iso)
-            await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
-            return
-        if self._refresh_index_async is not None:
-            await self._refresh_index_async(self.objects_root, self.index_db)
-        if self._on_canonical_change:
-            self._on_canonical_change()
-        if (
-            self._matching
-            and self._extract_target_ids_from_derived is not None
-            and self._record_affinity_touches is not None
-        ):
-            touched_ids = self._extract_target_ids_from_derived(derived)
-            self._record_affinity_touches(self._affinity_key, touched_ids, self._matching)
-        _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived, now_iso=self._now_iso)
-        fallback_title = _candidate_title(self._candidates, self.selected_target_id)
-        await interaction.response.send_message(
-            _format_apply_success_message(written_paths=result.written_paths, fallback_title=fallback_title)
-        )
-        await _disable_view(interaction, clear_pending_instructions=True)
+        with telemetry.start_span(
+            "discord.interaction.pending.confirm",
+            kind=SpanKind.CONSUMER,
+            attributes=_interaction_attributes(
+                interaction,
+                pending_id=self.pending_id,
+                target_id=self.selected_target_id,
+            ),
+        ) as root_span:
+            if not self.is_author(interaction):
+                telemetry.set_span_attribute("squire.outcome", "unauthorized", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("This confirmation is not for you.")
+                return
+            with telemetry.start_span("pending.load"):
+                pending = load_pending_action(self.pending_root, self.pending_id)
+            if not pending:
+                telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("That pending action no longer exists.")
+                return
+            if pending.status != "pending":
+                telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message(f"This pending action is already {pending.status}.")
+                return
+            derived = pending.derived
+            ops = derived.get("proposed_operations") or []
+            if (
+                self.selected_target_id
+                and self._default_target_id
+                and self.selected_target_id != self._default_target_id
+                and isinstance(ops, list)
+                and len(ops) == 1
+                and isinstance(ops[0], dict)
+            ):
+                updated_op = dict(ops[0])
+                updated_op["target_id"] = self.selected_target_id
+                derived = dict(derived)
+                derived["proposed_operations"] = [updated_op]
+            try:
+                with telemetry.start_span("canonical.apply"):
+                    result = apply_operations(
+                        derived,
+                        objects_root=self.objects_root,
+                        canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                        derived_schema_path=self.schema_path,
+                        last_decision_id=pending.last_decision_id,
+                    )
+            except Exception as exc:
+                telemetry.record_exception(exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "apply_failed", span=root_span)
+                logging.exception("pending_apply_failed id=%s", self.pending_id)
+                _write_pending_with_status(self.pending_root, pending, "failed", derived=derived, now_iso=self._now_iso)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
+                return
+            if self._refresh_index_async is not None:
+                with telemetry.start_span("index.refresh"):
+                    await self._refresh_index_async(self.objects_root, self.index_db)
+            if self._on_canonical_change:
+                self._on_canonical_change()
+            if (
+                self._matching
+                and self._extract_target_ids_from_derived is not None
+                and self._record_affinity_touches is not None
+            ):
+                touched_ids = self._extract_target_ids_from_derived(derived)
+                self._record_affinity_touches(self._affinity_key, touched_ids, self._matching)
+            _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived, now_iso=self._now_iso)
+            fallback_title = _candidate_title(self._candidates, self.selected_target_id)
+            telemetry.set_span_attribute("squire.outcome", "confirmed", span=root_span)
+            with telemetry.start_span("response.send"):
+                await interaction.response.send_message(
+                    _format_apply_success_message(written_paths=result.written_paths, fallback_title=fallback_title)
+                )
+            await _disable_view(interaction, clear_pending_instructions=True)
 
     async def _create_new_pending(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This action is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        derived = _force_create_derived(pending.derived)
-        try:
-            result = apply_operations(
-                derived,
-                objects_root=self.objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=self.schema_path,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception:
-            logging.exception("pending_create_new_failed id=%s", self.pending_id)
-            _write_pending_with_status(self.pending_root, pending, "failed", derived=derived, now_iso=self._now_iso)
-            await interaction.response.send_message("Failed to create a new item. Check logs for details.")
-            return
-        if self._refresh_index_async is not None:
-            await self._refresh_index_async(self.objects_root, self.index_db)
-        if self._on_canonical_change:
-            self._on_canonical_change()
-        if (
-            self._matching
-            and self._extract_ids_from_written_paths is not None
-            and self._record_affinity_touches is not None
-        ):
-            touched_ids = self._extract_ids_from_written_paths(result.written_paths)
-            self._record_affinity_touches(self._affinity_key, touched_ids, self._matching)
-        _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived, now_iso=self._now_iso)
-        title = _first_title_from_paths(result.written_paths)
-        if title:
-            await interaction.response.send_message(f'Created a new note "{title}".')
-        else:
-            await interaction.response.send_message(f"Created a new note. ({len(result.written_paths)} item(s) updated.)")
-        await _disable_view(interaction, clear_pending_instructions=True)
+        with telemetry.start_span(
+            "discord.interaction.pending.create_new",
+            kind=SpanKind.CONSUMER,
+            attributes=_interaction_attributes(interaction, pending_id=self.pending_id),
+        ) as root_span:
+            if not self.is_author(interaction):
+                telemetry.set_span_attribute("squire.outcome", "unauthorized", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("This action is not for you.")
+                return
+            with telemetry.start_span("pending.load"):
+                pending = load_pending_action(self.pending_root, self.pending_id)
+            if not pending:
+                telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("That pending action no longer exists.")
+                return
+            if pending.status != "pending":
+                telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message(f"This pending action is already {pending.status}.")
+                return
+            derived = _force_create_derived(pending.derived)
+            try:
+                with telemetry.start_span("canonical.apply"):
+                    result = apply_operations(
+                        derived,
+                        objects_root=self.objects_root,
+                        canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                        derived_schema_path=self.schema_path,
+                        last_decision_id=pending.last_decision_id,
+                    )
+            except Exception as exc:
+                telemetry.record_exception(exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "apply_failed", span=root_span)
+                logging.exception("pending_create_new_failed id=%s", self.pending_id)
+                _write_pending_with_status(self.pending_root, pending, "failed", derived=derived, now_iso=self._now_iso)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("Failed to create a new item. Check logs for details.")
+                return
+            if self._refresh_index_async is not None:
+                with telemetry.start_span("index.refresh"):
+                    await self._refresh_index_async(self.objects_root, self.index_db)
+            if self._on_canonical_change:
+                self._on_canonical_change()
+            if (
+                self._matching
+                and self._extract_ids_from_written_paths is not None
+                and self._record_affinity_touches is not None
+            ):
+                touched_ids = self._extract_ids_from_written_paths(result.written_paths)
+                self._record_affinity_touches(self._affinity_key, touched_ids, self._matching)
+            _write_pending_with_status(self.pending_root, pending, "confirmed", derived=derived, now_iso=self._now_iso)
+            title = _first_title_from_paths(result.written_paths)
+            telemetry.set_span_attribute("squire.outcome", "created_new", span=root_span)
+            with telemetry.start_span("response.send"):
+                if title:
+                    await interaction.response.send_message(f'Created a new note "{title}".')
+                else:
+                    await interaction.response.send_message(f"Created a new note. ({len(result.written_paths)} item(s) updated.)")
+            await _disable_view(interaction, clear_pending_instructions=True)
 
     async def _cancel_pending(self, interaction: discord.Interaction) -> None:
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This cancellation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        _write_pending_with_status(self.pending_root, pending, "cancelled", now_iso=self._now_iso)
-        await interaction.response.send_message("Cancelled. No changes made.")
-        await _disable_view(interaction, clear_pending_instructions=True)
+        with telemetry.start_span(
+            "discord.interaction.pending.cancel",
+            kind=SpanKind.CONSUMER,
+            attributes=_interaction_attributes(interaction, pending_id=self.pending_id),
+        ) as root_span:
+            if not self.is_author(interaction):
+                telemetry.set_span_attribute("squire.outcome", "unauthorized", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("This cancellation is not for you.")
+                return
+            with telemetry.start_span("pending.load"):
+                pending = load_pending_action(self.pending_root, self.pending_id)
+            if not pending:
+                telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("That pending action no longer exists.")
+                return
+            if pending.status != "pending":
+                telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message(f"This pending action is already {pending.status}.")
+                return
+            _write_pending_with_status(self.pending_root, pending, "cancelled", now_iso=self._now_iso)
+            telemetry.set_span_attribute("squire.outcome", "cancelled", span=root_span)
+            with telemetry.start_span("response.send"):
+                await interaction.response.send_message("Cancelled. No changes made.")
+            await _disable_view(interaction, clear_pending_instructions=True)
 
 
 class MutationPendingView(discord.ui.View):
@@ -528,47 +607,66 @@ class MutationPendingView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         del button
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This confirmation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        try:
-            result = apply_operations(
-                pending.derived,
-                objects_root=self.objects_root,
-                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-                derived_schema_path=None,
-                last_decision_id=pending.last_decision_id,
-            )
-        except Exception:
-            logging.exception("nl_mutation_pending_apply_failed id=%s", self.pending_id)
-            _write_pending_with_status(self.pending_root, pending, "failed", now_iso=self._now_iso)
-            await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
-            return
-        if self._refresh_index_async is not None:
-            await self._refresh_index_async(self.objects_root, self.index_db)
-        if self._on_canonical_change:
-            self._on_canonical_change()
-        if (
-            self._matching
-            and self._extract_target_ids_from_derived is not None
-            and self._extract_ids_from_written_paths is not None
-            and self._record_affinity_touches is not None
-        ):
-            touched_ids = self._extract_target_ids_from_derived(pending.derived)
-            touched_ids.extend(self._extract_ids_from_written_paths(result.written_paths))
-            self._record_affinity_touches(self._affinity_key, touched_ids, self._matching)
-        _write_pending_with_status(self.pending_root, pending, "confirmed", now_iso=self._now_iso)
-        if self._log_confirm_applied is not None:
-            self._log_confirm_applied(self.pending_id)
-        await interaction.response.send_message(_format_apply_success_message(written_paths=result.written_paths))
-        await _disable_view(interaction)
+        with telemetry.start_span(
+            "discord.interaction.nl_pending.confirm",
+            kind=SpanKind.CONSUMER,
+            attributes=_interaction_attributes(interaction, pending_id=self.pending_id),
+        ) as root_span:
+            if not self.is_author(interaction):
+                telemetry.set_span_attribute("squire.outcome", "unauthorized", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("This confirmation is not for you.")
+                return
+            with telemetry.start_span("pending.load"):
+                pending = load_pending_action(self.pending_root, self.pending_id)
+            if not pending:
+                telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("That pending action no longer exists.")
+                return
+            if pending.status != "pending":
+                telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message(f"This pending action is already {pending.status}.")
+                return
+            try:
+                with telemetry.start_span("canonical.apply"):
+                    result = apply_operations(
+                        pending.derived,
+                        objects_root=self.objects_root,
+                        canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                        derived_schema_path=None,
+                        last_decision_id=pending.last_decision_id,
+                    )
+            except Exception as exc:
+                telemetry.record_exception(exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "apply_failed", span=root_span)
+                logging.exception("nl_mutation_pending_apply_failed id=%s", self.pending_id)
+                _write_pending_with_status(self.pending_root, pending, "failed", now_iso=self._now_iso)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("Failed to apply pending action. Check logs for details.")
+                return
+            if self._refresh_index_async is not None:
+                with telemetry.start_span("index.refresh"):
+                    await self._refresh_index_async(self.objects_root, self.index_db)
+            if self._on_canonical_change:
+                self._on_canonical_change()
+            if (
+                self._matching
+                and self._extract_target_ids_from_derived is not None
+                and self._extract_ids_from_written_paths is not None
+                and self._record_affinity_touches is not None
+            ):
+                touched_ids = self._extract_target_ids_from_derived(pending.derived)
+                touched_ids.extend(self._extract_ids_from_written_paths(result.written_paths))
+                self._record_affinity_touches(self._affinity_key, touched_ids, self._matching)
+            _write_pending_with_status(self.pending_root, pending, "confirmed", now_iso=self._now_iso)
+            if self._log_confirm_applied is not None:
+                self._log_confirm_applied(self.pending_id)
+            telemetry.set_span_attribute("squire.outcome", "confirmed", span=root_span)
+            with telemetry.start_span("response.send"):
+                await interaction.response.send_message(_format_apply_success_message(written_paths=result.written_paths))
+            await _disable_view(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.gray)
     async def cancel_button(
@@ -577,19 +675,33 @@ class MutationPendingView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         del button
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This cancellation is not for you.")
-            return
-        pending = load_pending_action(self.pending_root, self.pending_id)
-        if not pending:
-            await interaction.response.send_message("That pending action no longer exists.")
-            return
-        if pending.status != "pending":
-            await interaction.response.send_message(f"This pending action is already {pending.status}.")
-            return
-        _write_pending_with_status(self.pending_root, pending, "cancelled", now_iso=self._now_iso)
-        await interaction.response.send_message("Cancelled. No changes made.")
-        await _disable_view(interaction)
+        with telemetry.start_span(
+            "discord.interaction.nl_pending.cancel",
+            kind=SpanKind.CONSUMER,
+            attributes=_interaction_attributes(interaction, pending_id=self.pending_id),
+        ) as root_span:
+            if not self.is_author(interaction):
+                telemetry.set_span_attribute("squire.outcome", "unauthorized", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("This cancellation is not for you.")
+                return
+            with telemetry.start_span("pending.load"):
+                pending = load_pending_action(self.pending_root, self.pending_id)
+            if not pending:
+                telemetry.set_span_attribute("squire.outcome", "pending_missing", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("That pending action no longer exists.")
+                return
+            if pending.status != "pending":
+                telemetry.set_span_attribute("squire.outcome", "pending_not_active", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message(f"This pending action is already {pending.status}.")
+                return
+            _write_pending_with_status(self.pending_root, pending, "cancelled", now_iso=self._now_iso)
+            telemetry.set_span_attribute("squire.outcome", "cancelled", span=root_span)
+            with telemetry.start_span("response.send"):
+                await interaction.response.send_message("Cancelled. No changes made.")
+            await _disable_view(interaction)
 
 
 class AutoApplyFeedbackView(discord.ui.View):
@@ -609,12 +721,21 @@ class AutoApplyFeedbackView(discord.ui.View):
         button: discord.ui.Button,
     ) -> None:
         del button
-        if not self.is_author(interaction):
-            await interaction.response.send_message("This feedback is not for you.")
-            return
-        await interaction.response.send_message(
-            "Sorry about that. Reply with `!fix {id} field=value` or `!append {id} <text>` to correct it.".format(
-                id=self.target_id
-            )
-        )
-        await _disable_view(interaction)
+        with telemetry.start_span(
+            "discord.interaction.auto_apply_feedback",
+            kind=SpanKind.CONSUMER,
+            attributes=_interaction_attributes(interaction, target_id=self.target_id),
+        ) as root_span:
+            if not self.is_author(interaction):
+                telemetry.set_span_attribute("squire.outcome", "unauthorized", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await interaction.response.send_message("This feedback is not for you.")
+                return
+            telemetry.set_span_attribute("squire.outcome", "feedback_sent", span=root_span)
+            with telemetry.start_span("response.send"):
+                await interaction.response.send_message(
+                    "Sorry about that. Reply with `!fix {id} field=value` or `!append {id} <text>` to correct it.".format(
+                        id=self.target_id
+                    )
+                )
+            await _disable_view(interaction)

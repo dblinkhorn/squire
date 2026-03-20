@@ -3,8 +3,17 @@ Extract structured fields required by the schema and include a confidence score 
 If the input is ambiguous, keep confidence low and set unknown fields to null.
 Only use fields allowed by the schema for the chosen object_type.
 If a field is unknown or not present, include it as null rather than omitting it.
+Use admin only for single concrete tasks or commitments.
+Use projects for broader outcome-oriented efforts that likely involve multiple steps, planning, coordination, waiting, or phased work, even when phrased as a short imperative.
 For admin items, status should be "open" by default and remain open until the user explicitly confirms completion.
 For admin items, if next_action is unclear but the user wrote a short imperative, use the title as next_action.
+For project items, a short imperative can still describe the project title when it names the larger outcome rather than the immediate task.
+For project items, set next_action to the first concrete step only when it is directly implied by the note; otherwise leave next_action null.
+Examples:
+- "Call dentist next Tuesday" -> admin
+- "Buy primer for the porch" -> admin
+- "Repaint front of the house" -> projects
+- "Plan kitchen remodel" -> projects
 If a time is specified, set due_at to a full ISO datetime with timezone offset (use the provided reference timezone) and leave due_date null.
 If only a date is specified, set due_date and leave due_at null.
 When time is ambiguous, use context from the note to choose the most likely time of day.

@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 import discord
+from opentelemetry.trace import SpanKind
 
 from squire_core.config_utils import load_llm_config
 from squire_core.id_utils import generate_prefixed_id
 from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.llm.registry import create_provider
 from squire_core.raw_event import RawEvent, Source, write_raw_event
+from squire_core import telemetry
 from squire_core.transport import commands as _transport_commands
 from squire_core.transport import inbound as _transport_inbound
 from squire_core.transport import routing as _transport_routing
@@ -237,89 +239,131 @@ async def handle_message(
     if not content:
         return
 
+    context: TransportMessageContext = build_transport_context(message)
     prune_nl_clarification_contexts(state_store=runtime_state)
     if content == "DELETE":
-        handled = await handle_archive_clear_confirmation(
-            message,
-            config,
-            runtime_state=runtime_state,
-            due_time_reminder_notifier=due_time_reminder_notifier,
-        )
-        if handled:
-            return
+        with telemetry.start_span(
+            "discord.message.archive_clear_confirm",
+            kind=SpanKind.CONSUMER,
+            attributes=_message_span_attributes(context),
+        ) as root_span:
+            telemetry.set_span_attribute("squire.flow", "archive_clear_confirm", span=root_span)
+            telemetry.set_span_attribute("squire.outcome", "started", span=root_span)
+            handled = await handle_archive_clear_confirmation(
+                message,
+                config,
+                runtime_state=runtime_state,
+                due_time_reminder_notifier=due_time_reminder_notifier,
+            )
+            if handled:
+                telemetry.set_span_attribute("squire.outcome", "handled", span=root_span)
+                return
 
     await _safe_add_reaction(message, "⏳")
 
     raw_dir = Path(config.get("paths", {}).get("events_raw", "events/raw"))
     raw_id = _generate_raw_id()
-    raw_event = RawEvent(
-        raw_event_id=raw_id,
-        source=Source.discord,
-        source_message_id=str(message.id),
-        timestamp=message.created_at.isoformat(),
-        text=content,
-    )
-    write_raw_event(raw_event, raw_dir)
-    logging.info(
-        "raw_event_written id=%s source=discord source_message_id=%s",
-        raw_id,
-        message.id,
-    )
-
-    if content.startswith("!"):
-        handled = await handle_command(
-            message,
-            content,
-            raw_id,
-            config,
-            runtime_state=runtime_state,
-            llm_provider=llm_provider,
-            embedding_provider=embedding_provider,
-            due_time_reminder_notifier=due_time_reminder_notifier,
+    span_name = "discord.message.command" if content.startswith("!") else "discord.message.capture"
+    with telemetry.start_span(
+        span_name,
+        kind=SpanKind.CONSUMER,
+        attributes=_message_span_attributes(context, raw_id=raw_id),
+    ) as root_span:
+        telemetry.set_span_attribute("squire.flow", "command" if content.startswith("!") else "capture", span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "started", span=root_span)
+        raw_event = RawEvent(
+            raw_event_id=raw_id,
+            source=Source.discord,
+            source_message_id=str(message.id),
+            timestamp=message.created_at.isoformat(),
+            text=content,
         )
-        if handled:
-            return
+        with telemetry.start_span("event.raw.write") as raw_write_span:
+            telemetry.set_span_attribute("squire.raw_id", raw_id, span=raw_write_span)
+            write_raw_event(raw_event, raw_dir)
+        logging.info(
+            "raw_event_written id=%s source=discord source_message_id=%s",
+            raw_id,
+            message.id,
+        )
 
-    try:
-        llm_config = load_llm_config(config)
-    except ValueError as exc:
-        await _discord_io.swap_reaction(message, "⏳", "⚠️")
-        await _send_response(message, str(exc))
-        return
-    model = llm_model or llm_config.model
-    if not model:
-        await _discord_io.swap_reaction(message, "⏳", "⚠️")
-        await _send_response(message, "No interpreter model configured.")
-        return
+        if content.startswith("!"):
+            handled = await handle_command(
+                message,
+                content,
+                raw_id,
+                config,
+                runtime_state=runtime_state,
+                llm_provider=llm_provider,
+                embedding_provider=embedding_provider,
+                due_time_reminder_notifier=due_time_reminder_notifier,
+            )
+            if handled:
+                return
 
-    provider = llm_provider
-    if provider is None:
         try:
-            provider = create_provider(llm_config.provider)
-        except Exception as exc:
+            llm_config = load_llm_config(config)
+        except ValueError as exc:
+            telemetry.record_exception(exc, span=root_span)
+            telemetry.set_span_attribute("squire.outcome", "config_error", span=root_span)
             await _discord_io.swap_reaction(message, "⏳", "⚠️")
-            await _send_response(message, f"Failed to initialize configured LLM provider: {exc}")
+            await _send_response(message, str(exc))
             return
-    active_embedding_provider = embedding_provider or provider
-    context: TransportMessageContext = build_transport_context(message)
-    runtime = _build_inbound_runtime(
-        message,
-        runtime_state,
-        provider,
-        active_embedding_provider,
-        due_time_reminder_notifier,
-    )
-    await _transport_inbound.handle_non_command_message(
-        runtime=runtime,
-        context=context,
-        content=content,
-        raw_id=raw_id,
-        config=config,
-        provider=provider,
-        model=model,
-        schema_map=SCHEMA_MAP,
-        embedding_provider=active_embedding_provider,
-    )
+        model = llm_model or llm_config.model
+        if not model:
+            telemetry.set_span_attribute("squire.outcome", "config_error", span=root_span)
+            await _discord_io.swap_reaction(message, "⏳", "⚠️")
+            await _send_response(message, "No interpreter model configured.")
+            return
+
+        provider = llm_provider
+        if provider is None:
+            try:
+                provider = create_provider(llm_config.provider)
+            except Exception as exc:
+                telemetry.record_exception(exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "provider_init_failed", span=root_span)
+                await _discord_io.swap_reaction(message, "⏳", "⚠️")
+                await _send_response(message, f"Failed to initialize configured LLM provider: {exc}")
+                return
+        active_embedding_provider = embedding_provider or provider
+        runtime = _build_inbound_runtime(
+            message,
+            runtime_state,
+            provider,
+            active_embedding_provider,
+            due_time_reminder_notifier,
+        )
+        await _transport_inbound.handle_non_command_message(
+            runtime=runtime,
+            context=context,
+            content=content,
+            raw_id=raw_id,
+            config=config,
+            provider=provider,
+            model=model,
+            schema_map=SCHEMA_MAP,
+            embedding_provider=active_embedding_provider,
+        )
+
+
+def _message_span_attributes(
+    context: TransportMessageContext,
+    *,
+    raw_id: str | None = None,
+) -> dict[str, object]:
+    attributes: dict[str, object] = {
+        "squire.transport": "discord",
+        "discord.message_id": context.message_id,
+        "discord.channel_id": context.channel_id,
+        "discord.user_id": context.user_id,
+        "squire.is_dm": context.is_dm,
+    }
+    if context.thread_id:
+        attributes["discord.thread_id"] = context.thread_id
+    if raw_id:
+        attributes["squire.raw_id"] = raw_id
+    return attributes
 
 
 __all__ = [

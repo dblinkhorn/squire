@@ -9,6 +9,7 @@ from datetime import date, datetime, time, timedelta, tzinfo
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 
+from squire_core import telemetry
 from squire_core.config_utils import NLCommandRoutingConfig, load_matching_config, load_nl_command_routing_config
 from squire_core.id_utils import generate_prefixed_id
 from squire_core.pending_actions import PendingAction, write_pending_action
@@ -1066,10 +1067,13 @@ async def queue_nl_mutation_confirmation(
     source_view: str | None = None,
     allow_clarification: bool = True,
 ) -> bool:
+    root_span = telemetry.current_span()
     operations = plan_input.get("operations")
     if not isinstance(operations, list) or not operations:
+        telemetry.set_span_attribute("squire.outcome", "nl_plan_missing_operations", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "I can apply that update, but I need which actions to run.")
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, "I can apply that update, but I need which actions to run.")
         return True
 
     _log_nl_plan_generated(raw_event_id=raw_id, action_type="multi_operation")
@@ -1080,27 +1084,51 @@ async def queue_nl_mutation_confirmation(
     now_iso = runtime.now_iso()
     normalized_entries: list[dict[str, Any]] = []
 
-    for operation in operations:
-        if not isinstance(operation, dict):
-            continue
-        action_type = _coerce_non_empty_str(operation.get("action_type")) or ""
-        operation_id = _coerce_non_empty_str(operation.get("operation_id")) or generate_prefixed_id("OP_")
-        command_name = _command_name_for_action_type(action_type)
-        target_refs = operation.get("target_refs")
-        if not isinstance(target_refs, list):
-            target_refs = []
-        if not target_refs:
-            normalized_entries.append(
-                {
+    with telemetry.start_span("nl.mutation.plan"):
+        for operation in operations:
+            if not isinstance(operation, dict):
+                continue
+            action_type = _coerce_non_empty_str(operation.get("action_type")) or ""
+            operation_id = _coerce_non_empty_str(operation.get("operation_id")) or generate_prefixed_id("OP_")
+            command_name = _command_name_for_action_type(action_type)
+            target_refs = operation.get("target_refs")
+            if not isinstance(target_refs, list):
+                target_refs = []
+            if not target_refs:
+                normalized_entries.append(
+                    {
+                        "operation_id": operation_id,
+                        "action_type": action_type,
+                        "target_ref": None,
+                        "target_token": None,
+                        "target_resolved_id": None,
+                        "target_object_type": None,
+                        "op_status": "unresolved",
+                        "reason_code": "target_missing",
+                        "normalization_notes": ["target_missing"],
+                        "normalized_fields": {},
+                        "proposed_operation": None,
+                        "_command_name": command_name,
+                        "_row_number": None,
+                        "_source_view": source_view,
+                        "target_title": None,
+                    }
+                )
+                continue
+            for target_ref in target_refs:
+                target_token = None
+                if isinstance(target_ref, dict):
+                    target_token = _coerce_non_empty_str(target_ref.get("target_token"))
+                entry: dict[str, Any] = {
                     "operation_id": operation_id,
                     "action_type": action_type,
-                    "target_ref": None,
-                    "target_token": None,
+                    "target_ref": target_ref if isinstance(target_ref, dict) else None,
+                    "target_token": target_token,
                     "target_resolved_id": None,
                     "target_object_type": None,
                     "op_status": "unresolved",
-                    "reason_code": "target_missing",
-                    "normalization_notes": ["target_missing"],
+                    "reason_code": None,
+                    "normalization_notes": [],
                     "normalized_fields": {},
                     "proposed_operation": None,
                     "_command_name": command_name,
@@ -1108,143 +1136,120 @@ async def queue_nl_mutation_confirmation(
                     "_source_view": source_view,
                     "target_title": None,
                 }
-            )
-            continue
-        for target_ref in target_refs:
-            target_token = None
-            if isinstance(target_ref, dict):
-                target_token = _coerce_non_empty_str(target_ref.get("target_token"))
-            entry: dict[str, Any] = {
-                "operation_id": operation_id,
-                "action_type": action_type,
-                "target_ref": target_ref if isinstance(target_ref, dict) else None,
-                "target_token": target_token,
-                "target_resolved_id": None,
-                "target_object_type": None,
-                "op_status": "unresolved",
-                "reason_code": None,
-                "normalization_notes": [],
-                "normalized_fields": {},
-                "proposed_operation": None,
-                "_command_name": command_name,
-                "_row_number": None,
-                "_source_view": source_view,
-                "target_title": None,
-            }
-            if target_token is None:
-                entry["reason_code"] = "target_missing"
-                entry["normalization_notes"] = ["target_missing"]
-                normalized_entries.append(entry)
-                continue
+                if target_token is None:
+                    entry["reason_code"] = "target_missing"
+                    entry["normalization_notes"] = ["target_missing"]
+                    normalized_entries.append(entry)
+                    continue
 
-            target_resolution = runtime.resolve_command_target(context, target_token)
-            entry["_row_number"] = target_resolution.row_number
-            entry["_source_view"] = target_resolution.source_view or source_view
-            if target_resolution.reason and target_resolution.row_number is not None:
-                runtime.log_numbered_mutation_resolution_failed(
-                    raw_event_id=raw_id,
-                    command=command_name,
-                    reason=target_resolution.reason,
-                    source_view=target_resolution.source_view or source_view,
-                    row_number=target_resolution.row_number,
-                )
-            if target_resolution.error:
-                entry["reason_code"] = runtime.map_target_resolution_reason_to_plan_reason(target_resolution.reason)
-                entry["normalization_notes"] = [target_resolution.error]
-                normalized_entries.append(entry)
-                continue
+                target_resolution = runtime.resolve_command_target(context, target_token)
+                entry["_row_number"] = target_resolution.row_number
+                entry["_source_view"] = target_resolution.source_view or source_view
+                if target_resolution.reason and target_resolution.row_number is not None:
+                    runtime.log_numbered_mutation_resolution_failed(
+                        raw_event_id=raw_id,
+                        command=command_name,
+                        reason=target_resolution.reason,
+                        source_view=target_resolution.source_view or source_view,
+                        row_number=target_resolution.row_number,
+                    )
+                if target_resolution.error:
+                    entry["reason_code"] = runtime.map_target_resolution_reason_to_plan_reason(target_resolution.reason)
+                    entry["normalization_notes"] = [target_resolution.error]
+                    normalized_entries.append(entry)
+                    continue
 
-            target_id = target_resolution.target_id
-            if not target_id:
-                entry["reason_code"] = "target_missing"
-                entry["normalization_notes"] = ["target_missing"]
-                normalized_entries.append(entry)
-                continue
-            entry["target_resolved_id"] = target_id
+                target_id = target_resolution.target_id
+                if not target_id:
+                    entry["reason_code"] = "target_missing"
+                    entry["normalization_notes"] = ["target_missing"]
+                    normalized_entries.append(entry)
+                    continue
+                entry["target_resolved_id"] = target_id
 
-            target_path = runtime.find_object_path(objects_root, target_id)
-            if not target_path:
-                entry["reason_code"] = "target_unknown_id"
-                entry["normalization_notes"] = [f"unknown_id:{target_id}"]
-                normalized_entries.append(entry)
-                continue
-            frontmatter = runtime.load_frontmatter(target_path)
-            object_type_value = frontmatter.get("type")
-            if not isinstance(object_type_value, str) or not object_type_value.strip():
-                entry["reason_code"] = "validation_failed"
-                entry["normalization_notes"] = [f"type_missing:{target_id}"]
-                normalized_entries.append(entry)
-                continue
-            object_type = object_type_value.strip()
-            entry["target_object_type"] = object_type
-            entry["target_title"] = _coerce_non_empty_str(frontmatter.get("title")) or target_id
+                target_path = runtime.find_object_path(objects_root, target_id)
+                if not target_path:
+                    entry["reason_code"] = "target_unknown_id"
+                    entry["normalization_notes"] = [f"unknown_id:{target_id}"]
+                    normalized_entries.append(entry)
+                    continue
+                frontmatter = runtime.load_frontmatter(target_path)
+                object_type_value = frontmatter.get("type")
+                if not isinstance(object_type_value, str) or not object_type_value.strip():
+                    entry["reason_code"] = "validation_failed"
+                    entry["normalization_notes"] = [f"type_missing:{target_id}"]
+                    normalized_entries.append(entry)
+                    continue
+                object_type = object_type_value.strip()
+                entry["target_object_type"] = object_type
+                entry["target_title"] = _coerce_non_empty_str(frontmatter.get("title")) or target_id
 
-            normalized_fields: dict[str, str] = {}
-            notes: list[str] = []
-            reason_code: str | None = None
-            proposed_operation: dict[str, Any] | None = None
+                normalized_fields: dict[str, str] = {}
+                notes: list[str] = []
+                reason_code: str | None = None
+                proposed_operation: dict[str, Any] | None = None
 
-            if action_type == "mark_done":
-                notes.append("action:mark_done")
-                if object_type != "admin":
-                    reason_code = "target_wrong_type"
+                if action_type == "mark_done":
+                    notes.append("action:mark_done")
+                    if object_type != "admin":
+                        reason_code = "target_wrong_type"
+                    else:
+                        normalized_fields = {"status": "done", "completed_at": now_iso}
+                        proposed_operation = {
+                            "op": "update",
+                            "target_id": target_id,
+                            "fields": dict(normalized_fields),
+                            "object_type": object_type,
+                        }
+                elif action_type == "append_body":
+                    append_text = _coerce_non_empty_str(operation.get("append_text"))
+                    notes.append("action:append_body")
+                    if append_text is None:
+                        reason_code = "value_parse_failed"
+                    else:
+                        normalized_fields = {"body": append_text}
+                        proposed_operation = {
+                            "op": "append",
+                            "target_id": target_id,
+                            "fields": dict(normalized_fields),
+                            "object_type": object_type,
+                        }
+                elif action_type == "set_fields":
+                    field_updates = operation.get("field_updates")
+                    if not isinstance(field_updates, list):
+                        field_updates = []
+                    normalized_fields, reason_code, notes = normalize_set_fields(
+                        object_type=object_type,
+                        field_updates=field_updates,
+                        routing=routing,
+                        now=now_local,
+                        tz=tz,
+                    )
+                    if normalized_fields is None:
+                        normalized_fields = {}
+                    if reason_code is None:
+                        proposed_operation = {
+                            "op": "update",
+                            "target_id": target_id,
+                            "fields": dict(normalized_fields),
+                            "object_type": object_type,
+                        }
                 else:
-                    normalized_fields = {"status": "done", "completed_at": now_iso}
-                    proposed_operation = {
-                        "op": "update",
-                        "target_id": target_id,
-                        "fields": dict(normalized_fields),
-                        "object_type": object_type,
-                    }
-            elif action_type == "append_body":
-                append_text = _coerce_non_empty_str(operation.get("append_text"))
-                notes.append("action:append_body")
-                if append_text is None:
-                    reason_code = "value_parse_failed"
-                else:
-                    normalized_fields = {"body": append_text}
-                    proposed_operation = {
-                        "op": "append",
-                        "target_id": target_id,
-                        "fields": dict(normalized_fields),
-                        "object_type": object_type,
-                    }
-            elif action_type == "set_fields":
-                field_updates = operation.get("field_updates")
-                if not isinstance(field_updates, list):
-                    field_updates = []
-                normalized_fields, reason_code, notes = normalize_set_fields(
-                    object_type=object_type,
-                    field_updates=field_updates,
-                    routing=routing,
-                    now=now_local,
-                    tz=tz,
-                )
-                if normalized_fields is None:
-                    normalized_fields = {}
-                if reason_code is None:
-                    proposed_operation = {
-                        "op": "update",
-                        "target_id": target_id,
-                        "fields": dict(normalized_fields),
-                        "object_type": object_type,
-                    }
-            else:
-                reason_code = "validation_failed"
-                notes.append("unsupported_action")
+                    reason_code = "validation_failed"
+                    notes.append("unsupported_action")
 
-            if reason_code is None and proposed_operation is not None:
-                entry["op_status"] = "resolved"
-                entry["reason_code"] = None
-                entry["normalization_notes"] = notes
-                entry["normalized_fields"] = {key: str(value) for key, value in normalized_fields.items()}
-                entry["proposed_operation"] = proposed_operation
-            else:
-                entry["op_status"] = "unresolved"
-                entry["reason_code"] = reason_code or "validation_failed"
-                entry["normalization_notes"] = notes
-                entry["normalized_fields"] = {key: str(value) for key, value in normalized_fields.items()}
-            normalized_entries.append(entry)
+                if reason_code is None and proposed_operation is not None:
+                    entry["op_status"] = "resolved"
+                    entry["reason_code"] = None
+                    entry["normalization_notes"] = notes
+                    entry["normalized_fields"] = {key: str(value) for key, value in normalized_fields.items()}
+                    entry["proposed_operation"] = proposed_operation
+                else:
+                    entry["op_status"] = "unresolved"
+                    entry["reason_code"] = reason_code or "validation_failed"
+                    entry["normalization_notes"] = notes
+                    entry["normalized_fields"] = {key: str(value) for key, value in normalized_fields.items()}
+                normalized_entries.append(entry)
 
     seen_updates: dict[tuple[str, str], tuple[str, int]] = {}
     conflict_indexes: set[int] = set()
@@ -1301,12 +1306,14 @@ async def queue_nl_mutation_confirmation(
                     "validation_outcome": "clarify",
                 },
             )
-        runtime.store_nl_clarification_context(
-            context=context,
-            raw_event_id=raw_id,
-            unresolved_scope=unresolved_scope,
-            base_plan_input=plan_input,
-        )
+        with telemetry.start_span("nl.clarification.store"):
+            runtime.store_nl_clarification_context(
+                context=context,
+                raw_event_id=raw_id,
+                unresolved_scope=unresolved_scope,
+                base_plan_input=plan_input,
+            )
+        telemetry.set_span_attribute("squire.outcome", "nl_clarification_requested", span=root_span)
         question, options = _clarification_for_plan_reason(first_reason)
         clarification = _format_nl_clarification_message(
             question=question,
@@ -1314,10 +1321,11 @@ async def queue_nl_mutation_confirmation(
             fallback="I need one clarification before I can continue with that request.",
         )
         await runtime.swap_reaction(context, "⏳", "❓")
-        await runtime.send_response(
-            context,
-            "\n".join([clarification, "", _summarize_unresolved_scope(unresolved_scope)]),
-        )
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(
+                context,
+                "\n".join([clarification, "", _summarize_unresolved_scope(unresolved_scope)]),
+            )
         return True
 
     cancelled_entries: list[dict[str, Any]] = []
@@ -1353,7 +1361,9 @@ async def queue_nl_mutation_confirmation(
             lines.append("")
             lines.append(_summarize_unresolved_scope(_build_unresolved_scope_from_entries(cancelled_entries)))
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "\n".join(lines))
+        telemetry.set_span_attribute("squire.outcome", "nl_plan_blocked", span=root_span)
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, "\n".join(lines))
         return True
 
     for entry in resolved_entries:
@@ -1418,8 +1428,16 @@ async def queue_nl_mutation_confirmation(
         decision_confidence=confidence,
         last_decision_id=None,
     )
-    write_pending_action(pending, pending_root)
+    with telemetry.start_span("nl.pending.write"):
+        write_pending_action(pending, pending_root)
     _log_nl_plan_pending_created(raw_event_id=raw_id, pending_id=pending_id, action_type="multi_operation")
+    telemetry.set_span_attributes(
+        {
+            "squire.pending_action_id": pending_id,
+            "squire.outcome": "nl_pending_created",
+        },
+        span=root_span,
+    )
 
     outcome = "partial" if cancelled_entries else "ok"
     if routing.plan_trace_enabled:
@@ -1475,12 +1493,13 @@ async def queue_nl_mutation_confirmation(
         resolved_entries[0].get("target_resolved_id")
     )
     await runtime.swap_reaction(context, "⏳", "❓")
-    await runtime.send_response(
-        context,
-        "\n".join(lines),
-        thread_title=thread_title,
-        view=view,
-    )
+    with telemetry.start_span("response.send"):
+        await runtime.send_response(
+            context,
+            "\n".join(lines),
+            thread_title=thread_title,
+            view=view,
+        )
     return True
 
 
@@ -1494,6 +1513,7 @@ async def maybe_route_nl_command(
     provider: Any,
     model: str,
 ) -> bool:
+    root_span = telemetry.current_span()
     routing = load_nl_command_routing_config(config)
     if not routing.enabled:
         return False
@@ -1511,13 +1531,14 @@ async def maybe_route_nl_command(
         return False
 
     try:
-        interpretation = await runtime.interpret_text_async(
-            provider=provider,
-            text=content,
-            model=model,
-            system_prompt=prompt,
-            schema_path=_NL_INTENT_SCHEMA_PATH,
-        )
+        with telemetry.start_span("llm.route_intent"):
+            interpretation = await runtime.interpret_text_async(
+                provider=provider,
+                text=content,
+                model=model,
+                system_prompt=prompt,
+                schema_path=_NL_INTENT_SCHEMA_PATH,
+            )
     except Exception as exc:
         if exc.__class__.__name__ == "InterpretationValidationError":
             logging.warning("nl_route_invalid id=%s error=%s", raw_id, exc)
@@ -1531,6 +1552,14 @@ async def maybe_route_nl_command(
     risk_tier = route.risk_tier
     confidence = route.confidence
     mapped_command = _NL_COMMAND_FOR_INTENT.get(intent)
+    telemetry.set_span_attributes(
+        {
+            "squire.nl_route": route.route,
+            "squire.intent": intent,
+            "squire.risk_tier": risk_tier,
+        },
+        span=root_span,
+    )
     clarification_payload = route.clarification or {}
     clarification_question = _coerce_non_empty_str(clarification_payload.get("question"))
     clarification_options_raw = clarification_payload.get("options")
@@ -1550,23 +1579,26 @@ async def maybe_route_nl_command(
         threshold = routing.read_auto_min_confidence if risk_tier == "read" else routing.mutation_confirm_min_confidence
     band = _confidence_band(confidence, threshold)
 
-    clarification_context = runtime.load_nl_clarification_context(context)
+    with telemetry.start_span("nl.clarification.load"):
+        clarification_context = runtime.load_nl_clarification_context(context)
     if clarification_context is not None:
         runtime.clear_nl_clarification_context(context)
         if route.route != "mutation_plan":
             _log_nl_clarification_scope_blocked(raw_event_id=raw_id)
             _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(clarification_context.unresolved_scope))
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(
-                context,
-                "\n".join(
-                    [
-                        _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
-                        "",
-                        _summarize_unresolved_scope(clarification_context.unresolved_scope),
-                    ]
-                ),
-            )
+            telemetry.set_span_attribute("squire.outcome", "nl_clarification_scope_blocked", span=root_span)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(
+                    context,
+                    "\n".join(
+                        [
+                            _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
+                            "",
+                            _summarize_unresolved_scope(clarification_context.unresolved_scope),
+                        ]
+                    ),
+                )
             return True
 
         clarification_raw_plan = route.mutation_plan or {}
@@ -1583,16 +1615,18 @@ async def maybe_route_nl_command(
             _log_nl_clarification_scope_blocked(raw_event_id=raw_id)
             _log_nl_plan_unresolved_cancelled(raw_event_id=raw_id, count=len(clarification_context.unresolved_scope))
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(
-                context,
-                "\n".join(
-                    [
-                        _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
-                        "",
-                        _summarize_unresolved_scope(clarification_context.unresolved_scope),
-                    ]
-                ),
-            )
+            telemetry.set_span_attribute("squire.outcome", "nl_clarification_scope_blocked", span=root_span)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(
+                    context,
+                    "\n".join(
+                        [
+                            _NL_OUT_OF_SCOPE_CLARIFICATION_COPY,
+                            "",
+                            _summarize_unresolved_scope(clarification_context.unresolved_scope),
+                        ]
+                    ),
+                )
             return True
 
         merged_plan_input = _merge_clarification_plan_input(
@@ -1650,7 +1684,9 @@ async def maybe_route_nl_command(
             mapped_command=mapped_command,
         )
         await runtime.swap_reaction(context, "⏳", "❓")
-        await runtime.send_response(context, _explicit_only_guidance_for_intent(intent))
+        telemetry.set_span_attribute("squire.outcome", "nl_blocked_explicit_only", span=root_span)
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, _explicit_only_guidance_for_intent(intent))
         return True
 
     if route.route == "clarify":
@@ -1670,7 +1706,9 @@ async def maybe_route_nl_command(
                 mapped_command=mapped_command,
             )
             await runtime.swap_reaction(context, "⏳", "❓")
-            await runtime.send_response(context, clarification)
+            telemetry.set_span_attribute("squire.outcome", "nl_clarified", span=root_span)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(context, clarification)
             return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,
@@ -1718,7 +1756,9 @@ async def maybe_route_nl_command(
                     mapped_command=mapped_command,
                 )
                 await runtime.swap_reaction(context, "⏳", "❓")
-                await runtime.send_response(context, clarification)
+                telemetry.set_span_attribute("squire.outcome", "nl_clarified", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await runtime.send_response(context, clarification)
                 return True
             _log_nl_route_evaluated(
                 raw_event_id=raw_id,
@@ -1738,7 +1778,9 @@ async def maybe_route_nl_command(
                 confidence_band=band,
                 mapped_command=command,
             )
-            return await runtime.handle_command(context, command, raw_id, config)
+            with telemetry.start_span("nl.read.dispatch"):
+                with telemetry.start_span("nl.command.delegate"):
+                    return await runtime.handle_command(context, command, raw_id, config)
         if routing.clarify_on_ambiguous and band == "medium":
             options = clarification_options or [f"Run `{command}`", "Save this as a note"]
             clarification = _format_nl_clarification_message(
@@ -1756,7 +1798,9 @@ async def maybe_route_nl_command(
                 mapped_command=command,
             )
             await runtime.swap_reaction(context, "⏳", "❓")
-            await runtime.send_response(context, clarification)
+            telemetry.set_span_attribute("squire.outcome", "nl_clarified", span=root_span)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(context, clarification)
             return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,
@@ -1790,10 +1834,12 @@ async def maybe_route_nl_command(
                 mapped_command=mapped_command,
             )
             await runtime.swap_reaction(context, "⏳", "❓")
-            await runtime.send_response(
-                context,
-                "Natural-language mutations are disabled. Use explicit commands like `!done`, `!append`, or `!fix`.",
-            )
+            telemetry.set_span_attribute("squire.outcome", "nl_mutations_disabled", span=root_span)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(
+                    context,
+                    "Natural-language mutations are disabled. Use explicit commands like `!done`, `!append`, or `!fix`.",
+                )
             return True
 
         raw_plan = route.mutation_plan or {}
@@ -1820,7 +1866,9 @@ async def maybe_route_nl_command(
                     mapped_command=mapped_command,
                 )
                 await runtime.swap_reaction(context, "⏳", "❓")
-                await runtime.send_response(context, clarification)
+                telemetry.set_span_attribute("squire.outcome", "nl_clarified", span=root_span)
+                with telemetry.start_span("response.send"):
+                    await runtime.send_response(context, clarification)
                 return True
             _log_nl_route_evaluated(
                 raw_event_id=raw_id,
@@ -1864,7 +1912,9 @@ async def maybe_route_nl_command(
                 mapped_command=mapped_command,
             )
             await runtime.swap_reaction(context, "⏳", "❓")
-            await runtime.send_response(context, clarification)
+            telemetry.set_span_attribute("squire.outcome", "nl_clarified", span=root_span)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(context, clarification)
             return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,

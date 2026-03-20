@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
+from squire_core import telemetry
 from squire_core.config_utils import load_decision_config, load_matching_config
 from squire_core.decision_flow import apply_decision_to_derived, evaluate_decision
 from squire_core.derived_event_store import write_derived_event
@@ -137,6 +138,23 @@ class InboundRuntime(Protocol):
         ...
 
 
+async def _send_traced_response(
+    runtime: InboundRuntime,
+    context: TransportMessageContext,
+    content: str,
+    *,
+    thread_title: str | None = None,
+    view: Any = None,
+) -> None:
+    with telemetry.start_span("response.send"):
+        await runtime.send_response(
+            context,
+            content,
+            thread_title=thread_title,
+            view=view,
+        )
+
+
 async def handle_non_command_message(
     *,
     runtime: InboundRuntime,
@@ -149,15 +167,19 @@ async def handle_non_command_message(
     schema_map: dict[str, Path],
     embedding_provider: LLMProvider | AsyncLLMProvider | None = None,
 ) -> None:
-    nl_routed = await runtime.maybe_route_nl_command(
-        context=context,
-        content=content,
-        raw_id=raw_id,
-        config=config,
-        provider=provider,
-        model=model,
-    )
+    root_span = telemetry.current_span()
+    telemetry.set_span_attribute("squire.raw_id", raw_id, span=root_span)
+    with telemetry.start_span("nl.route.precheck"):
+        nl_routed = await runtime.maybe_route_nl_command(
+            context=context,
+            content=content,
+            raw_id=raw_id,
+            config=config,
+            provider=provider,
+            model=model,
+        )
     if nl_routed:
+        telemetry.set_span_attribute("squire.outcome", "routed", span=root_span)
         return
 
     classify_schema = Path("config/schemas/derived_event_classify_v1.json")
@@ -171,33 +193,37 @@ async def handle_non_command_message(
         "config/prompts/candidate_query_v1.txt",
     )
     if not classify_prompt_path or not extract_prompt_path:
+        telemetry.set_span_attribute("squire.outcome", "prompt_missing", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(
+        await _send_traced_response(
+            runtime,
             context,
             "Prompt paths are missing. Set llm.classify_prompt_path and llm.interpreter_prompt_path.",
         )
         return
 
     try:
-        classify_prompt = runtime.load_prompt(classify_prompt_path)
-        extract_prompt = runtime.load_prompt(extract_prompt_path)
+        with telemetry.start_span("prompt.load"):
+            classify_prompt = runtime.load_prompt(classify_prompt_path)
+            extract_prompt = runtime.load_prompt(extract_prompt_path)
+            decision_prompt = None
+            candidate_query_prompt = None
+            if decision_prompt_path:
+                try:
+                    decision_prompt = runtime.load_prompt(decision_prompt_path)
+                except OSError as exc:
+                    logging.warning("decision_prompt_load_failed path=%s error=%s", decision_prompt_path, exc)
+            if candidate_query_prompt_path:
+                try:
+                    candidate_query_prompt = runtime.load_prompt(candidate_query_prompt_path)
+                except OSError as exc:
+                    logging.warning("candidate_query_prompt_load_failed path=%s error=%s", candidate_query_prompt_path, exc)
     except OSError as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "prompt_load_failed", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, f"Failed to load prompt files: {exc}")
+        await _send_traced_response(runtime, context, f"Failed to load prompt files: {exc}")
         return
-
-    decision_prompt = None
-    candidate_query_prompt = None
-    if decision_prompt_path:
-        try:
-            decision_prompt = runtime.load_prompt(decision_prompt_path)
-        except OSError as exc:
-            logging.warning("decision_prompt_load_failed path=%s error=%s", decision_prompt_path, exc)
-    if candidate_query_prompt_path:
-        try:
-            candidate_query_prompt = runtime.load_prompt(candidate_query_prompt_path)
-        except OSError as exc:
-            logging.warning("candidate_query_prompt_load_failed path=%s error=%s", candidate_query_prompt_path, exc)
 
     decision_config = load_decision_config(config) if decision_prompt else None
     matching_config = load_matching_config(config)
@@ -215,14 +241,18 @@ async def handle_non_command_message(
     extract_prompt = f"{extract_prompt} {reference}"
 
     try:
-        classification = await runtime.interpret_text_async(
-            provider=provider,
-            text=content,
-            model=model,
-            system_prompt=classify_prompt,
-            schema_path=classify_schema,
-        )
+        with telemetry.start_span("llm.classify") as classify_span:
+            classification = await runtime.interpret_text_async(
+                provider=provider,
+                text=content,
+                model=model,
+                system_prompt=classify_prompt,
+                schema_path=classify_schema,
+            )
+            telemetry.set_span_attribute("squire.classify_confidence", classification.derived.get("confidence"), span=classify_span)
     except InterpretationValidationError as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "classify_invalid", span=root_span)
         write_derived_event(
             derived=exc.payload,
             raw_text=exc.raw_text,
@@ -233,9 +263,11 @@ async def handle_non_command_message(
         )
         logging.warning("classification_invalid id=%s error=%s", raw_id, exc)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
+        await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
         return
     except Exception as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "classify_failed", span=root_span)
         write_derived_event(
             derived=None,
             raw_text="",
@@ -246,7 +278,7 @@ async def handle_non_command_message(
         )
         logging.exception("classification_failed id=%s", raw_id)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "Interpretation failed. Please try again.")
+        await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
         return
 
     write_derived_event(
@@ -265,6 +297,13 @@ async def handle_non_command_message(
 
     object_type = classification.derived.get("object_type")
     confidence = classification.derived.get("confidence", 0)
+    telemetry.set_span_attributes(
+        {
+            "squire.object_type": object_type,
+            "squire.classify_confidence": confidence,
+        },
+        span=root_span,
+    )
     threshold = config.get("confidence", {}).get("create_threshold", 0.6)
 
     if not isinstance(object_type, str) or object_type == "unknown" or confidence < threshold:
@@ -275,8 +314,10 @@ async def handle_non_command_message(
             confidence,
             threshold,
         )
+        telemetry.set_span_attribute("squire.outcome", "classify_low_confidence", span=root_span)
         await runtime.swap_reaction(context, "⏳", "❓")
-        await runtime.send_response(
+        await _send_traced_response(
+            runtime,
             context,
             "I couldn't confidently classify that. Please clarify or use a prefix (admin:, project:, idea:, person:).",
         )
@@ -284,28 +325,31 @@ async def handle_non_command_message(
 
     schema_path = schema_map.get(object_type)
     if not schema_path:
-        await runtime.send_unrecognized_category(context)
+        telemetry.set_span_attribute("squire.outcome", "unrecognized_category", span=root_span)
+        with telemetry.start_span("response.send"):
+            await runtime.send_unrecognized_category(context)
         return
 
     if decision_prompt and decision_config:
         affinity_key = runtime.cursor_key(context)
         affinity_scores = runtime.load_affinity_scores(affinity_key, matching=matching_config)
-        decision_result = await matching_pipeline.run_matching_decision(
-            provider=provider,
-            embedding_provider=embedding_provider,
-            model=model,
-            raw_event_id=raw_id,
-            object_type=object_type,
-            message=content,
-            config=config,
-            derived_root=derived_root,
-            decision_prompt=decision_prompt,
-            decision_config=decision_config,
-            matching_config=matching_config,
-            affinity_scores=affinity_scores,
-            now_iso=runtime.now_iso(),
-            candidate_query_prompt=candidate_query_prompt,
-        )
+        with telemetry.start_span("matching.decision"):
+            decision_result = await matching_pipeline.run_matching_decision(
+                provider=provider,
+                embedding_provider=embedding_provider,
+                model=model,
+                raw_event_id=raw_id,
+                object_type=object_type,
+                message=content,
+                config=config,
+                derived_root=derived_root,
+                decision_prompt=decision_prompt,
+                decision_config=decision_config,
+                matching_config=matching_config,
+                affinity_scores=affinity_scores,
+                now_iso=runtime.now_iso(),
+                candidate_query_prompt=candidate_query_prompt,
+            )
         decision_payload = decision_result.decision_payload
         decision_artifact_id = decision_result.decision_artifact_id
         matching_trace = decision_result.matching_trace
@@ -313,15 +357,19 @@ async def handle_non_command_message(
         logging.warning("decision_config_missing id=%s decision_prompt_path=%s", raw_id, decision_prompt_path)
 
     try:
-        interpretation = await runtime.interpret_text_async(
-            provider=provider,
-            text=content,
-            model=model,
-            system_prompt=extract_prompt,
-            schema_path=schema_path,
-        )
-        interpretation.derived["raw_event_id"] = raw_id
+        with telemetry.start_span("llm.extract") as extract_span:
+            interpretation = await runtime.interpret_text_async(
+                provider=provider,
+                text=content,
+                model=model,
+                system_prompt=extract_prompt,
+                schema_path=schema_path,
+            )
+            interpretation.derived["raw_event_id"] = raw_id
+            telemetry.set_span_attribute("squire.object_type", interpretation.derived.get("object_type"), span=extract_span)
     except InterpretationValidationError as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "extract_invalid", span=root_span)
         write_derived_event(
             derived=exc.payload,
             raw_text=exc.raw_text,
@@ -332,9 +380,11 @@ async def handle_non_command_message(
         )
         logging.warning("interpretation_invalid id=%s error=%s", raw_id, exc)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
+        await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
         return
     except Exception as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "extract_failed", span=root_span)
         write_derived_event(
             derived=None,
             raw_text="",
@@ -345,7 +395,7 @@ async def handle_non_command_message(
         )
         logging.exception("interpretation_failed id=%s", raw_id)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "Interpretation failed. Please try again.")
+        await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
         return
 
     write_derived_event(
@@ -376,13 +426,15 @@ async def handle_non_command_message(
             if isinstance(second_value, (int, float)):
                 trace_second_score = float(second_value)
     if decision_payload and decision_config:
-        decision_routing = evaluate_decision(
-            decision_payload,
-            decision_config,
-            top_score=trace_top_score,
-            second_score=trace_second_score,
-        )
+        with telemetry.start_span("decision.evaluate"):
+            decision_routing = evaluate_decision(
+                decision_payload,
+                decision_config,
+                top_score=trace_top_score,
+                second_score=trace_second_score,
+            )
         effective_derived = apply_decision_to_derived(interpretation.derived, decision_routing)
+        telemetry.set_span_attribute("squire.decision_action", decision_routing.action, span=root_span)
     if matching_trace:
         gate = matching_trace.get("gate")
         if not isinstance(gate, dict):
@@ -397,7 +449,8 @@ async def handle_non_command_message(
             ranking["top_score"] = decision_routing.top_score if decision_routing else ranking.get("top_score", 0.0)
             ranking["second_score"] = decision_routing.second_score if decision_routing else ranking.get("second_score")
             ranking["margin"] = decision_routing.margin if decision_routing else ranking.get("margin")
-        runtime.write_matching_trace(derived_root=derived_root, raw_event_id=raw_id, trace_payload=matching_trace)
+        with telemetry.start_span("matching.trace.write"):
+            runtime.write_matching_trace(derived_root=derived_root, raw_event_id=raw_id, trace_payload=matching_trace)
 
     if decision_routing and decision_routing.action == "needs_confirmation":
         pending_root = config.get("paths", {}).get("pending_actions", "events/pending")
@@ -417,6 +470,13 @@ async def handle_non_command_message(
             last_decision_id=decision_artifact_id,
         )
         write_pending_action(pending, pending_root)
+        telemetry.set_span_attributes(
+            {
+                "squire.pending_action_id": pending_id,
+                "squire.outcome": "pending_confirmation",
+            },
+            span=root_span,
+        )
         candidates = decision_payload.get("candidates") if isinstance(decision_payload, dict) else []
         candidate_list = [candidate for candidate in (candidates or []) if isinstance(candidate, dict)]
         default_target_id = None
@@ -440,7 +500,8 @@ async def handle_non_command_message(
             config=config,
         )
         await runtime.swap_reaction(context, "⏳", "❓")
-        await runtime.send_response(
+        await _send_traced_response(
+            runtime,
             context,
             runtime.format_pending_message(pending_id, decision_payload),
             view=view,
@@ -449,17 +510,19 @@ async def handle_non_command_message(
 
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     try:
-        result = runtime.apply_operations(
-            effective_derived,
-            objects_root=objects_root,
-            canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-            derived_schema_path=schema_path,
-            last_decision_id=decision_artifact_id,
-        )
+        with telemetry.start_span("canonical.apply"):
+            result = runtime.apply_operations(
+                effective_derived,
+                objects_root=objects_root,
+                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                derived_schema_path=schema_path,
+                last_decision_id=decision_artifact_id,
+            )
     except Exception:
         logging.exception("apply_failed id=%s object_type=%s", raw_id, object_type)
+        telemetry.set_span_attribute("squire.outcome", "apply_failed", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "Failed to save item. Please try again.")
+        await _send_traced_response(runtime, context, "Failed to save item. Please try again.")
         return
     logging.info(
         "apply_ok id=%s object_type=%s written=%s",
@@ -467,11 +530,12 @@ async def handle_non_command_message(
         object_type,
         ",".join(str(path) for path in result.written_paths),
     )
-    await runtime.refresh_index_async(
-        objects_root,
-        config.get("paths", {}).get("index_db", "index/sb.sqlite"),
-        matching=matching_config,
-    )
+    with telemetry.start_span("index.refresh"):
+        await runtime.refresh_index_async(
+            objects_root,
+            config.get("paths", {}).get("index_db", "index/sb.sqlite"),
+            matching=matching_config,
+        )
     runtime.notify_due_time_reminder_schedule_changed()
     touched_ids = runtime.extract_target_ids_from_derived(effective_derived)
     touched_ids.extend(runtime.extract_ids_from_written_paths(result.written_paths))
@@ -501,4 +565,5 @@ async def handle_non_command_message(
     response = f"{verb} \"{title}\" in {object_type.capitalize()}."
     if auto_apply_target_id:
         response = f"{response} (Auto-applied.)"
-    await runtime.send_response(context, response, thread_title=title, view=feedback_view)
+    telemetry.set_span_attribute("squire.outcome", "saved", span=root_span)
+    await _send_traced_response(runtime, context, response, thread_title=title, view=feedback_view)

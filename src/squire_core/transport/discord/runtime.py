@@ -10,6 +10,7 @@ from typing import Any, Callable
 import discord
 from dotenv import load_dotenv
 
+from squire_core import telemetry
 from squire_core.config_utils import (
     load_config,
     load_llm_config,
@@ -63,6 +64,7 @@ async def handle_message(
 def main() -> None:
     load_dotenv()
     _configure_logging()
+    telemetry.initialize_tracing()
     config_path = Path("config.yaml")
     config = load_config(config_path)
     config = _apply_test_archive_root_override(config)
@@ -182,6 +184,7 @@ def main() -> None:
         due_time_reminder_notifier = bot.request_due_time_reminder_schedule_refresh
         bot.run(token)
     finally:
+        telemetry.shutdown_tracing()
         if health_server:
             health_server.stop()
             logging.info("health_server_stopped")

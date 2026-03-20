@@ -10,6 +10,18 @@ Required or optional environment variables include:
 - `HEALTH_PORT` (optional, default `8080`; set to `0` to disable the health server)
 - `SQUIRE_ENV` (optional; set to `test` to enable startup reset+seed mode for smoke testing)
 - `SQUIRE_TRANSPORT` (optional, default `discord`; selects runtime transport via `transport/runtime_registry.py`)
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` (optional; enable OTLP trace export)
+- `OTEL_EXPORTER_OTLP_HEADERS` (optional; standard OTLP auth/metadata headers)
+- `OTEL_EXPORTER_OTLP_PROTOCOL` (optional; standard OTLP protocol selection)
+- `OTEL_SERVICE_NAME` (optional, default `squire-core`)
+- `OTEL_RESOURCE_ATTRIBUTES` (optional; comma-separated OTEL resource attributes)
+- `OTEL_SDK_DISABLED` (optional; set truthy to disable OTEL tracing even if endpoints are configured)
+
+Tracing notes:
+
+- Squire only enables tracing when an OTLP endpoint is configured and `OTEL_SDK_DISABLED` is not truthy.
+- Tracing is best-effort. Exporter/init failures log a warning and runtime startup continues.
+- Tracing configuration is environment-only in v1. There is no tracing block in `config.yaml`.
 
 ## config.yaml
 

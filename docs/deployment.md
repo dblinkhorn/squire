@@ -24,14 +24,15 @@ Inside the container, set `archive_root` to `"/data/archive"` in `config.yaml`.
 On startup, the bot:
 
 1. Loads `.env` values (including `DISCORD_TOKEN` and `OPENAI_API_KEY`).
-2. Validates and normalizes archive paths from `config.yaml`.
-3. Validates required LLM config keys (`llm.provider`, `llm.model`), applies `matching.semantic_provider` (defaults to `llm.provider` when omitted), and validates `matching.semantic_model` when semantic matching is enabled (`matching.semantic_weight > 0`).
-4. If `SQUIRE_ENV=test`, validates test-safe archive guardrails, clears archive contents (preserving `.git`), seeds deterministic canonical fixtures, and rebuilds the SQLite index.
+2. Initializes OpenTelemetry tracing when an OTLP endpoint is configured via standard `OTEL_*` environment variables. If tracing init/exporter setup fails, startup logs a warning and continues without tracing.
+3. Validates and normalizes archive paths from `config.yaml`.
+4. Validates required LLM config keys (`llm.provider`, `llm.model`), applies `matching.semantic_provider` (defaults to `llm.provider` when omitted), and validates `matching.semantic_model` when semantic matching is enabled (`matching.semantic_weight > 0`).
+5. If `SQUIRE_ENV=test`, validates test-safe archive guardrails, clears archive contents (preserving `.git`), seeds deterministic canonical fixtures, and rebuilds the SQLite index.
    If `test_archive_root` is configured, test mode uses that root instead of `archive_root`.
-5. Otherwise, rebuilds the SQLite index if it is missing.
-6. If semantic matching is enabled and semantic provider initialization/probe succeeds, runs semantic index sync against the same SQLite database; otherwise semantic matching is auto-disabled and startup continues with lexical-only matching.
-7. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
-8. Connects to Discord and starts message handling and scheduled digest loops.
+6. Otherwise, rebuilds the SQLite index if it is missing.
+7. If semantic matching is enabled and semantic provider initialization/probe succeeds, runs semantic index sync against the same SQLite database; otherwise semantic matching is auto-disabled and startup continues with lexical-only matching.
+8. Starts a lightweight HTTP liveness endpoint at `GET /health` (defaults: `HEALTH_HOST=0.0.0.0`, `HEALTH_PORT=8080`; set port `0` to disable).
+9. Connects to Discord and starts message handling and scheduled digest loops.
 
 ## Quick Start (Compose)
 
@@ -45,6 +46,10 @@ On startup, the bot:
    - `DISCORD_TOKEN=...`
    - `OPENAI_API_KEY=...`
    - Optional: `HEALTH_PORT=8080` (or your preferred port)
+   - Optional tracing:
+     - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://<alloy-host>:4318/v1/traces`
+     - `OTEL_SERVICE_NAME=squire-core`
+     - `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic ...` or any headers required by your OTLP receiver
 4. Start:
 
 ```sh

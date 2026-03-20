@@ -118,6 +118,17 @@ Common target examples:
 - Same Docker network: `http://<container-name>:<health-port>/health`
 - From another machine/network: `http://<host-ip-or-dns>:<health-port>/health`
 
+Squire can also emit OpenTelemetry traces for user-triggered Discord flows when OTLP export is configured. There is no `config.yaml` tracing block; tracing is controlled entirely with standard `OTEL_*` environment variables.
+
+Common tracing env vars:
+
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`
+- `OTEL_EXPORTER_OTLP_HEADERS`
+- `OTEL_EXPORTER_OTLP_PROTOCOL`
+- `OTEL_SERVICE_NAME` (defaults to `squire-core`)
+- `OTEL_RESOURCE_ATTRIBUTES`
+- `OTEL_SDK_DISABLED=true` to force tracing off
+
 For deployment/runtime behavior, see [`docs/deployment.md`](docs/deployment.md).
 
 ## Logging Behavior

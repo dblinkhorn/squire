@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
+from squire_core import telemetry
 from squire_core.canonical_store import load_frontmatter
 from squire_core.config_utils import MatchingConfig
 from squire_core.indexer import rebuild_index
@@ -278,28 +279,38 @@ async def apply_command_operation(
     row_number: int | None = None,
     source_view: str | None = None,
 ) -> bool:
+    root_span = telemetry.current_span()
     matching_config = runtime.load_matching_config(config)
     objects_root = config.get("paths", {}).get("objects_root", "objects")
     target_path = runtime.find_object_path(objects_root, target_id)
     if not target_path:
+        telemetry.set_span_attribute("squire.outcome", "unknown_target", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, f"Unknown ID: {target_id}")
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, f"Unknown ID: {target_id}")
         return True
     frontmatter = runtime.load_frontmatter(target_path)
     object_type = frontmatter.get("type")
     if not object_type:
+        telemetry.set_span_attribute("squire.outcome", "unknown_target_type", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, f"Unable to determine object type for {target_id}")
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, f"Unable to determine object type for {target_id}")
         return True
     if not isinstance(object_type, str):
+        telemetry.set_span_attribute("squire.outcome", "unknown_target_type", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, f"Unable to determine object type for {target_id}")
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, f"Unable to determine object type for {target_id}")
         return True
+    telemetry.set_span_attribute("squire.object_type", object_type, span=root_span)
     if validate_fix:
         fields, validation_error = validate_fix_updates(object_type, fields)
         if validation_error:
+            telemetry.set_span_attribute("squire.outcome", "validation_failed", span=root_span)
             await runtime.swap_reaction(context, "⏳", "⚠️")
-            await runtime.send_response(context, validation_error)
+            with telemetry.start_span("response.send"):
+                await runtime.send_response(context, validation_error)
             return True
     if op == "update" and object_type != "admin" and fields.get("status") == "done":
         if command_name and row_number is not None:
@@ -310,8 +321,10 @@ async def apply_command_operation(
                 source_view=source_view,
                 row_number=row_number,
             )
+        telemetry.set_span_attribute("squire.outcome", "wrong_type", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "Only admin items can be marked done.")
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, "Only admin items can be marked done.")
         return True
     if command_name and row_number is not None:
         runtime.log_numbered_mutation_resolved(
@@ -334,31 +347,38 @@ async def apply_command_operation(
         ],
     }
     try:
-        result = runtime.apply_operations(
-            derived,
-            objects_root=objects_root,
-            canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
-            derived_schema_path=None,
-        )
-    except Exception:
+        with telemetry.start_span("command.mutation.apply"):
+            result = runtime.apply_operations(
+                derived,
+                objects_root=objects_root,
+                canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+                derived_schema_path=None,
+            )
+    except Exception as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "command_apply_failed", span=root_span)
         logging.exception("command_apply_failed id=%s op=%s", raw_id, op)
         await runtime.swap_reaction(context, "⏳", "⚠️")
-        await runtime.send_response(context, "Command failed. Check logs for details.")
+        with telemetry.start_span("response.send"):
+            await runtime.send_response(context, "Command failed. Check logs for details.")
         return True
-    await runtime.refresh_index_async(
-        objects_root,
-        config.get("paths", {}).get("index_db", "index/sb.sqlite"),
-        matching=matching_config,
-    )
+    with telemetry.start_span("index.refresh"):
+        await runtime.refresh_index_async(
+            objects_root,
+            config.get("paths", {}).get("index_db", "index/sb.sqlite"),
+            matching=matching_config,
+        )
     runtime.notify_due_time_reminder_schedule_changed()
     touched_ids = runtime.extract_target_ids_from_derived(derived)
     touched_ids.extend(runtime.extract_ids_from_written_paths(result.written_paths))
     runtime.record_affinity_touches(runtime.cursor_key(context), touched_ids, matching=matching_config)
     await runtime.swap_reaction(context, "⏳", "✅")
     title = frontmatter.get("title") or target_id
-    await runtime.send_response(
-        context,
-        f"Updated {object_type} \"{title}\".",
-        thread_title=title,
-    )
+    telemetry.set_span_attribute("squire.outcome", "command_updated", span=root_span)
+    with telemetry.start_span("response.send"):
+        await runtime.send_response(
+            context,
+            f"Updated {object_type} \"{title}\".",
+            thread_title=title,
+        )
     return True
