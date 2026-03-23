@@ -79,6 +79,7 @@ def _nl_payload(
         "read_command": read_command,
         "mutation_plan": mutation_plan,
         "clarification": clarification,
+        "capture": {"object_type": "unknown", "confidence": 0.0},
     }
 
 def test_format_apply_success_message_lists_multiple_titles(monkeypatch) -> None:
@@ -1530,7 +1531,7 @@ def test_nl_route_executes_read_command(monkeypatch, runtime_state: RuntimeState
     monkeypatch.setattr(transport_commands, "handle_command", _fake_handle_command)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("show my last 3 notes", user_id=11, channel_id=22),
             content="show my last 3 notes",
             raw_id="R_1",
@@ -1571,7 +1572,7 @@ def test_nl_route_overrides_show_my_notes_to_recent(monkeypatch, runtime_state: 
     monkeypatch.setattr(transport_commands, "handle_command", _fake_handle_command)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("show me my notes", user_id=11, channel_id=22),
             content="show me my notes",
             raw_id="R_1",
@@ -1615,7 +1616,7 @@ def test_nl_route_clarifies_ambiguous_read_intent(monkeypatch, runtime_state: Ru
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("show my dentist note", user_id=11, channel_id=22),
             content="show my dentist note",
             raw_id="R_1",
@@ -1655,7 +1656,7 @@ def test_nl_route_falls_through_on_low_confidence(monkeypatch, runtime_state: Ru
     monkeypatch.setattr(transport_commands, "handle_command", _fake_handle_command)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("status maybe", user_id=11, channel_id=22),
             content="status maybe",
             raw_id="R_1",
@@ -1695,7 +1696,7 @@ def test_nl_route_blocks_explicit_only_intent(monkeypatch, runtime_state: Runtim
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("delete everything", user_id=11, channel_id=22),
             content="delete everything",
             raw_id="R_1",
@@ -1758,7 +1759,7 @@ def test_nl_route_queues_mutation_confirmation(monkeypatch, runtime_state: Runti
     monkeypatch.setattr(transport_routing, "queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("mark item 2 done", user_id=11, channel_id=22),
             content="mark item 2 done",
             raw_id="R_1",
@@ -1821,7 +1822,7 @@ def test_nl_route_blocks_mutation_when_disabled(monkeypatch, runtime_state: Runt
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("append this to A_1", user_id=11, channel_id=22),
             content="append this to A_1",
             raw_id="R_1",
@@ -1859,11 +1860,11 @@ def test_nl_route_uses_configured_v1_prompt_path(monkeypatch, runtime_state: Run
     monkeypatch.setattr(routing_adapter, "interpret_text_async", _fake_interpret_text_async)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=_Message("noop", user_id=11, channel_id=22),
             content="noop",
             raw_id="R_1",
-            config={"llm": {"nl_command_routing_prompt_path": "config/prompts/nl_command_routing_v1.txt"}},
+            config={"llm": {"message_triage_prompt_path": "config/prompts/message_triage_v1.txt"}},
             provider=object(),
             model="gpt-5-mini",
             runtime_state=runtime_state,
@@ -1871,4 +1872,4 @@ def test_nl_route_uses_configured_v1_prompt_path(monkeypatch, runtime_state: Run
     )
 
     assert handled is False
-    assert captured["prompt_path"] == "config/prompts/nl_command_routing_v1.txt"
+    assert captured["prompt_path"] == "config/prompts/message_triage_v1.txt"

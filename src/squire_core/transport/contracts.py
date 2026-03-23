@@ -1,8 +1,4 @@
-"""Transport-agnostic contracts for shared command/routing modules.
-
-Stage 0 introduces these contracts without wiring runtime behavior to them.
-Adapters can progressively adopt these structures in later stages.
-"""
+"""Transport-agnostic contracts shared across transport runtimes."""
 
 from dataclasses import dataclass
 from datetime import datetime

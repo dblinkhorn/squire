@@ -2,7 +2,7 @@
 
 ## Capture
 
-By default, non-command DMs enter capture/classify flow. A prefix like `admin:`, `project:`, `idea:`, or `person:` tells Squire how to classify the message without inference.
+By default, non-command DMs enter capture flow. A prefix like `admin:`, `project:`, `idea:`, or `person:` tells Squire how to classify the message without inference.
 
 Before capture, Squire can run natural-language command routing for command-like non-`!` messages:
 

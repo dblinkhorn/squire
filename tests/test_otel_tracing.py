@@ -244,12 +244,29 @@ def test_capture_flow_emits_expected_spans_for_create_path(
 ) -> None:
     class _Runtime:
         def __init__(self) -> None:
+            self.triage_calls = 0
             self.interpret_calls = 0
             self.responses: list[str] = []
 
-        async def maybe_route_nl_command(self, **kwargs: Any) -> bool:
-            del kwargs
-            return False
+        async def triage_message(self, *, context, content, raw_id, config, provider, model) -> Any:
+            del context
+            del content, raw_id, config, provider, model
+            self.triage_calls += 1
+            with telemetry.start_span("llm.triage"):
+                return SimpleNamespace(
+                    handled=False,
+                    triage=SimpleNamespace(
+                        route="capture_fallthrough",
+                        intent="none",
+                        risk_tier="none",
+                        confidence=0.92,
+                        ambiguities=[],
+                        read_command=None,
+                        mutation_plan=None,
+                        clarification=None,
+                        capture=SimpleNamespace(object_type="admin", confidence=0.92),
+                    ),
+                )
 
         async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
             del context, remove_emoji, add_emoji
@@ -275,11 +292,6 @@ def test_capture_flow_emits_expected_spans_for_create_path(
         async def interpret_text_async(self, **kwargs: Any) -> Any:
             del kwargs
             self.interpret_calls += 1
-            if self.interpret_calls == 1:
-                return SimpleNamespace(
-                    derived={"object_type": "admin", "confidence": 0.92},
-                    raw_text="{}",
-                )
             return SimpleNamespace(
                 derived={
                     "object_type": "admin",
@@ -353,7 +365,7 @@ def test_capture_flow_emits_expected_spans_for_create_path(
         "llm": {
             "provider": "openai",
             "model": "gpt-5-mini",
-            "classify_prompt_path": "config/prompts/classify_v1.txt",
+            "message_triage_prompt_path": "config/prompts/message_triage_v1.txt",
             "interpreter_prompt_path": "config/prompts/extract_v1.txt",
         },
         "matching": {"semantic_weight": 0},
@@ -383,10 +395,9 @@ def test_capture_flow_emits_expected_spans_for_create_path(
     root = _span_by_name(span_exporter, "discord.message.capture")
     assert root.attributes["squire.outcome"] == "saved"
     assert root.attributes["squire.object_type"] == "admin"
-    assert root.attributes["squire.classify_confidence"] == 0.92
-    assert "nl.route.precheck" in _span_names(span_exporter)
+    assert root.attributes["squire.capture_confidence"] == 0.92
     assert "prompt.load" in _span_names(span_exporter)
-    assert "llm.classify" in _span_names(span_exporter)
+    assert "llm.triage" in _span_names(span_exporter)
     assert "llm.extract" in _span_names(span_exporter)
     assert "canonical.apply" in _span_names(span_exporter)
     assert "index.refresh" in _span_names(span_exporter)
@@ -399,12 +410,29 @@ def test_capture_flow_low_confidence_stops_before_extract(
 ) -> None:
     class _Runtime:
         def __init__(self) -> None:
+            self.triage_calls = 0
             self.interpret_calls = 0
             self.responses: list[str] = []
 
-        async def maybe_route_nl_command(self, **kwargs: Any) -> bool:
-            del kwargs
-            return False
+        async def triage_message(self, *, context, content, raw_id, config, provider, model) -> Any:
+            del context
+            del content, raw_id, config, provider, model
+            self.triage_calls += 1
+            with telemetry.start_span("llm.triage"):
+                return SimpleNamespace(
+                    handled=False,
+                    triage=SimpleNamespace(
+                        route="capture_fallthrough",
+                        intent="none",
+                        risk_tier="none",
+                        confidence=0.1,
+                        ambiguities=[],
+                        read_command=None,
+                        mutation_plan=None,
+                        clarification=None,
+                        capture=SimpleNamespace(object_type="unknown", confidence=0.1),
+                    ),
+                )
 
         async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
             del context, remove_emoji, add_emoji
@@ -430,10 +458,7 @@ def test_capture_flow_low_confidence_stops_before_extract(
         async def interpret_text_async(self, **kwargs: Any) -> Any:
             del kwargs
             self.interpret_calls += 1
-            return SimpleNamespace(
-                derived={"object_type": "unknown", "confidence": 0.1},
-                raw_text="{}",
-            )
+            raise AssertionError("unexpected")
 
         def now_iso(self) -> str:
             return "2026-03-19T12:00:00+00:00"
@@ -499,7 +524,7 @@ def test_capture_flow_low_confidence_stops_before_extract(
         "llm": {
             "provider": "openai",
             "model": "gpt-5-mini",
-            "classify_prompt_path": "config/prompts/classify_v1.txt",
+            "message_triage_prompt_path": "config/prompts/message_triage_v1.txt",
             "interpreter_prompt_path": "config/prompts/extract_v1.txt",
         },
         "matching": {"semantic_weight": 0},
@@ -522,8 +547,8 @@ def test_capture_flow_low_confidence_stops_before_extract(
         )
 
     root = _span_by_name(span_exporter, "discord.message.capture")
-    assert root.attributes["squire.outcome"] == "classify_low_confidence"
-    assert "llm.classify" in _span_names(span_exporter)
+    assert root.attributes["squire.outcome"] == "capture_low_confidence"
+    assert "llm.triage" in _span_names(span_exporter)
     assert "llm.extract" not in _span_names(span_exporter)
 
 
@@ -533,7 +558,7 @@ def test_nl_read_route_emits_dispatch_spans(span_exporter: InMemorySpanExporter)
             self.executed_command: str | None = None
 
         def load_prompt(self, path: str) -> str:
-            assert path == "config/prompts/nl_command_routing_v1.txt"
+            assert path == "config/prompts/message_triage_v1.txt"
             return "prompt"
 
         async def interpret_text_async(self, **kwargs: Any) -> Any:
@@ -552,6 +577,7 @@ def test_nl_read_route_emits_dispatch_spans(span_exporter: InMemorySpanExporter)
                     },
                     "mutation_plan": None,
                     "clarification": None,
+                    "capture": {"object_type": "unknown", "confidence": 0.1},
                 },
                 raw_text="{}",
             )
@@ -596,8 +622,8 @@ def test_nl_read_route_emits_dispatch_spans(span_exporter: InMemorySpanExporter)
 
     runtime = _Runtime()
     with telemetry.start_span("discord.message.capture", attributes={"squire.transport": "discord"}):
-        handled = asyncio.run(
-            routing.maybe_route_nl_command(
+        outcome = asyncio.run(
+            routing.triage_message(
                 runtime=runtime,
                 context=_context(content="show my last 3 notes"),
                 content="show my last 3 notes",
@@ -608,13 +634,13 @@ def test_nl_read_route_emits_dispatch_spans(span_exporter: InMemorySpanExporter)
             )
         )
 
-    assert handled is True
+    assert outcome.handled is True
     assert runtime.executed_command == "!recent 3"
     root = _span_by_name(span_exporter, "discord.message.capture")
     assert root.attributes["squire.nl_route"] == "read_command"
     assert root.attributes["squire.intent"] == "recent"
     assert root.attributes["squire.risk_tier"] == "read"
-    assert "llm.route_intent" in _span_names(span_exporter)
+    assert "llm.triage" in _span_names(span_exporter)
     assert "nl.clarification.load" in _span_names(span_exporter)
     assert "nl.read.dispatch" in _span_names(span_exporter)
     assert "nl.command.delegate" in _span_names(span_exporter)
@@ -638,7 +664,7 @@ def test_nl_mutation_pending_flow_emits_pending_spans(
             self.pending_ids: list[str] = []
 
         def load_prompt(self, path: str) -> str:
-            assert path == "config/prompts/nl_command_routing_v1.txt"
+            assert path == "config/prompts/message_triage_v1.txt"
             return "prompt"
 
         async def interpret_text_async(self, **kwargs: Any) -> Any:
@@ -674,6 +700,7 @@ def test_nl_mutation_pending_flow_emits_pending_spans(
                         "clarification_reason": None,
                     },
                     "clarification": None,
+                    "capture": {"object_type": "unknown", "confidence": 0.1},
                 },
                 raw_text="{}",
             )
@@ -770,8 +797,8 @@ def test_nl_mutation_pending_flow_emits_pending_spans(
         "nl_command_routing": {"allow_nl_mutations": True, "plan_trace_enabled": False},
     }
     with telemetry.start_span("discord.message.capture", attributes={"squire.transport": "discord"}):
-        handled = asyncio.run(
-            routing.maybe_route_nl_command(
+        outcome = asyncio.run(
+            routing.triage_message(
                 runtime=runtime,
                 context=_context(content="mark 2 done"),
                 content="mark 2 done",
@@ -782,11 +809,11 @@ def test_nl_mutation_pending_flow_emits_pending_spans(
             )
         )
 
-    assert handled is True
+    assert outcome.handled is True
     root = _span_by_name(span_exporter, "discord.message.capture")
     assert root.attributes["squire.outcome"] == "nl_pending_created"
     assert root.attributes["squire.pending_action_id"].startswith("PA_")
-    assert "llm.route_intent" in _span_names(span_exporter)
+    assert "llm.triage" in _span_names(span_exporter)
     assert "nl.mutation.plan" in _span_names(span_exporter)
     assert "nl.pending.write" in _span_names(span_exporter)
     assert "response.send" in _span_names(span_exporter)

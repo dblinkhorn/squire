@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from squire_core.config_utils import NLCommandRoutingConfig
 from squire_core.transport import routing as transport_routing
@@ -62,6 +63,79 @@ def test_normalize_set_fields_prefers_due_at_when_time_hint_present() -> None:
     assert reason is None
     assert fields is not None
     assert fields["due_at"].startswith("2026-02-18T15:00:00")
+
+
+def test_normalize_set_fields_allows_time_only_due_at_with_existing_due_at_anchor() -> None:
+    la_tz = ZoneInfo("America/Los_Angeles")
+    fields, reason, notes = transport_routing.normalize_set_fields(
+        object_type="admin",
+        field_updates=[
+            {
+                "value_text": "4:20pm",
+                "source_phrase": "due time",
+                "field_candidates": {
+                    "primary": {"field_id": "due_at", "confidence": 0.95},
+                    "alternates": [],
+                },
+            }
+        ],
+        routing=_routing_config(),
+        now=datetime(2026, 2, 17, 9, 0, tzinfo=timezone.utc),
+        tz=la_tz,
+        existing_frontmatter={"due_at": "2026-03-22T21:20:01+00:00"},
+    )
+
+    assert reason is None
+    assert fields == {"due_at": "2026-03-22T16:20:00-07:00"}
+    assert notes == []
+
+
+def test_normalize_set_fields_allows_time_only_due_at_with_existing_due_date_anchor() -> None:
+    la_tz = ZoneInfo("America/Los_Angeles")
+    fields, reason, notes = transport_routing.normalize_set_fields(
+        object_type="admin",
+        field_updates=[
+            {
+                "value_text": "4:20pm",
+                "source_phrase": "due time",
+                "field_candidates": {
+                    "primary": {"field_id": "due_at", "confidence": 0.95},
+                    "alternates": [],
+                },
+            }
+        ],
+        routing=_routing_config(),
+        now=datetime(2026, 2, 17, 9, 0, tzinfo=timezone.utc),
+        tz=la_tz,
+        existing_frontmatter={"due_date": "2026-02-18"},
+    )
+
+    assert reason is None
+    assert fields == {"due_at": "2026-02-18T16:20:00-08:00"}
+    assert notes == []
+
+
+def test_normalize_set_fields_rejects_time_only_due_at_without_anchor() -> None:
+    fields, reason, notes = transport_routing.normalize_set_fields(
+        object_type="admin",
+        field_updates=[
+            {
+                "value_text": "4:00pm",
+                "source_phrase": "due time",
+                "field_candidates": {
+                    "primary": {"field_id": "due_at", "confidence": 0.95},
+                    "alternates": [],
+                },
+            }
+        ],
+        routing=_routing_config(),
+        now=datetime(2026, 2, 17, 9, 0, tzinfo=timezone.utc),
+        tz=timezone.utc,
+    )
+
+    assert fields is None
+    assert reason == "value_parse_failed"
+    assert notes == []
 
 
 def test_normalize_nl_mutation_plan_input_accepts_object_id_target() -> None:

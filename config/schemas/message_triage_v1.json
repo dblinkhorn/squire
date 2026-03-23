@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nl_route_intent_v1.json",
-  "title": "Natural Language Route Intent v1",
+  "$id": "message_triage_v1.json",
+  "title": "Message Triage v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,8 @@
     "ambiguities",
     "read_command",
     "mutation_plan",
-    "clarification"
+    "clarification",
+    "capture"
   ],
   "properties": {
     "schema_version": {
@@ -276,6 +277,22 @@
           "items": {
             "type": "string"
           }
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_type", "confidence"],
+      "properties": {
+        "object_type": {
+          "type": "string",
+          "enum": ["people", "projects", "ideas", "admin", "unknown"]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         }
       }
     }

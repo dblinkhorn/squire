@@ -26,6 +26,7 @@
     },
     "extracted_fields": { "$ref": "#/definitions/admin_fields" },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "decision_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
     "proposed_operations": {
       "type": "array",
       "items": { "$ref": "#/definitions/operation" }

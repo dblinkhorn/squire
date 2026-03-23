@@ -57,6 +57,7 @@ def _mutation_plan_payload(*, operations: list[dict[str, object]], confidence: f
             "clarification_reason": None,
         },
         "clarification": None,
+        "capture": {"object_type": "unknown", "confidence": 0.0},
     }
 
 
@@ -85,6 +86,7 @@ def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
                 "read_command": {"intent": "status", "args": {}},
                 "mutation_plan": None,
                 "clarification": None,
+                "capture": {"object_type": "unknown", "confidence": 0.0},
             },
             raw_text="{}",
         )
@@ -104,7 +106,7 @@ def test_clarification_reply_out_of_scope_is_blocked(monkeypatch) -> None:
     monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=message,
             content=message.content,
             raw_id="R_now",
@@ -219,7 +221,7 @@ def test_clarification_reply_in_scope_merges_and_disables_second_turn(monkeypatc
     monkeypatch.setattr(transport_routing, "queue_nl_mutation_confirmation", _fake_queue_nl_mutation_confirmation)
 
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=message,
             content=message.content,
             raw_id="R_now",

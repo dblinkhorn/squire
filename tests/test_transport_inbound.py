@@ -6,21 +6,39 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from squire_core.interpreter import InterpretationValidationError
 from squire_core.transport import inbound
+from squire_core.transport import matching_pipeline
 from squire_core.transport.contracts import TransportMessageContext
 
 
 class _Runtime:
     def __init__(self) -> None:
         self.route_handled = False
+        self.triage_calls = 0
         self.interpret_calls = 0
         self.swaps: list[tuple[str, str]] = []
         self.responses: list[str] = []
         self.unrecognized_calls = 0
 
-    async def maybe_route_nl_command(self, **kwargs) -> bool:
-        del kwargs
-        return self.route_handled
+    async def triage_message(self, *, context, content, raw_id, config, provider, model):
+        del context
+        del content, raw_id, config, provider, model
+        self.triage_calls += 1
+        return SimpleNamespace(
+            handled=self.route_handled,
+            triage=SimpleNamespace(
+                route="read_command" if self.route_handled else "capture_fallthrough",
+                intent="recent" if self.route_handled else "none",
+                risk_tier="read" if self.route_handled else "none",
+                confidence=0.96 if self.route_handled else 0.1,
+                ambiguities=[],
+                read_command={"intent": "recent", "args": {}} if self.route_handled else None,
+                mutation_plan=None,
+                clarification=None,
+                capture=SimpleNamespace(object_type="unknown", confidence=0.1),
+            ),
+        )
 
     async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
         del context
@@ -46,12 +64,7 @@ class _Runtime:
 
     async def interpret_text_async(self, **kwargs):
         self.interpret_calls += 1
-        if self.interpret_calls == 1:
-            return SimpleNamespace(
-                derived={"object_type": "unknown", "confidence": 0.1},
-                raw_text="{}",
-            )
-        raise AssertionError("extract stage should not run for low-confidence classification")
+        raise AssertionError("extract should not run for low-confidence capture triage")
 
     def now_iso(self) -> str:
         return "2026-02-23T00:00:00+00:00"
@@ -139,19 +152,20 @@ def test_inbound_returns_early_when_nl_route_handles() -> None:
         )
     )
 
+    assert runtime.triage_calls == 1
     assert runtime.interpret_calls == 0
     assert runtime.swaps == []
     assert runtime.responses == []
 
 
-def test_inbound_low_confidence_classification_sends_clarification(tmp_path: Path) -> None:
+def test_inbound_low_confidence_capture_sends_clarification(tmp_path: Path) -> None:
     runtime = _Runtime()
     context = _context()
     config = {
         "llm": {
             "provider": "openai",
             "model": "gpt-5-mini",
-            "classify_prompt_path": "config/prompts/classify.txt",
+            "message_triage_prompt_path": "config/prompts/message_triage_v1.txt",
             "interpreter_prompt_path": "config/prompts/extract.txt",
         },
         "matching": {
@@ -178,8 +192,170 @@ def test_inbound_low_confidence_classification_sends_clarification(tmp_path: Pat
         )
     )
 
-    assert runtime.interpret_calls == 1
+    assert runtime.triage_calls == 1
+    assert runtime.interpret_calls == 0
     assert runtime.swaps == [("⏳", "❓")]
     assert runtime.responses == [
         "I couldn't confidently classify that. Please clarify or use a prefix (admin:, project:, idea:, person:)."
     ]
+
+
+def test_inbound_falls_back_to_plain_extract_when_fused_capture_is_invalid(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    class _DecisionRuntime(_Runtime):
+        async def triage_message(self, *, context, content, raw_id, config, provider, model):
+            del context, content, raw_id, config, provider, model
+            self.triage_calls += 1
+            return SimpleNamespace(
+                handled=False,
+                triage=SimpleNamespace(
+                    route="capture_fallthrough",
+                    intent="none",
+                    risk_tier="none",
+                    confidence=0.92,
+                    ambiguities=[],
+                    read_command=None,
+                    mutation_plan=None,
+                    clarification=None,
+                    capture=SimpleNamespace(object_type="admin", confidence=0.92),
+                ),
+            )
+
+        async def interpret_text_async(self, **kwargs):
+            self.interpret_calls += 1
+            calls.append(kwargs["text"])
+            if self.interpret_calls == 1:
+                raise InterpretationValidationError(
+                    "bad fused payload",
+                    raw_text="{}",
+                    payload={"schema_version": 1},
+                )
+            return SimpleNamespace(
+                derived={
+                    "schema_version": 1,
+                    "raw_event_id": None,
+                    "object_type": "admin",
+                    "intent": "create",
+                    "extracted_fields": {
+                        "title": "Call dentist",
+                        "status": "open",
+                        "next_action": "Call dentist",
+                        "due_date": None,
+                        "due_at": None,
+                        "priority": None,
+                        "blocked_reason": None,
+                    },
+                    "confidence": 0.85,
+                    "proposed_operations": [
+                        {
+                            "op": "create",
+                            "target_id": None,
+                            "fields": {
+                                "title": "Call dentist",
+                                "status": "open",
+                                "next_action": "Call dentist",
+                                "due_date": None,
+                                "due_at": None,
+                                "priority": None,
+                                "blocked_reason": None,
+                            },
+                        }
+                    ],
+                    "model": "gpt-5-mini",
+                    "prompt_version": "extract_v1",
+                    "timestamp": "2026-03-22T10:00:00+00:00",
+                },
+                raw_text="{}",
+            )
+
+        def write_matching_trace(self, *, derived_root: str | Path, raw_event_id: str, trace_payload: dict[str, Any]) -> None:
+            del derived_root, raw_event_id, trace_payload
+
+        def apply_operations(self, derived, **kwargs):
+            del derived, kwargs
+            return SimpleNamespace(written_paths=[tmp_path / "objects" / "admin" / "A_1.md"])
+
+        async def refresh_index_async(self, objects_root: str | Path, index_db: str | Path, *, matching: Any = None) -> None:
+            del objects_root, index_db, matching
+
+        def notify_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
+            del clear_state
+
+        def extract_ids_from_written_paths(self, paths: list[Path]) -> list[str]:
+            del paths
+            return ["A_1"]
+
+        def record_affinity_touches(self, key: tuple[int, int], object_ids: list[str], *, matching: Any) -> None:
+            del key, object_ids, matching
+
+    runtime = _DecisionRuntime()
+    context = _context()
+    config = {
+        "llm": {
+            "provider": "openai",
+            "model": "gpt-5-mini",
+            "message_triage_prompt_path": "config/prompts/message_triage_v1.txt",
+            "interpreter_prompt_path": "config/prompts/extract_v1.txt",
+            "decision_prompt_path": "config/prompts/decision_v1.txt",
+        },
+        "matching": {
+            "semantic_weight": 0,
+        },
+        "decision": {
+            "candidate_limit": 3,
+            "candidate_score_threshold": 0.2,
+            "auto_apply_threshold": 0.85,
+            "confirm_threshold": 0.65,
+        },
+        "paths": {
+            "events_derived": str(tmp_path / "events" / "derived"),
+            "objects_root": str(tmp_path / "objects"),
+            "index_db": str(tmp_path / "index.sqlite"),
+        },
+        "confidence": {
+            "create_threshold": 0.6,
+        },
+    }
+
+    async def _fake_build_matching_context(**kwargs):
+        del kwargs
+        return matching_pipeline.MatchingContext(
+            candidates=[
+                SimpleNamespace(
+                    object_id="A_1",
+                    title="Call dentist",
+                    snippet="Call dentist next Tuesday",
+                    score=0.93,
+                )
+            ],
+            matching_trace={
+                "schema_version": 1,
+                "ranking": {"top_score": 0.93, "second_score": 0.2, "margin": 0.73},
+                "gate": {},
+            },
+        )
+
+    monkeypatch.setattr(matching_pipeline, "build_matching_context", _fake_build_matching_context)
+
+    asyncio.run(
+        inbound.handle_non_command_message(
+            runtime=runtime,
+            context=context,
+            content="Call dentist tomorrow",
+            raw_id="R_3",
+            config=config,
+            provider=SimpleNamespace(),
+            model="gpt-5-mini",
+            schema_map={"admin": Path("config/schemas/derived_event_admin_v1.json")},
+        )
+    )
+
+    assert runtime.triage_calls == 1
+    assert runtime.interpret_calls == 2
+    assert calls[0] != "Call dentist tomorrow"
+    assert calls[1] == "Call dentist tomorrow"
+    assert runtime.responses == ['Saved "Call dentist" in Admin.']

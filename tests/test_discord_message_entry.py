@@ -74,21 +74,21 @@ def test_discord_handle_command_builds_transport_context(monkeypatch) -> None:
     assert context.message_id == "404"
 
 
-def test_discord_nl_router_builds_transport_context(monkeypatch) -> None:
+def test_discord_triage_builds_transport_context(monkeypatch) -> None:
     captured: dict[str, object] = {}
     runtime_state = RuntimeStateStore()
 
-    async def _fake_maybe_route_nl_command(*, runtime, context, content, raw_id, config, provider, model):
+    async def _fake_triage_message(*, runtime, context, content, raw_id, config, provider, model):
         del runtime, raw_id, config, provider, model
         captured["context"] = context
         captured["content"] = content
-        return True
+        return SimpleNamespace(handled=True)
 
-    monkeypatch.setattr(transport_routing, "maybe_route_nl_command", _fake_maybe_route_nl_command)
+    monkeypatch.setattr(transport_routing, "triage_message", _fake_triage_message)
 
     message = _Message(content="mark item done")
     handled = asyncio.run(
-        message_entry.maybe_route_nl_command(
+        message_entry.triage_message(
             message=message,
             content=message.content,
             raw_id="R_2",

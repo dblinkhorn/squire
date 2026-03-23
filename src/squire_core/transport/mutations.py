@@ -195,23 +195,6 @@ def extract_ids_from_written_paths(
     return object_ids
 
 
-def first_title_from_paths(
-    paths: list[Path],
-    *,
-    load_frontmatter_fn: Any = None,
-) -> str | None:
-    active_load_frontmatter = load_frontmatter_fn or load_frontmatter
-    for path in paths:
-        try:
-            frontmatter = active_load_frontmatter(path)
-        except Exception:
-            continue
-        title = frontmatter.get("title")
-        if isinstance(title, str) and title.strip():
-            return title.strip()
-    return None
-
-
 def titles_from_paths(
     paths: list[Path],
     *,

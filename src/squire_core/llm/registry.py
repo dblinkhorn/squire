@@ -88,10 +88,6 @@ def get_sync_embedding_provider(provider: Any) -> EmbeddingProvider | None:
     return None
 
 
-def supports_embeddings(provider: Any) -> bool:
-    return get_sync_embedding_provider(provider) is not None
-
-
 def probe_embedding_support(provider: Any, model: str) -> EmbeddingProbeResult:
     embedding_provider = get_sync_embedding_provider(provider)
     if embedding_provider is None:

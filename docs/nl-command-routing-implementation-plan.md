@@ -29,11 +29,11 @@ Do not change:
 Required deliverables:
 
 1. Schema updates:
-   - `config/schemas/nl_route_intent_v1.json`
+   - `config/schemas/message_triage_v1.json`
    - `config/schemas/nl_mutation_plan_v1.json`
    - `config/schemas/nl_mutation_normalized_v1.json`
 2. Prompt update:
-   - `config/prompts/nl_command_routing_v1.txt`
+   - `config/prompts/message_triage_v1.txt`
 3. Runtime implementation:
    - `src/squire_core/runtime.py`
    - optional helper extraction into `src/squire_core/nl_planner.py`
@@ -73,10 +73,10 @@ Execution boundary:
 
 Files:
 
-- `config/schemas/nl_route_intent_v1.json`
+- `config/schemas/message_triage_v1.json`
 - `config/schemas/nl_mutation_plan_v1.json`
 - `config/schemas/nl_mutation_normalized_v1.json`
-- `config/prompts/nl_command_routing_v1.txt`
+- `config/prompts/message_triage_v1.txt`
 
 Tasks:
 
@@ -108,7 +108,7 @@ Files:
 
 Tasks:
 
-- Consume `nl_route_intent_v1`.
+- Consume `message_triage_v1`.
 - Preserve existing read-command behavior and explicit-only blocking.
 - Route mutation plans into new multi-operation normalizer path.
 

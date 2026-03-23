@@ -30,12 +30,10 @@ Configuration specifies LLM behavior, confidence thresholds, daily/weekly digest
 LLM settings in `config.yaml`:
 
 - `llm.provider` (required): single active LLM backend for runtime operations. Current allowed value: `openai`.
-- `llm.model` (required): model name used for classify/extract/decision/candidate-query interpretation calls.
-- `llm.classify_prompt_path`: classify prompt path.
-- `llm.interpreter_prompt_path`: extraction prompt path.
-- `llm.decision_prompt_path`: decision prompt path for update/append routing.
-- `llm.candidate_query_prompt_path`: candidate-query prompt path for matching retrieval.
-- `llm.nl_command_routing_prompt_path`: prompt path for natural-language command intent routing.
+- `llm.model` (required): model name used for triage and capture interpretation calls.
+- `llm.message_triage_prompt_path`: prompt path for unified command-routing + capture-classification triage.
+- `llm.interpreter_prompt_path`: base extraction prompt path.
+- `llm.decision_prompt_path`: additional candidate-aware routing instructions used when update/append routing is enabled.
 
 OpenAI transport timeout behavior:
 
@@ -45,7 +43,7 @@ OpenAI transport timeout behavior:
 
 Confidence settings in `config.yaml`:
 
-- `confidence.create_threshold`: minimum classification confidence required before creating/interpreting a note from a captured message.
+- `confidence.create_threshold`: minimum capture-classification confidence required before creating/interpreting a note from a captured message.
 
 Decision thresholds in `config.yaml` (update/append gating):
 
@@ -84,10 +82,9 @@ Prompt files are stored under `config/prompts/` and referenced by path in `confi
 llm:
   provider: "openai"
   model: "gpt-5-mini"
-  classify_prompt_path: "config/prompts/classify_v1.txt"
+  message_triage_prompt_path: "config/prompts/message_triage_v1.txt"
   interpreter_prompt_path: "config/prompts/extract_v1.txt"
   decision_prompt_path: "config/prompts/decision_v1.txt"
-  candidate_query_prompt_path: "config/prompts/candidate_query_v1.txt"
 ```
 
 To customize behavior, copy the default prompt files, edit them, and point `config.yaml` at your versions.

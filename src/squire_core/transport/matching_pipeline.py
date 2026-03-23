@@ -1,29 +1,36 @@
-"""Shared matching and decision helper orchestration."""
+"""Shared matching retrieval and candidate-aware capture helpers."""
 
 from __future__ import annotations
 
 import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from squire_core.config_utils import DecisionConfig, MatchingConfig
-from squire_core.derived_event_store import write_derived_event
-from squire_core.interpreter import InterpretationValidationError, interpret_text_async
-from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.llm.registry import get_async_embedding_provider
 from squire_core.matching import build_matching_candidates_async
 
 
 @dataclass(frozen=True)
-class MatchingDecisionResult:
-    decision_payload: dict[str, Any] | None
-    decision_artifact_id: str | None
-    matching_trace: dict[str, Any] | None
+class MatchingContext:
+    candidates: list[Any]
+    matching_trace: dict[str, Any]
 
 
-def build_decision_input(
+def _candidate_payloads(candidates: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": candidate.object_id,
+            "title": candidate.title,
+            "snippet": candidate.snippet,
+            "score": candidate.score,
+        }
+        for candidate in candidates
+    ]
+
+
+def build_capture_input(
     *,
     raw_event_id: str,
     object_type: str,
@@ -34,83 +41,80 @@ def build_decision_input(
         "raw_event_id": raw_event_id,
         "object_type": object_type,
         "message": message,
-        "candidates": [
-            {
-                "id": candidate.object_id,
-                "title": candidate.title,
-                "snippet": candidate.snippet,
-                "score": candidate.score,
-            }
-            for candidate in candidates
-        ],
+        "candidates": _candidate_payloads(candidates),
     }
     return json.dumps(payload, ensure_ascii=True)
 
 
-async def candidate_queries_from_llm(
+def build_capture_prompt(
     *,
-    provider: LLMProvider | AsyncLLMProvider,
-    model: str,
-    prompt: str,
-    message: str,
-) -> list[str]:
-    schema_path = Path("config/schemas/candidate_query_v1.json")
-    try:
-        result = await interpret_text_async(
-            provider=provider,
-            text=message,
-            model=model,
-            system_prompt=prompt,
-            schema_path=schema_path,
-        )
-    except Exception as exc:
-        logging.warning("candidate_query_failed error=%s", exc)
-        return []
-    payload = result.derived if isinstance(result.derived, dict) else {}
-    queries = payload.get("queries")
-    if not isinstance(queries, list):
-        return []
-    cleaned = []
-    for query in queries:
-        if not isinstance(query, str):
-            continue
-        value = query.strip()
-        if value:
-            cleaned.append(value)
-    return cleaned
+    extract_prompt: str,
+    decision_prompt: str,
+) -> str:
+    prompt = extract_prompt.strip()
+    return (
+        f"{prompt}\n\n"
+        "You will receive a JSON object with raw_event_id, object_type, message, and candidates.\n"
+        "Extract fields from the message only.\n"
+        "Use candidates only to choose proposed_operations and target_id values.\n"
+        "If no candidate clearly matches, use a create operation.\n"
+        "If a candidate clearly matches and fields should change, use update.\n"
+        "If a candidate clearly matches and the message mainly adds notes or follow-up detail, use append.\n"
+        "Set decision_confidence to a number between 0 and 1 for the routing choice.\n"
+        "Keep confidence as the extraction confidence for the note content.\n"
+        "Return only JSON that matches the provided schema.\n\n"
+        f"Candidate-aware routing rules:\n{decision_prompt.strip()}"
+    )
 
 
-async def run_matching_decision(
+def build_decision_payload_from_capture(
     *,
-    provider: LLMProvider | AsyncLLMProvider,
-    embedding_provider: LLMProvider | AsyncLLMProvider | None,
-    model: str,
+    raw_event_id: str,
+    object_type: str,
+    derived: dict[str, Any],
+    candidates: list[Any],
+) -> dict[str, Any]:
+    proposed_operations = derived.get("proposed_operations") or []
+    payload_operations: list[dict[str, Any]] = []
+    if isinstance(proposed_operations, list):
+        for op in proposed_operations:
+            if not isinstance(op, dict):
+                continue
+            payload_operations.append(
+                {
+                    "op": op.get("op"),
+                    "target_id": op.get("target_id"),
+                }
+            )
+    return {
+        "schema_version": 1,
+        "raw_event_id": raw_event_id,
+        "object_type": object_type,
+        "confidence": float(derived.get("decision_confidence", derived.get("confidence", 0))),
+        "candidates": _candidate_payloads(candidates),
+        "proposed_operations": payload_operations,
+        "model": derived.get("model"),
+        "prompt_version": derived.get("prompt_version"),
+        "timestamp": derived.get("timestamp"),
+    }
+
+
+async def build_matching_context(
+    *,
+    embedding_provider: Any,
     raw_event_id: str,
     object_type: str,
     message: str,
     config: dict[str, Any],
-    derived_root: str | Path,
-    decision_prompt: str,
     decision_config: DecisionConfig,
     matching_config: MatchingConfig,
     affinity_scores: dict[str, float],
     now_iso: str,
-    candidate_query_prompt: str | None = None,
-) -> MatchingDecisionResult:
+) -> MatchingContext:
     index_db = config.get("paths", {}).get("index_db", "index/sb.sqlite")
     queries = [message]
-    if candidate_query_prompt:
-        llm_queries = await candidate_queries_from_llm(
-            provider=provider,
-            model=model,
-            prompt=candidate_query_prompt,
-            message=message,
-        )
-        if llm_queries:
-            queries = llm_queries
-    active_embedding_provider = embedding_provider or provider
     semantic_provider = (
-        get_async_embedding_provider(active_embedding_provider) if matching_config.semantic_weight > 0 else None
+        get_async_embedding_provider(embedding_provider) if matching_config.semantic_weight > 0 else None
     )
     retrieval = await build_matching_candidates_async(
         db_path=index_db,
@@ -166,76 +170,7 @@ async def run_matching_decision(
         retrieval.top_score,
         f"{retrieval.margin:.3f}" if retrieval.margin is not None else "none",
     )
-
-    if retrieval.retrieval_mode == "none":
-        logging.warning("matching_decision_skipped id=%s reason=retrieval_unavailable", raw_event_id)
-        return MatchingDecisionResult(
-            decision_payload=None,
-            decision_artifact_id=None,
-            matching_trace=matching_trace,
-        )
-
-    decision_input = build_decision_input(
-        raw_event_id=raw_event_id,
-        object_type=object_type,
-        message=message,
+    return MatchingContext(
         candidates=candidates,
-    )
-    decision_schema = Path("config/schemas/decision_v1.json")
-    decision_payload: dict[str, Any] | None = None
-    decision_artifact_id: str | None = None
-    try:
-        decision = await interpret_text_async(
-            provider=provider,
-            text=decision_input,
-            model=model,
-            system_prompt=decision_prompt,
-            schema_path=decision_schema,
-        )
-    except InterpretationValidationError as exc:
-        write_derived_event(
-            derived=exc.payload,
-            raw_text=exc.raw_text,
-            derived_root=derived_root,
-            raw_event_id=raw_event_id,
-            label="decision_invalid",
-            error=exc,
-        )
-        logging.warning("decision_invalid id=%s error=%s", raw_event_id, exc)
-    except Exception as exc:
-        write_derived_event(
-            derived=None,
-            raw_text="",
-            derived_root=derived_root,
-            raw_event_id=raw_event_id,
-            label="decision_invalid",
-            error=exc,
-        )
-        logging.exception("decision_failed id=%s", raw_event_id)
-    else:
-        decision_result = write_derived_event(
-            derived=decision.derived,
-            raw_text=decision.raw_text,
-            derived_root=derived_root,
-            raw_event_id=raw_event_id,
-            label="decision",
-        )
-        decision_payload = decision.derived
-        if decision_result.derived_path:
-            try:
-                decision_artifact_id = str(decision_result.derived_path.relative_to(Path(derived_root)))
-            except ValueError:
-                decision_artifact_id = str(decision_result.derived_path)
-        logging.info(
-            "decision_ok id=%s object_type=%s confidence=%.2f candidates=%s",
-            raw_event_id,
-            object_type,
-            decision.derived.get("confidence", 0),
-            len(candidates),
-        )
-
-    return MatchingDecisionResult(
-        decision_payload=decision_payload,
-        decision_artifact_id=decision_artifact_id,
         matching_trace=matching_trace,
     )

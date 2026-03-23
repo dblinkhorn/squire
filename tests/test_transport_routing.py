@@ -14,7 +14,7 @@ class _Runtime:
         self.executed_command: str | None = None
 
     def load_prompt(self, path: str) -> str:
-        assert path == "config/prompts/nl_command_routing_v1.txt"
+        assert path == "config/prompts/message_triage_v1.txt"
         return "prompt"
 
     async def interpret_text_async(self, **kwargs):
@@ -99,7 +99,7 @@ def test_normalize_set_fields_prefers_due_at_for_time_hint() -> None:
     assert notes == ["due_choice:due_at"]
 
 
-def test_maybe_route_nl_command_queues_mutation_plan() -> None:
+def test_triage_message_queues_mutation_plan() -> None:
     runtime = _Runtime(
         {
             "schema_version": 1,
@@ -131,11 +131,12 @@ def test_maybe_route_nl_command_queues_mutation_plan() -> None:
                 "clarification_reason": None,
             },
             "clarification": None,
+            "capture": {"object_type": "unknown", "confidence": 0.0},
         }
     )
 
-    handled = asyncio.run(
-        routing.maybe_route_nl_command(
+    outcome = asyncio.run(
+        routing.triage_message(
             runtime=runtime,
             context=SimpleNamespace(user_id="1", channel_id="2", thread_id=None, message_id="3", content="mark 2 done", source="discord", is_dm=True, created_at=datetime(2026, 2, 22, 0, 0, tzinfo=timezone.utc)),
             content="mark 2 done",
@@ -146,7 +147,7 @@ def test_maybe_route_nl_command_queues_mutation_plan() -> None:
         )
     )
 
-    assert handled is True
+    assert outcome.handled is True
     assert runtime.queued is not None
     plan_input = runtime.queued["plan_input"]
     assert plan_input["operations"][0]["action_type"] == "mark_done"

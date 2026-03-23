@@ -158,7 +158,7 @@ async def handle_command(
     )
 
 
-async def maybe_route_nl_command(
+async def triage_message(
     *,
     message: Any,
     content: str,
@@ -178,7 +178,7 @@ async def maybe_route_nl_command(
         embedding_provider or provider,
         due_time_reminder_notifier,
     )
-    return await _transport_routing.maybe_route_nl_command(
+    triage_outcome = await _transport_routing.triage_message(
         runtime=runtime,
         context=context,
         content=content,
@@ -187,6 +187,7 @@ async def maybe_route_nl_command(
         provider=provider,
         model=model,
     )
+    return triage_outcome.handled
 
 
 async def handle_archive_clear_confirmation(
@@ -369,6 +370,6 @@ def _message_span_attributes(
 __all__ = [
     "handle_message",
     "handle_command",
-    "maybe_route_nl_command",
+    "triage_message",
     "handle_archive_clear_confirmation",
 ]

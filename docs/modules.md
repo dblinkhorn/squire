@@ -7,8 +7,9 @@ record before downstream processing. If raw event writes fail, the pipeline stop
 
 ## Interpreter (LLM)
 
-The interpreter classifies intent, extracts structured fields, and emits strict-schema derived JSON artifacts.
-When configured, it also runs decision and candidate-query prompts for update/append routing. Validation failures
+The interpreter triages messages, extracts structured fields, and emits strict-schema derived JSON artifacts.
+When update/append routing is enabled, capture interpretation becomes candidate-aware and proposes create/update/append
+operations in the same strict-schema response. Validation failures
 write invalid artifacts and return clarification responses without mutating canonical state.
 OpenAI transport is async-native in runtime message handling; async interpreter paths await provider calls directly
 and fall back to off-loop execution only for providers without async methods.
@@ -30,14 +31,14 @@ The index is rebuildable from canonical objects and is not authoritative state.
 The surfacer provides push (scheduled daily/weekly digest/review) and pull (interactive commands), with configurable
 ID visibility for scheduled outputs and ID-inclusive manual pull lists. It is read-only and does not mutate canonical state.
 
-## Shared Transport Runtime (Refactor Direction)
+## Shared Transport Runtime
 
-The approved refactor direction introduces shared modules for transport-agnostic runtime behavior (for example command
+Shared transport modules own transport-agnostic runtime behavior (for example command
 orchestration, NL routing/normalization, cursor/clarification state handling, and reminder scheduling helpers).
 
 These modules are intended to be reused across Discord and future interfaces (for example Slack).
 
-## Transport Adapters (Refactor Direction)
+## Transport Adapters
 
 Adapters are responsible for platform-specific concerns only:
 
@@ -45,7 +46,7 @@ Adapters are responsible for platform-specific concerns only:
 2. platform message send/edit/reaction/action mechanics
 3. platform UI components and scheduler loop wiring
 
-Design intent:
+Design rules:
 
 1. keep transport SDK imports in adapter modules
 2. keep shared runtime logic transport-neutral

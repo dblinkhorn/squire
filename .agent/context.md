@@ -43,6 +43,7 @@
 ### Matching and Retrieval
 
 - Hybrid lexical + semantic retrieval is active with conservative defaults.
+- Matching retrieval now uses the raw inbound message directly; the separate candidate-query LLM expansion step was removed.
 - Semantic retrieval can use `matching.semantic_provider` + `matching.semantic_model`; when `semantic_provider` is omitted it defaults to `llm.provider`.
 - Runtime now threads a dedicated embedding provider through startup semantic sync and command/mutation index refresh flows (separate from primary interpret provider).
 - If semantic provider init/probe fails at startup, semantic matching is auto-disabled with warning and runtime falls back to lexical-only matching.
@@ -90,8 +91,10 @@
 
 ## Natural-Language Routing (Current Contract)
 
-- Runtime uses route schema `nl_route_intent_v1` and mutation schemas `nl_mutation_plan_v1` / `nl_mutation_normalized_v1`.
-- Default natural-language routing prompt is `config/prompts/nl_command_routing_v1.txt`.
+- Non-command messages now use a single message-triage call (`message_triage_v1`) for NL command routing plus capture classification.
+- Runtime uses triage schema `message_triage_v1` and mutation schemas `nl_mutation_plan_v1` / `nl_mutation_normalized_v1`.
+- Default triage prompt is `config/prompts/message_triage_v1.txt`.
+- Capture flow no longer uses a separate classify prompt/schema.
 
 ### Mutation Plan Behavior
 
@@ -103,6 +106,10 @@
 - Conflicting writes on the same target+field are marked `operation_conflict`.
 - Pending actions are created from resolved operations only.
 - Confirm/apply path supports mixed object-type batches (`pending.object_type = "mixed"`).
+- NL `set_fields` normalization now supports time-only `admin.due_at` edits when the target note already has an anchored date:
+  - existing `due_at` contributes its local date in the runtime timezone; the new time is interpreted in that runtime timezone
+  - existing `due_date` is promoted to `due_at` using the supplied time and runtime timezone
+  - time-only `due_at` edits still fail when no existing date anchor is present
 
 ### Clarification Policy
 
@@ -198,7 +205,7 @@
   - Added `src/squire_core/transport/discord/command_contract.py` for command help/copy/constant contract + helper functions consumed by adapters.
   - Removed dead compatibility wrappers (`_refresh_index`, `_refresh_index_async`, `_apply_command_operation`).
   - Discord-focused tests were migrated off orchestration monkeypatch seams to canonical seams (`transport.*`, adapter modules, `discord.io`) while preserving behavior parity.
-  - Focused validation baseline after seam migration: `72 passed` (`tests/test_discord_commands.py`, `tests/test_discord_contract_bridge.py`, `tests/test_discord_schedule.py`, `tests/test_nl_multi_operation_clarification.py`, `tests/test_surfacing_cursor.py`, `tests/test_test_mode_startup.py`, `tests/test_nl_mutation_normalization.py`, `tests/test_transport_routing.py`).
+  - Focused validation baseline after seam migration: `72 passed` (`tests/test_discord_commands.py`, `tests/test_discord_message_entry.py`, `tests/test_discord_schedule.py`, `tests/test_nl_multi_operation_clarification.py`, `tests/test_surfacing_cursor.py`, `tests/test_test_mode_startup.py`, `tests/test_nl_mutation_normalization.py`, `tests/test_transport_routing.py`).
 - Modularity hardening follow-on implemented (2026-02-23):
   - Runtime composition root decoupled from Discord adapter import: `src/squire_core/runtime.py` now delegates via `src/squire_core/transport/runtime_registry.py` (`SQUIRE_TRANSPORT`, default `discord`).
   - Removed Discord naming compatibility alias `SquireBot` from adapter exports; canonical class is `DiscordSquireBot`.
@@ -249,3 +256,9 @@
 - Compatibility-surface/import cleanup complete (2026-02-24):
   - removed unused imports in `src/squire_core/transport/routing.py` and `tests/test_discord_commands.py`.
   - trimmed package-level re-export scaffolding in `src/squire_core/transport/discord/__init__.py`; callers now import concrete Discord modules directly.
+- Capture-path LLM fusion complete (2026-03-22):
+  - normal non-command capture now uses `llm.triage` plus one candidate-aware capture interpretation call instead of separate decision and extract calls.
+  - local retrieval and deterministic decision gating remain separate; only the model calls were fused.
+  - `llm.decision_prompt_path` now supplies candidate-aware routing instructions layered onto the base extraction prompt, not a standalone decision-only JSON contract.
+  - when the fused candidate-aware capture call fails, inbound falls back to the old plain extract path so decision-routing failures still preserve basic capture behavior.
+  - validation baseline: full suite `191 passed`.

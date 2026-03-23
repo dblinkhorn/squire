@@ -8,18 +8,18 @@ Discord bot DM → Ingest → Raw Event (git) → Interpretation (LLM) → Deriv
 
 The system runs as a single deployable service (squire-core) with modular internal packages and stable interfaces. Optional integrations are enabled via configuration and designed for self-hosted, always-on operation.
 
-## Multi-Transport Direction (Approved Refactor Plan)
+## Transport Runtime Structure
 
-The approved direction is to split runtime behavior into:
+Runtime behavior is split into:
 
 1. transport-agnostic shared runtime/application modules
 2. transport adapter modules (Discord and future interfaces, for example Slack)
 
-Design intent:
+Design rules:
 
 1. shared modules should not depend on transport SDK objects directly
 2. adapter modules translate platform events/messages into shared contracts
-3. startup wiring should converge on a runtime composition root (`squire_core.runtime`)
+3. startup wiring lives behind a runtime composition root (`squire_core.runtime`)
 
 Runtime composition:
 
@@ -37,8 +37,9 @@ Canonical objects record source_event_ids so any item can be traced back to the 
 
 ## Update/Append Pipeline
 
-For inferred updates, the system retrieves candidate objects from the local index, asks the decision prompt to propose
-create/update/append operations, then applies deterministic gates before mutation:
+For inferred updates, the system retrieves candidate objects from the local index, runs a candidate-aware capture
+interpretation that extracts fields and proposes create/update/append operations in one model call, then applies
+deterministic gates before mutation:
 
 - auto-apply only when confidence and matching gates pass for a single target
 - create a pending action for confirmation when confidence is moderate or ambiguity remains

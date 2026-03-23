@@ -136,13 +136,6 @@ def record_exception(
     target.set_status(Status(StatusCode.ERROR, str(exc)))
 
 
-def set_status_error(description: str, *, span: Span | None = None) -> None:
-    target = span or current_span()
-    if not target.is_recording():
-        return
-    target.set_status(Status(StatusCode.ERROR, description))
-
-
 def _sdk_disabled() -> bool:
     value = os.getenv("OTEL_SDK_DISABLED", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}

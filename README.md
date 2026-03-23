@@ -1,3 +1,5 @@
+# Squire
+
 ![Squire logo](banner.png)
 
 Squire is a self-hosted personal organizer you talk to through Discord.

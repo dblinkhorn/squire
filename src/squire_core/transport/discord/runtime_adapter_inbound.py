@@ -14,6 +14,7 @@ from squire_core.transport import routing as _transport_routing
 from squire_core.transport.contracts import TransportMessageContext
 from squire_core.transport.discord import io as _discord_io
 from squire_core.transport.discord.command_contract import format_pending_message, now_iso
+from squire_core.transport.routing import MessageTriageOutcome
 from squire_core.transport.discord.runtime_adapter_command import (
     _extract_ids_from_written_paths,
     _extract_target_ids_from_derived,
@@ -49,7 +50,7 @@ class _DiscordInboundRuntime:
         self._embedding_provider = embedding_provider or llm_provider
         self._due_time_reminder_notifier = due_time_reminder_notifier
 
-    async def maybe_route_nl_command(
+    async def triage_message(
         self,
         *,
         context: TransportMessageContext,
@@ -58,13 +59,13 @@ class _DiscordInboundRuntime:
         config: dict[str, Any],
         provider: LLMProvider | AsyncLLMProvider,
         model: str,
-    ) -> bool:
+    ) -> MessageTriageOutcome:
         routing_runtime = self._routing_runtime_factory(
             self._message,
             self._state_store,
             self._due_time_reminder_notifier,
         )
-        return await _transport_routing.maybe_route_nl_command(
+        return await _transport_routing.triage_message(
             runtime=routing_runtime,
             context=context,
             content=content,

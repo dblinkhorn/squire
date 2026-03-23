@@ -91,7 +91,7 @@ If no operations are resolved, cancel entire plan and do not apply anything.
 
 ## Data Contracts
 
-## A) Route Schema (`nl_route_intent_v1`)
+## A) Triage Schema (`message_triage_v1`)
 
 Required top-level fields:
 

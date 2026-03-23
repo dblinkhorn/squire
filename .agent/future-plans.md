@@ -21,6 +21,9 @@ Purpose:
 
 - Calendar integration (for example event creation from admin items) if explicitly prioritized.
 - Optional archive backup automation (for example remote git backup workflow).
+- Remaining transport-modularity follow-on:
+  - implement the pending interaction extraction and inbound IO cleanup described in `docs/discord-pending-modularity-spec.md`
+  - goal: move pending interaction business logic out of `src/squire_core/transport/discord/views.py`, centralize it in shared transport code, and keep Discord views as thin UI shells
 - Make target naming follow-on (post-Stage-6, separate PR):
   - rename Discord run targets to explicit transport names: `run-discord-bot` and `run-discord-bot-test`
   - do not add Slack make targets until Slack integration is actually implemented

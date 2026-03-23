@@ -22,10 +22,11 @@ from squire_core.timezone_utils import (
 )
 from squire_core.transport import matching_pipeline
 from squire_core.transport.contracts import TransportMessageContext
+from squire_core.transport.routing import MessageTriageOutcome
 
 
 class InboundRuntime(Protocol):
-    async def maybe_route_nl_command(
+    async def triage_message(
         self,
         *,
         context: TransportMessageContext,
@@ -34,7 +35,7 @@ class InboundRuntime(Protocol):
         config: dict[str, Any],
         provider: LLMProvider | AsyncLLMProvider,
         model: str,
-    ) -> bool:
+    ) -> MessageTriageOutcome:
         ...
 
     async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
@@ -169,8 +170,8 @@ async def handle_non_command_message(
 ) -> None:
     root_span = telemetry.current_span()
     telemetry.set_span_attribute("squire.raw_id", raw_id, span=root_span)
-    with telemetry.start_span("nl.route.precheck"):
-        nl_routed = await runtime.maybe_route_nl_command(
+    try:
+        triage_outcome = await runtime.triage_message(
             context=context,
             content=content,
             raw_id=raw_id,
@@ -178,46 +179,53 @@ async def handle_non_command_message(
             provider=provider,
             model=model,
         )
-    if nl_routed:
-        telemetry.set_span_attribute("squire.outcome", "routed", span=root_span)
+    except OSError as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "prompt_load_failed", span=root_span)
+        await runtime.swap_reaction(context, "⏳", "⚠️")
+        await _send_traced_response(runtime, context, f"Failed to load prompt files: {exc}")
+        return
+    except InterpretationValidationError as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "triage_invalid", span=root_span)
+        await runtime.swap_reaction(context, "⏳", "⚠️")
+        await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
+        return
+    except Exception as exc:
+        telemetry.record_exception(exc, span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "triage_failed", span=root_span)
+        await runtime.swap_reaction(context, "⏳", "⚠️")
+        await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
         return
 
-    classify_schema = Path("config/schemas/derived_event_classify_v1.json")
+    if triage_outcome.handled:
+        telemetry.set_span_attribute("squire.outcome", "routed", span=root_span)
+        return
+    triage = triage_outcome.triage
+
     derived_root = Path(config.get("paths", {}).get("events_derived", "events/derived"))
 
-    classify_prompt_path = config.get("llm", {}).get("classify_prompt_path")
     extract_prompt_path = config.get("llm", {}).get("interpreter_prompt_path")
     decision_prompt_path = config.get("llm", {}).get("decision_prompt_path")
-    candidate_query_prompt_path = config.get("llm", {}).get(
-        "candidate_query_prompt_path",
-        "config/prompts/candidate_query_v1.txt",
-    )
-    if not classify_prompt_path or not extract_prompt_path:
+    if not extract_prompt_path:
         telemetry.set_span_attribute("squire.outcome", "prompt_missing", span=root_span)
         await runtime.swap_reaction(context, "⏳", "⚠️")
         await _send_traced_response(
             runtime,
             context,
-            "Prompt paths are missing. Set llm.classify_prompt_path and llm.interpreter_prompt_path.",
+            "Prompt paths are missing. Set llm.interpreter_prompt_path.",
         )
         return
 
     try:
         with telemetry.start_span("prompt.load"):
-            classify_prompt = runtime.load_prompt(classify_prompt_path)
             extract_prompt = runtime.load_prompt(extract_prompt_path)
             decision_prompt = None
-            candidate_query_prompt = None
             if decision_prompt_path:
                 try:
                     decision_prompt = runtime.load_prompt(decision_prompt_path)
                 except OSError as exc:
                     logging.warning("decision_prompt_load_failed path=%s error=%s", decision_prompt_path, exc)
-            if candidate_query_prompt_path:
-                try:
-                    candidate_query_prompt = runtime.load_prompt(candidate_query_prompt_path)
-                except OSError as exc:
-                    logging.warning("candidate_query_prompt_load_failed path=%s error=%s", candidate_query_prompt_path, exc)
     except OSError as exc:
         telemetry.record_exception(exc, span=root_span)
         telemetry.set_span_attribute("squire.outcome", "prompt_load_failed", span=root_span)
@@ -227,10 +235,6 @@ async def handle_non_command_message(
 
     decision_config = load_decision_config(config) if decision_prompt else None
     matching_config = load_matching_config(config)
-    decision_payload: dict[str, Any] | None = None
-    decision_artifact_id: str | None = None
-    matching_trace: dict[str, Any] | None = None
-
     tz_name = config.get("timezone")
     tz = resolve_timezone(tz_name)
     reference = (
@@ -238,69 +242,14 @@ async def handle_non_command_message(
         f"Reference weekday: {format_reference_weekday(tz)}. "
         f"Reference time: {format_reference_time(tz)}."
     )
-    extract_prompt = f"{extract_prompt} {reference}"
+    base_capture_prompt = f"{extract_prompt} {reference}"
 
-    try:
-        with telemetry.start_span("llm.classify") as classify_span:
-            classification = await runtime.interpret_text_async(
-                provider=provider,
-                text=content,
-                model=model,
-                system_prompt=classify_prompt,
-                schema_path=classify_schema,
-            )
-            telemetry.set_span_attribute("squire.classify_confidence", classification.derived.get("confidence"), span=classify_span)
-    except InterpretationValidationError as exc:
-        telemetry.record_exception(exc, span=root_span)
-        telemetry.set_span_attribute("squire.outcome", "classify_invalid", span=root_span)
-        write_derived_event(
-            derived=exc.payload,
-            raw_text=exc.raw_text,
-            derived_root=derived_root,
-            raw_event_id=raw_id,
-            label="invalid",
-            error=exc,
-        )
-        logging.warning("classification_invalid id=%s error=%s", raw_id, exc)
-        await runtime.swap_reaction(context, "⏳", "⚠️")
-        await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
-        return
-    except Exception as exc:
-        telemetry.record_exception(exc, span=root_span)
-        telemetry.set_span_attribute("squire.outcome", "classify_failed", span=root_span)
-        write_derived_event(
-            derived=None,
-            raw_text="",
-            derived_root=derived_root,
-            raw_event_id=raw_id,
-            label="invalid",
-            error=exc,
-        )
-        logging.exception("classification_failed id=%s", raw_id)
-        await runtime.swap_reaction(context, "⏳", "⚠️")
-        await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
-        return
-
-    write_derived_event(
-        derived=classification.derived,
-        raw_text=classification.raw_text,
-        derived_root=derived_root,
-        raw_event_id=raw_id,
-        label="classify",
-    )
-    logging.info(
-        "classification_ok id=%s object_type=%s confidence=%.2f",
-        raw_id,
-        classification.derived.get("object_type"),
-        classification.derived.get("confidence", 0),
-    )
-
-    object_type = classification.derived.get("object_type")
-    confidence = classification.derived.get("confidence", 0)
+    object_type = triage.capture.object_type
+    confidence = triage.capture.confidence
     telemetry.set_span_attributes(
         {
             "squire.object_type": object_type,
-            "squire.classify_confidence": confidence,
+            "squire.capture_confidence": confidence,
         },
         span=root_span,
     )
@@ -308,13 +257,13 @@ async def handle_non_command_message(
 
     if not isinstance(object_type, str) or object_type == "unknown" or confidence < threshold:
         logging.info(
-            "classification_low_confidence id=%s object_type=%s confidence=%.2f threshold=%.2f",
+            "capture_low_confidence id=%s object_type=%s confidence=%.2f threshold=%.2f",
             raw_id,
             object_type,
             confidence,
             threshold,
         )
-        telemetry.set_span_attribute("squire.outcome", "classify_low_confidence", span=root_span)
+        telemetry.set_span_attribute("squire.outcome", "capture_low_confidence", span=root_span)
         await runtime.swap_reaction(context, "⏳", "❓")
         await _send_traced_response(
             runtime,
@@ -330,73 +279,219 @@ async def handle_non_command_message(
             await runtime.send_unrecognized_category(context)
         return
 
+    decision_payload: dict[str, Any] | None = None
+    decision_artifact_id: str | None = None
+    matching_trace: dict[str, Any] | None = None
+    matching_candidates: list[Any] = []
+
+    capture_prompt = base_capture_prompt
+    capture_input = content
+    fallback_to_plain_extract = False
+
     if decision_prompt and decision_config:
         affinity_key = runtime.cursor_key(context)
         affinity_scores = runtime.load_affinity_scores(affinity_key, matching=matching_config)
-        with telemetry.start_span("matching.decision"):
-            decision_result = await matching_pipeline.run_matching_decision(
-                provider=provider,
-                embedding_provider=embedding_provider,
-                model=model,
+        with telemetry.start_span("matching.retrieval"):
+            matching_context = await matching_pipeline.build_matching_context(
+                embedding_provider=embedding_provider or provider,
                 raw_event_id=raw_id,
                 object_type=object_type,
                 message=content,
                 config=config,
-                derived_root=derived_root,
-                decision_prompt=decision_prompt,
                 decision_config=decision_config,
                 matching_config=matching_config,
                 affinity_scores=affinity_scores,
                 now_iso=runtime.now_iso(),
-                candidate_query_prompt=candidate_query_prompt,
             )
-        decision_payload = decision_result.decision_payload
-        decision_artifact_id = decision_result.decision_artifact_id
-        matching_trace = decision_result.matching_trace
+        matching_candidates = matching_context.candidates
+        matching_trace = matching_context.matching_trace
+        capture_prompt = matching_pipeline.build_capture_prompt(
+            extract_prompt=base_capture_prompt,
+            decision_prompt=decision_prompt,
+        )
+        capture_input = matching_pipeline.build_capture_input(
+            raw_event_id=raw_id,
+            object_type=object_type,
+            message=content,
+            candidates=matching_candidates,
+        )
+        fallback_to_plain_extract = True
     elif decision_prompt:
         logging.warning("decision_config_missing id=%s decision_prompt_path=%s", raw_id, decision_prompt_path)
 
+    fallback_capture_prompt = base_capture_prompt
+    fallback_capture_input = content
     try:
         with telemetry.start_span("llm.extract") as extract_span:
             interpretation = await runtime.interpret_text_async(
                 provider=provider,
-                text=content,
+                text=capture_input,
                 model=model,
-                system_prompt=extract_prompt,
+                system_prompt=capture_prompt,
                 schema_path=schema_path,
             )
             interpretation.derived["raw_event_id"] = raw_id
             telemetry.set_span_attribute("squire.object_type", interpretation.derived.get("object_type"), span=extract_span)
     except InterpretationValidationError as exc:
-        telemetry.record_exception(exc, span=root_span)
-        telemetry.set_span_attribute("squire.outcome", "extract_invalid", span=root_span)
-        write_derived_event(
-            derived=exc.payload,
-            raw_text=exc.raw_text,
-            derived_root=derived_root,
-            raw_event_id=raw_id,
-            label="invalid",
-            error=exc,
-        )
-        logging.warning("interpretation_invalid id=%s error=%s", raw_id, exc)
-        await runtime.swap_reaction(context, "⏳", "⚠️")
-        await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
-        return
+        if fallback_to_plain_extract:
+            logging.warning("capture_interpretation_invalid_fallback id=%s error=%s", raw_id, exc)
+            write_derived_event(
+                derived=exc.payload,
+                raw_text=exc.raw_text,
+                derived_root=derived_root,
+                raw_event_id=raw_id,
+                label="decision_invalid",
+                error=exc,
+            )
+            try:
+                with telemetry.start_span("llm.extract_fallback") as extract_span:
+                    interpretation = await runtime.interpret_text_async(
+                        provider=provider,
+                        text=fallback_capture_input,
+                        model=model,
+                        system_prompt=fallback_capture_prompt,
+                        schema_path=schema_path,
+                    )
+                    interpretation.derived["raw_event_id"] = raw_id
+                    telemetry.set_span_attribute(
+                        "squire.object_type",
+                        interpretation.derived.get("object_type"),
+                        span=extract_span,
+                    )
+                matching_candidates = []
+                decision_payload = None
+                decision_artifact_id = None
+                if matching_trace:
+                    gate = matching_trace.get("gate")
+                    if not isinstance(gate, dict):
+                        gate = {}
+                        matching_trace["gate"] = gate
+                    gate["outcome"] = "create"
+            except InterpretationValidationError as fallback_exc:
+                telemetry.record_exception(fallback_exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "extract_invalid", span=root_span)
+                write_derived_event(
+                    derived=fallback_exc.payload,
+                    raw_text=fallback_exc.raw_text,
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="invalid",
+                    error=fallback_exc,
+                )
+                logging.warning("interpretation_invalid id=%s error=%s", raw_id, fallback_exc)
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
+                return
+            except Exception as fallback_exc:
+                telemetry.record_exception(fallback_exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "extract_failed", span=root_span)
+                write_derived_event(
+                    derived=None,
+                    raw_text="",
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="invalid",
+                    error=fallback_exc,
+                )
+                logging.exception("interpretation_failed id=%s", raw_id)
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
+                return
+        else:
+            telemetry.record_exception(exc, span=root_span)
+            telemetry.set_span_attribute("squire.outcome", "extract_invalid", span=root_span)
+            write_derived_event(
+                derived=exc.payload,
+                raw_text=exc.raw_text,
+                derived_root=derived_root,
+                raw_event_id=raw_id,
+                label="invalid",
+                error=exc,
+            )
+            logging.warning("interpretation_invalid id=%s error=%s", raw_id, exc)
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
+            return
     except Exception as exc:
-        telemetry.record_exception(exc, span=root_span)
-        telemetry.set_span_attribute("squire.outcome", "extract_failed", span=root_span)
-        write_derived_event(
-            derived=None,
-            raw_text="",
-            derived_root=derived_root,
-            raw_event_id=raw_id,
-            label="invalid",
-            error=exc,
-        )
-        logging.exception("interpretation_failed id=%s", raw_id)
-        await runtime.swap_reaction(context, "⏳", "⚠️")
-        await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
-        return
+        if fallback_to_plain_extract:
+            logging.exception("capture_interpretation_failed_fallback id=%s", raw_id)
+            write_derived_event(
+                derived=None,
+                raw_text="",
+                derived_root=derived_root,
+                raw_event_id=raw_id,
+                label="decision_invalid",
+                error=exc,
+            )
+            try:
+                with telemetry.start_span("llm.extract_fallback") as extract_span:
+                    interpretation = await runtime.interpret_text_async(
+                        provider=provider,
+                        text=fallback_capture_input,
+                        model=model,
+                        system_prompt=fallback_capture_prompt,
+                        schema_path=schema_path,
+                    )
+                    interpretation.derived["raw_event_id"] = raw_id
+                    telemetry.set_span_attribute(
+                        "squire.object_type",
+                        interpretation.derived.get("object_type"),
+                        span=extract_span,
+                    )
+                matching_candidates = []
+                decision_payload = None
+                decision_artifact_id = None
+                if matching_trace:
+                    gate = matching_trace.get("gate")
+                    if not isinstance(gate, dict):
+                        gate = {}
+                        matching_trace["gate"] = gate
+                    gate["outcome"] = "create"
+            except InterpretationValidationError as fallback_exc:
+                telemetry.record_exception(fallback_exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "extract_invalid", span=root_span)
+                write_derived_event(
+                    derived=fallback_exc.payload,
+                    raw_text=fallback_exc.raw_text,
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="invalid",
+                    error=fallback_exc,
+                )
+                logging.warning("interpretation_invalid id=%s error=%s", raw_id, fallback_exc)
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await _send_traced_response(runtime, context, "I couldn't parse that reliably. Please rephrase or use a prefix.")
+                return
+            except Exception as fallback_exc:
+                telemetry.record_exception(fallback_exc, span=root_span)
+                telemetry.set_span_attribute("squire.outcome", "extract_failed", span=root_span)
+                write_derived_event(
+                    derived=None,
+                    raw_text="",
+                    derived_root=derived_root,
+                    raw_event_id=raw_id,
+                    label="invalid",
+                    error=fallback_exc,
+                )
+                logging.exception("interpretation_failed id=%s", raw_id)
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
+                return
+        else:
+            telemetry.record_exception(exc, span=root_span)
+            telemetry.set_span_attribute("squire.outcome", "extract_failed", span=root_span)
+            write_derived_event(
+                derived=None,
+                raw_text="",
+                derived_root=derived_root,
+                raw_event_id=raw_id,
+                label="invalid",
+                error=exc,
+            )
+            logging.exception("interpretation_failed id=%s", raw_id)
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            await _send_traced_response(runtime, context, "Interpretation failed. Please try again.")
+            return
 
     write_derived_event(
         derived=interpretation.derived,
@@ -425,6 +520,25 @@ async def handle_non_command_message(
                 trace_top_score = float(top_value)
             if isinstance(second_value, (int, float)):
                 trace_second_score = float(second_value)
+    if decision_prompt and decision_config:
+        decision_payload = matching_pipeline.build_decision_payload_from_capture(
+            raw_event_id=raw_id,
+            object_type=object_type,
+            derived=interpretation.derived,
+            candidates=matching_candidates,
+        )
+        decision_result = write_derived_event(
+            derived=decision_payload,
+            raw_text=interpretation.raw_text,
+            derived_root=derived_root,
+            raw_event_id=raw_id,
+            label="decision",
+        )
+        if decision_result.derived_path:
+            try:
+                decision_artifact_id = str(decision_result.derived_path.relative_to(Path(derived_root)))
+            except ValueError:
+                decision_artifact_id = str(decision_result.derived_path)
     if decision_payload and decision_config:
         with telemetry.start_span("decision.evaluate"):
             decision_routing = evaluate_decision(

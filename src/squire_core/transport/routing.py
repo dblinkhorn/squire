@@ -29,7 +29,7 @@ from squire_core.transport.validation import (
 )
 
 _NL_ROUTE_MEDIUM_CONFIDENCE = 0.5
-_NL_INTENT_SCHEMA_PATH = Path("config/schemas/nl_route_intent_v1.json")
+_MESSAGE_TRIAGE_SCHEMA_PATH = Path("config/schemas/message_triage_v1.json")
 _NL_OUT_OF_SCOPE_CLARIFICATION_COPY = (
     "Before I can proceed with any other actions, I need clarification on the unresolved parts of the previous request. "
     "You may cancel your last action if you'd like to take a new action now."
@@ -89,7 +89,13 @@ _WEEKDAY_MAP = {
     "SUNDAY": 6,
 }
 @dataclass(frozen=True)
-class _NLRouteIntentV1:
+class _CaptureClassificationV1:
+    object_type: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class _MessageTriageV1:
     route: str
     intent: str
     risk_tier: str
@@ -98,6 +104,13 @@ class _NLRouteIntentV1:
     read_command: dict[str, Any] | None
     mutation_plan: dict[str, Any] | None
     clarification: dict[str, Any] | None
+    capture: _CaptureClassificationV1
+
+
+@dataclass(frozen=True)
+class MessageTriageOutcome:
+    triage: _MessageTriageV1
+    handled: bool
 
 
 class _TargetResolutionLike(Protocol):
@@ -390,7 +403,22 @@ def _default_risk_tier(intent: str) -> str:
     return "none"
 
 
-def _normalize_nl_route_payload(payload: dict[str, Any]) -> _NLRouteIntentV1:
+def _normalize_capture_classification(payload: Any) -> _CaptureClassificationV1:
+    capture = payload if isinstance(payload, dict) else {}
+    object_type = _coerce_non_empty_str(capture.get("object_type")) or "unknown"
+    object_type = object_type.lower()
+    if object_type not in {"admin", "projects", "people", "ideas", "unknown"}:
+        object_type = "unknown"
+
+    confidence_raw = capture.get("confidence")
+    confidence = 0.0
+    if isinstance(confidence_raw, (int, float)):
+        confidence = max(0.0, min(1.0, float(confidence_raw)))
+
+    return _CaptureClassificationV1(object_type=object_type, confidence=confidence)
+
+
+def _normalize_message_triage_payload(payload: dict[str, Any]) -> _MessageTriageV1:
     route = _coerce_non_empty_str(payload.get("route")) or "capture_fallthrough"
     route = route.lower()
     if route not in _NL_ROUTES:
@@ -423,7 +451,7 @@ def _normalize_nl_route_payload(payload: dict[str, Any]) -> _NLRouteIntentV1:
     clarification_raw = payload.get("clarification")
     clarification = clarification_raw if isinstance(clarification_raw, dict) else None
 
-    return _NLRouteIntentV1(
+    return _MessageTriageV1(
         route=route,
         intent=intent,
         risk_tier=risk_tier,
@@ -432,6 +460,7 @@ def _normalize_nl_route_payload(payload: dict[str, Any]) -> _NLRouteIntentV1:
         read_command=read_command,
         mutation_plan=mutation_plan,
         clarification=clarification,
+        capture=_normalize_capture_classification(payload.get("capture")),
     )
 
 
@@ -642,6 +671,16 @@ def _explicit_only_guidance_for_intent(intent: str) -> str:
     return "That action requires an explicit command."
 
 
+def _message_triage_prompt_path(config: dict[str, Any]) -> str:
+    llm_config = config.get("llm", {})
+    prompt_path = "config/prompts/message_triage_v1.txt"
+    if isinstance(llm_config, dict):
+        configured = llm_config.get("message_triage_prompt_path")
+        if isinstance(configured, str) and configured.strip():
+            prompt_path = configured
+    return prompt_path
+
+
 def _normalize_enum_value(value: str) -> str:
     return value.strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -792,6 +831,59 @@ def _parse_datetime_text(value: str, *, now: datetime, tz: tzinfo) -> datetime |
     return datetime.combine(parsed_date, parsed_time, tzinfo=tz)
 
 
+def _parse_existing_datetime_value(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    candidate = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _parse_existing_date_value(value: Any) -> date | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _normalize_anchored_due_at_time(
+    *,
+    value_text: str,
+    existing_frontmatter: dict[str, Any] | None,
+    tz: tzinfo,
+) -> str | None:
+    parsed_time = _parse_time_text(value_text)
+    if parsed_time is None:
+        return None
+    frontmatter = existing_frontmatter if isinstance(existing_frontmatter, dict) else {}
+
+    existing_due_at = _parse_existing_datetime_value(frontmatter.get("due_at"))
+    if existing_due_at is not None:
+        local_anchor_date = existing_due_at.astimezone(tz).date()
+        anchored = datetime.combine(
+            local_anchor_date,
+            parsed_time,
+            tzinfo=tz,
+        )
+        return anchored.isoformat()
+
+    existing_due_date = _parse_existing_date_value(frontmatter.get("due_date"))
+    if existing_due_date is None:
+        return None
+    return datetime.combine(existing_due_date, parsed_time, tzinfo=tz).isoformat()
+
+
 def _normalize_value_for_field(
     *,
     object_type: str,
@@ -799,6 +891,7 @@ def _normalize_value_for_field(
     value_text: str,
     now: datetime,
     tz: tzinfo,
+    existing_frontmatter: dict[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
     raw = value_text.strip()
     if not raw:
@@ -824,6 +917,14 @@ def _normalize_value_for_field(
 
     if (object_type, field_id) in _FIX_DATETIME_FIELDS:
         parsed = _parse_datetime_text(raw, now=now, tz=tz)
+        if parsed is None and (object_type, field_id) == ("admin", "due_at"):
+            anchored_due_at = _normalize_anchored_due_at_time(
+                value_text=raw,
+                existing_frontmatter=existing_frontmatter,
+                tz=tz,
+            )
+            if anchored_due_at is not None:
+                return anchored_due_at, None
         if parsed is None:
             return None, "value_parse_failed"
         return parsed.isoformat(), None
@@ -898,6 +999,7 @@ def normalize_set_fields(
     routing: NLCommandRoutingConfig,
     now: datetime,
     tz: tzinfo,
+    existing_frontmatter: dict[str, Any] | None = None,
 ) -> tuple[dict[str, str] | None, str | None, list[str]]:
     del routing  # Reserved for future routing-aware normalization policies.
     normalized: dict[str, str] = {}
@@ -923,6 +1025,7 @@ def normalize_set_fields(
             value_text=value_text,
             now=now,
             tz=tz,
+            existing_frontmatter=existing_frontmatter,
         )
         if value_error or normalized_value is None:
             return None, value_error or "value_parse_failed", notes
@@ -1224,6 +1327,7 @@ async def queue_nl_mutation_confirmation(
                         routing=routing,
                         now=now_local,
                         tz=tz,
+                        existing_frontmatter=frontmatter,
                     )
                     if normalized_fields is None:
                         normalized_fields = {}
@@ -1503,51 +1607,42 @@ async def queue_nl_mutation_confirmation(
     return True
 
 
-async def maybe_route_nl_command(
+async def interpret_message_triage(
+    *,
+    runtime: RoutingRuntime,
+    content: str,
+    raw_id: str,
+    config: dict[str, Any],
+    provider: Any,
+    model: str,
+) -> _MessageTriageV1:
+    del raw_id
+    prompt_path = _message_triage_prompt_path(config)
+    prompt = runtime.load_prompt(prompt_path)
+    with telemetry.start_span("llm.triage"):
+        interpretation = await runtime.interpret_text_async(
+            provider=provider,
+            text=content,
+            model=model,
+            system_prompt=prompt,
+            schema_path=_MESSAGE_TRIAGE_SCHEMA_PATH,
+        )
+    payload = interpretation.derived if isinstance(getattr(interpretation, "derived", None), dict) else {}
+    return _normalize_message_triage_payload(payload)
+
+
+async def handle_message_triage(
     *,
     runtime: RoutingRuntime,
     context: TransportMessageContext,
     content: str,
     raw_id: str,
     config: dict[str, Any],
-    provider: Any,
-    model: str,
+    triage: _MessageTriageV1,
 ) -> bool:
     root_span = telemetry.current_span()
     routing = load_nl_command_routing_config(config)
-    if not routing.enabled:
-        return False
-
-    llm_config = config.get("llm", {})
-    prompt_path = "config/prompts/nl_command_routing_v1.txt"
-    if isinstance(llm_config, dict):
-        configured = llm_config.get("nl_command_routing_prompt_path")
-        if isinstance(configured, str) and configured.strip():
-            prompt_path = configured
-    try:
-        prompt = runtime.load_prompt(prompt_path)
-    except OSError as exc:
-        logging.warning("nl_route_prompt_load_failed path=%s error=%s", prompt_path, exc)
-        return False
-
-    try:
-        with telemetry.start_span("llm.route_intent"):
-            interpretation = await runtime.interpret_text_async(
-                provider=provider,
-                text=content,
-                model=model,
-                system_prompt=prompt,
-                schema_path=_NL_INTENT_SCHEMA_PATH,
-            )
-    except Exception as exc:
-        if exc.__class__.__name__ == "InterpretationValidationError":
-            logging.warning("nl_route_invalid id=%s error=%s", raw_id, exc)
-        else:
-            logging.warning("nl_route_failed id=%s error=%s", raw_id, exc)
-        return False
-
-    payload = interpretation.derived if isinstance(getattr(interpretation, "derived", None), dict) else {}
-    route = _normalize_nl_route_payload(payload)
+    route = triage
     intent = route.intent
     risk_tier = route.risk_tier
     confidence = route.confidence
@@ -1560,6 +1655,17 @@ async def maybe_route_nl_command(
         },
         span=root_span,
     )
+    if not routing.enabled:
+        threshold = routing.read_auto_min_confidence if risk_tier == "read" else routing.mutation_confirm_min_confidence
+        _log_nl_route_evaluated(
+            raw_event_id=raw_id,
+            route_result="fallthrough",
+            intent=intent,
+            risk_tier=risk_tier,
+            confidence_band=_confidence_band(confidence, threshold),
+            mapped_command=mapped_command,
+        )
+        return False
     clarification_payload = route.clarification or {}
     clarification_question = _coerce_non_empty_str(clarification_payload.get("question"))
     clarification_options_raw = clarification_payload.get("options")
@@ -1935,3 +2041,33 @@ async def maybe_route_nl_command(
         mapped_command=mapped_command,
     )
     return False
+
+
+async def triage_message(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    content: str,
+    raw_id: str,
+    config: dict[str, Any],
+    provider: Any,
+    model: str,
+) -> MessageTriageOutcome:
+    triage = await interpret_message_triage(
+        runtime=runtime,
+        content=content,
+        raw_id=raw_id,
+        config=config,
+        provider=provider,
+        model=model,
+    )
+
+    handled = await handle_message_triage(
+        runtime=runtime,
+        context=context,
+        content=content,
+        raw_id=raw_id,
+        config=config,
+        triage=triage,
+    )
+    return MessageTriageOutcome(triage=triage, handled=handled)
