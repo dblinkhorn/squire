@@ -175,6 +175,102 @@ def test_handle_command_done_delegates_to_apply_operation() -> None:
     assert fields == {"status": "done", "completed_at": "2026-02-21T12:00:00+00:00"}
 
 
+def test_handle_command_detail_uses_object_dump_builder() -> None:
+    captured: dict[str, object] = {}
+    calls: list[str] = []
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def parse_positive_int(self, value: str) -> int | None:
+            trimmed = value.strip()
+            return int(trimmed) if trimmed.isdigit() else None
+
+        def resolve_result_cursor(self, context, number: int) -> str | None:
+            assert number == 1
+            return "A_1"
+
+        def build_item_object_dump(self, objects_root, object_id: str) -> str | None:
+            captured["object_id"] = object_id
+            return "```yaml\nid: A_1\n```"
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            calls.append(f"send:{content}")
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!detail 1",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["object_id"] == "A_1"
+    assert calls == ["swap:⏳:✅", "send:```yaml\nid: A_1\n```"]
+
+
+def test_handle_command_fix_without_updates_shows_fix_guidance() -> None:
+    captured: dict[str, object] = {}
+    calls: list[str] = []
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def resolve_command_target(self, context, target_token: str) -> _TargetResolution:
+            assert target_token == "2"
+            return _TargetResolution(
+                target_id="A_2",
+                row_number=2,
+                source_view="recent",
+            )
+
+        def build_fix_guidance(self, objects_root, object_id: str, *, target_token: str) -> str | None:
+            captured["object_id"] = object_id
+            captured["target_token"] = target_token
+            return "**Current fields:**\n```yaml\nstatus: open\n```"
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            calls.append(f"swap:{remove_emoji}:{add_emoji}")
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            calls.append(f"send:{content}")
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!fix 2",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["object_id"] == "A_2"
+    assert captured["target_token"] == "2"
+    assert calls == ["swap:⏳:✅", "send:**Current fields:**\n```yaml\nstatus: open\n```"]
+
+
 def test_handle_command_recent_accepts_limit_and_category() -> None:
     captured: dict[str, object] = {}
     calls: list[str] = []
@@ -271,6 +367,94 @@ def test_handle_command_recent_accepts_category_only() -> None:
     assert captured["limit"] is None
     assert captured["object_type"] == "people"
     assert str(captured["response"]).startswith("Recent people notes:\n1. Person note")
+
+
+def test_handle_command_active_accepts_category_only() -> None:
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def parse_positive_int(self, value: str) -> int | None:
+            trimmed = value.strip()
+            return int(trimmed) if trimmed.isdigit() else None
+
+        def build_active_list(self, objects_root, config, *, limit=None, object_type=None):
+            captured["limit"] = limit
+            captured["object_type"] = object_type
+            return SimpleNamespace(lines=["🧱 **Active projects**", "───────────────", "1. Repaint house"], object_ids=["PR_1"])
+
+        def store_result_cursor(self, context, config, object_ids, *, source_view="unknown") -> None:
+            captured["cursor_ids"] = list(object_ids)
+            captured["source_view"] = source_view
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            return None
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            captured["response"] = content
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!active project",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["limit"] is None
+    assert captured["object_type"] == "projects"
+    assert captured["cursor_ids"] == ["PR_1"]
+    assert captured["source_view"] == "active"
+    assert str(captured["response"]).startswith("Active project notes:\n🧱 **Active projects**")
+
+
+def test_handle_command_active_rejects_unknown_category() -> None:
+    captured: dict[str, object] = {}
+
+    class _Runtime:
+        schema_map = {}
+        help_copy = ""
+        help_details = {}
+        numbered_command_tip = "tip"
+        numbered_command_tip_with_recent_limit = "tip+recent"
+
+        def load_matching_config(self, config):
+            return object()
+
+        def parse_positive_int(self, value: str) -> int | None:
+            trimmed = value.strip()
+            return int(trimmed) if trimmed.isdigit() else None
+
+        async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
+            captured["reaction"] = (remove_emoji, add_emoji)
+
+        async def send_response(self, message, content: str, *, thread_title=None, view=None) -> None:
+            captured["response"] = content
+
+    handled = asyncio.run(
+        handle_command(
+            runtime=_Runtime(),
+            context=_Message(),
+            content="!active chores",
+            raw_id="R_1",
+            config={},
+        )
+    )
+
+    assert handled is True
+    assert captured["reaction"] == ("⏳", "⚠️")
+    assert captured["response"] == "Usage: !active [number] [category]"
 
 
 def test_handle_command_recent_rejects_unknown_category() -> None:

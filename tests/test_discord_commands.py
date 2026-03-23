@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from squire_core.canonical_store import CanonicalObject, write_canonical_object
 from squire_core.pending_actions import PendingAction
 from squire_core.surfacing import DailyDigest, DigestSection, WeeklyReview
 from squire_core.transport import commands as transport_commands
@@ -444,6 +445,50 @@ def test_handle_command_find_does_not_override_digest_id_flag(monkeypatch, runti
     assert "!append <number> <text>" in str(captured["response"])
 
 
+def test_handle_command_active_does_not_override_digest_id_flag(monkeypatch, runtime_state: RuntimeStateStore) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        return None
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    def _fake_build_active_list(objects_root, config, limit=None, object_type=None):
+        captured["show_ids_daily_weekly"] = config.get("surfacing", {}).get("output", {}).get("show_ids_daily_weekly")
+        captured["object_type"] = object_type
+        return SimpleNamespace(
+            lines=[
+                "📂 **Active admin**",
+                "────────────",
+                "1. Pay rent (A_2) - admin",
+            ],
+            object_ids=["A_2"],
+        )
+
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
+    monkeypatch.setattr(command_adapter, "build_active_list", _fake_build_active_list)
+
+    message = _Message("!active admin", user_id=11, channel_id=22)
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "surfacing": {"output": {"show_ids_daily_weekly": False}},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
+    handled = asyncio.run(
+        message_entry.handle_command(message, "!active admin", "R_1", config, runtime_state=runtime_state)
+    )
+
+    assert handled is True
+    assert captured["show_ids_daily_weekly"] is False
+    assert captured["object_type"] == "admin"
+    assert "📂 **Active admin**" in str(captured["response"])
+    assert "Pay rent (A_2)" in str(captured["response"])
+    assert "!done <number>" in str(captured["response"])
+
+
 def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch, runtime_state: RuntimeStateStore) -> None:
     captured: dict[str, object] = {}
     runtime_state.result_cursors.clear()
@@ -482,6 +527,165 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch, runti
     assert handled is True
     assert captured["show_ids_daily_weekly"] is False
     assert "(ID: A_2)" in str(captured["response"])
+
+
+def test_build_fix_guidance_lists_current_and_unset_fix_fields(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    write_canonical_object(
+        canonical=CanonicalObject(
+            frontmatter={
+                "id": "ADM_DETAIL",
+                "type": "admin",
+                "title": "Call dentist",
+                "created_at": "2026-03-20T10:00:00+00:00",
+                "updated_at": "2026-03-21T10:00:00+00:00",
+                "archived": False,
+                "status": "open",
+                "next_action": "Call dentist",
+                "due_date": "2026-03-25",
+            },
+            body="Need to reschedule cleaning appointment.",
+        ),
+        objects_root=objects_root,
+        schema_path=Path("config/schemas/canonical_object_v1.json"),
+    )
+
+    detail = command_adapter.build_fix_guidance(objects_root, "ADM_DETAIL", target_token="1")
+
+    assert detail is not None
+    assert "**Fix guidance for:** Call dentist" in detail
+    assert "**Current fields:**" in detail
+    assert "```yaml" in detail
+    assert "title: Call dentist" in detail
+    assert "status: open" in detail
+    assert "next_action: Call dentist" in detail
+    assert "due_date:" in detail
+    assert "**Unset but editable:**" in detail
+    assert "priority" in detail
+    assert "blocked_reason" in detail
+    assert "**Allowed values:**" in detail
+    assert "`status`:" in detail
+    assert "`open`" in detail
+    assert "`priority`:" in detail
+    assert "!append 1 <text>" in detail
+    assert '!fix 1 status=blocked priority=high' in detail
+
+
+def test_build_item_object_dump_returns_full_note_object(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    write_canonical_object(
+        canonical=CanonicalObject(
+            frontmatter={
+                "id": "ADM_FULL",
+                "type": "admin",
+                "title": "Call dentist",
+                "created_at": "2026-03-20T10:00:00+00:00",
+                "updated_at": "2026-03-21T10:00:00+00:00",
+                "archived": False,
+                "status": "open",
+                "next_action": "Call dentist",
+                "due_date": "2026-03-25",
+            },
+            body="Need to reschedule cleaning appointment.",
+        ),
+        objects_root=objects_root,
+        schema_path=Path("config/schemas/canonical_object_v1.json"),
+    )
+
+    detail = command_adapter.build_item_object_dump(objects_root, "ADM_FULL")
+
+    assert detail is not None
+    assert detail.startswith("```yaml\n")
+    assert "id: ADM_FULL" in detail
+    assert "type: admin" in detail
+    assert "title: Call dentist" in detail
+    assert "status: open" in detail
+    assert "next_action: Call dentist" in detail
+    assert "body: Need to reschedule cleaning appointment." in detail
+    assert detail.endswith("\n```")
+
+
+def test_handle_command_detail_uses_object_dump_builder(monkeypatch, runtime_state: RuntimeStateStore) -> None:
+    captured: dict[str, object] = {}
+    runtime_state.result_cursors.clear()
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        return None
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    def _fake_build_item_object_dump(objects_root, object_id):
+        captured["object_id"] = object_id
+        return "```yaml\nstatus: open\n```"
+
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
+    monkeypatch.setattr(command_adapter, "build_item_object_dump", _fake_build_item_object_dump)
+
+    message = _Message("!detail 1", user_id=11, channel_id=22)
+    key = cursor_key(message)
+    runtime_state.result_cursors[key] = ResultCursor(
+        object_ids=["ADM_DETAIL"],
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
+    handled = asyncio.run(
+        message_entry.handle_command(message, "!detail 1", "R_1", config, runtime_state=runtime_state)
+    )
+
+    assert handled is True
+    assert captured["object_id"] == "ADM_DETAIL"
+    assert "status: open" in str(captured["response"])
+
+
+def test_handle_command_fix_without_updates_shows_fix_guidance(
+    monkeypatch, runtime_state: RuntimeStateStore
+) -> None:
+    captured: dict[str, object] = {}
+    runtime_state.result_cursors.clear()
+
+    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
+        return None
+
+    async def _fake_send_response(message, content, thread_title=None, view=None):
+        captured["response"] = content
+
+    def _fake_build_fix_guidance(objects_root, object_id, *, target_token):
+        captured["object_id"] = object_id
+        captured["target_token"] = target_token
+        return "**Current fields:**\n```yaml\nstatus: open\n```"
+
+    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
+    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
+    monkeypatch.setattr(command_adapter, "build_fix_guidance", _fake_build_fix_guidance)
+
+    message = _Message("!fix 1", user_id=11, channel_id=22)
+    key = cursor_key(message)
+    runtime_state.result_cursors[key] = ResultCursor(
+        object_ids=["ADM_DETAIL"],
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        source_view="find",
+    )
+
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "matching": {"semantic_weight": 0},
+        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
+    }
+    handled = asyncio.run(
+        message_entry.handle_command(message, "!fix 1", "R_1", config, runtime_state=runtime_state)
+    )
+
+    assert handled is True
+    assert captured["object_id"] == "ADM_DETAIL"
+    assert captured["target_token"] == "1"
+    assert "status: open" in str(captured["response"])
 
 
 def test_handle_command_status_stores_numbered_cursor(monkeypatch, runtime_state: RuntimeStateStore) -> None:

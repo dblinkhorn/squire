@@ -29,7 +29,7 @@ Goal example:
 
 - `!done <number>` resolution from active numbered cursor.
 - `!append <number> <text>` resolution from active numbered cursor.
-- `!fix <number> <field=value> [field=value ...]` resolution from active numbered cursor.
+- `!fix <number> [field=value ...]` resolution from active numbered cursor.
 - Numbered cursor creation from:
   - `!recent [number]`
   - `!find <query>`
@@ -87,13 +87,13 @@ Tips policy (required):
   - `!show <number>`
   - `!done <number>`
   - `!append <number> <text>`
-  - `!fix <number> <field=value>`
+  - `!fix <number> [field=value ...]`
   - `!recent [number]` supports up to `50`
 - `!find` footer includes:
   - `!show <number>`
   - `!done <number>`
   - `!append <number> <text>`
-  - `!fix <number> <field=value>`
+  - `!fix <number> [field=value ...]`
 - `!status` and `!weekly` include a concise mutation tip footer:
   - before numbered mutation support is active for those views, point users to `!recent`/`!find` for actionable numbering
   - after numbered support is active, use the same numbered mutation tip set as `!recent`/`!find`
@@ -141,7 +141,7 @@ Success:
 
 Tips (examples):
 
-- `Tip: !show <number> · !done <number> · !append <number> <text> · !fix <number> <field=value>`
+- `Tip: !show <number> · !done <number> · !append <number> <text> · !fix <number> [field=value ...]`
 - `Tip: !recent [number] supports up to 50`
 
 ## Telemetry

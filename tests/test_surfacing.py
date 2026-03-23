@@ -7,6 +7,7 @@ from squire_core.canonical_store import CanonicalObject, write_canonical_object
 from squire_core.indexer import rebuild_index
 from squire_core.surfacing import (
     DueTimeReminderEvent,
+    build_active_list,
     build_daily_digest,
     build_due_time_reminder_events,
     build_find_list,
@@ -620,6 +621,152 @@ def test_build_recent_list_filters_by_category(tmp_path: Path) -> None:
     assert len(idea_only.lines) == 1
     assert idea_only.lines[0].startswith("1. Newest idea")
     assert "\n   • idea" in idea_only.lines[0]
+
+
+def test_build_active_list_groups_by_type_and_skips_inactive(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    config = {"timezone": "UTC"}
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_ACTIVE",
+                object_type="admin",
+                title="Call plumber",
+                created_at="2026-03-20T00:00:00+00:00",
+                updated_at="2026-03-20T00:00:00+00:00",
+            ),
+            "status": "blocked",
+            "next_action": "Call plumber",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="PR_ACTIVE",
+                object_type="projects",
+                title="Repaint house",
+                created_at="2026-03-21T00:00:00+00:00",
+                updated_at="2026-03-21T00:00:00+00:00",
+            ),
+            "status": "planning",
+            "next_action": "Repaint house",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="P_ACTIVE",
+                object_type="people",
+                title="Alex Chen",
+                created_at="2026-03-22T00:00:00+00:00",
+                updated_at="2026-03-22T00:00:00+00:00",
+            ),
+            "name": "Alex Chen",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="IDEA_ACTIVE",
+                object_type="ideas",
+                title="Garage shelving idea",
+                created_at="2026-03-23T00:00:00+00:00",
+                updated_at="2026-03-23T00:00:00+00:00",
+            ),
+            "one_liner": "Garage shelving idea",
+            "status": "active",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_DONE",
+                object_type="admin",
+                title="Pay rent",
+                created_at="2026-03-20T00:00:00+00:00",
+                updated_at="2026-03-20T00:00:00+00:00",
+            ),
+            "status": "done",
+            "next_action": "Pay rent",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="PR_DONE",
+                object_type="projects",
+                title="Finished remodel",
+                created_at="2026-03-20T00:00:00+00:00",
+                updated_at="2026-03-20T00:00:00+00:00",
+            ),
+            "status": "completed",
+            "next_action": "Celebrate",
+        },
+    )
+
+    surfaced = build_active_list(objects_root, config)
+
+    assert surfaced.object_ids == ["ADM_ACTIVE", "PR_ACTIVE", "P_ACTIVE", "IDEA_ACTIVE"]
+    rendered = "\n".join(surfaced.lines)
+    assert "📂 **Active admin**" in rendered
+    assert "🧱 **Active projects**" in rendered
+    assert "🤝 **Active people**" in rendered
+    assert "💡 **Active ideas**" in rendered
+    assert "1. Call plumber" in rendered
+    assert "2. Repaint house" in rendered
+    assert "3. Alex Chen" in rendered
+    assert "4. Garage shelving idea" in rendered
+    assert "Pay rent" not in rendered
+    assert "Finished remodel" not in rendered
+
+
+def test_build_active_list_filters_by_category(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    config = {"timezone": "UTC"}
+
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="ADM_ACTIVE_ONLY",
+                object_type="admin",
+                title="Call plumber",
+                created_at="2026-03-20T00:00:00+00:00",
+                updated_at="2026-03-20T00:00:00+00:00",
+            ),
+            "status": "open",
+            "next_action": "Call plumber",
+        },
+    )
+    _write_object(
+        objects_root,
+        {
+            **_base_frontmatter(
+                object_id="PR_ACTIVE_ONLY",
+                object_type="projects",
+                title="Repaint house",
+                created_at="2026-03-21T00:00:00+00:00",
+                updated_at="2026-03-21T00:00:00+00:00",
+            ),
+            "status": "planning",
+            "next_action": "Repaint house",
+        },
+    )
+
+    surfaced = build_active_list(objects_root, config, object_type="projects")
+
+    assert surfaced.object_ids == ["PR_ACTIVE_ONLY"]
+    rendered = "\n".join(surfaced.lines)
+    assert "🧱 **Active projects**" in rendered
+    assert "Repaint house" in rendered
+    assert "Call plumber" not in rendered
 
 
 def test_build_find_list_and_item_detail(tmp_path: Path) -> None:

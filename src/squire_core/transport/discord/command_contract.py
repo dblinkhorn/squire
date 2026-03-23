@@ -17,14 +17,14 @@ PENDING_CONTROLS_INSTRUCTION = (
     "Use the buttons below to confirm which note should be updated, choose to create a new note, or cancel (do nothing):"
 )
 NUMBERED_COMMAND_TIP = (
-    "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value`"
+    "Tip: `!show <number>` · `!detail <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> [field=value ...]`"
 )
 NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT = (
-    "Tip: `!show <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> field=value` · `!recent <number> [category]` (up to 50)"
+    "Tip: `!show <number>` · `!detail <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> [field=value ...]` · `!recent <number> [category]` (up to 50)"
 )
 NUMBERED_LIST_ACTION_HELP_COPY = (
     "After this command shows a numbered list, you can use those numbers to take action on items (for example: "
-    "`!show 2`, `!append 2 <text>`, `!fix 2 field=value`, or `!done 2` for admin items)."
+    "`!show 2`, `!detail 2`, `!append 2 <text>`, `!fix 2`, or `!done 2` for admin items)."
 )
 HELP_COPY = (
     "Available commands:\n"
@@ -32,11 +32,13 @@ HELP_COPY = (
     "- `!status` - show daily digest\n"
     "- `!weekly` - show weekly review\n"
     "- `!recent [number] [category]` - list recent notes\n"
+    "- `!active [number] [category]` - list active notes by type\n"
     "- `!find <query>` - search notes\n"
     "- `!show <number>` - open one result\n"
+    "- `!detail <number>` - show the full note object for one result\n"
     "- `!append <id|number> <text>` - append note text\n"
     "- `!done <id|number>` - mark admin done\n"
-    "- `!fix <id|number> <field=value> [field=value ...]` - edit note fields\n"
+    "- `!fix <id|number> [field=value ...]` - show or edit note fields\n"
     "- `!confirm <pending_id>` - apply pending change\n"
     "- `!cancel <pending_id>` - cancel pending change\n"
     "- `!clear-archive` then `DELETE` - clear archive data\n"
@@ -62,6 +64,11 @@ HELP_DETAILS = {
         "Lists your recent notes. You can optionally add a limit, a category (`admin`, `project`, `person`, `idea`), or both (up to 50).\n"
         + NUMBERED_LIST_ACTION_HELP_COPY
     ),
+    "active": (
+        "`!active [number] [category]`\n"
+        "Lists active notes grouped by type. You can optionally add a limit, a category (`admin`, `project`, `person`, `idea`), or both.\n"
+        + NUMBERED_LIST_ACTION_HELP_COPY
+    ),
     "find": (
         "`!find <query>`\n"
         "Searches your notes by title and body.\n"
@@ -69,25 +76,31 @@ HELP_DETAILS = {
     ),
     "show": (
         "`!show <number>`\n"
-        "Opens details for one item from your latest numbered list (for example, after `!recent`, `!find`, "
+        "Opens details for one item from your latest numbered list (for example, after `!recent`, `!active`, `!find`, "
         "`!status`, or `!weekly`)."
+    ),
+    "detail": (
+        "`!detail <number>`\n"
+        "Shows the full raw note object for one item from your latest numbered list."
     ),
     "append": (
         "`!append <id|number> <text>`\n"
         "Appends text to an existing note body. The target can be an ID or a row number from your latest numbered "
-        "list (for example, after `!recent`, `!find`, `!status`, or `!weekly`)."
+        "list (for example, after `!recent`, `!active`, `!find`, `!status`, or `!weekly`)."
     ),
     "done": (
         "`!done <id|number>`\n"
         "Marks an admin item as done. This sets `status=done` and records `completed_at`. The target can be an ID "
-        "or a row number from your latest numbered list (for example, after `!recent`, `!find`, `!status`, or "
+        "or a row number from your latest numbered list (for example, after `!recent`, `!active`, `!find`, `!status`, or "
         "`!weekly`)."
     ),
     "fix": (
-        "`!fix <id|number> <field=value> [field=value ...]`\n"
-        "Updates allowed fields on an existing note. Quote values containing spaces (for example "
-        "`next_action=\"Call dentist\"`). The target can be an ID or a row number from your latest numbered list "
-        "(for example, after `!recent`, `!find`, `!status`, or `!weekly`)."
+        "`!fix <id|number> [field=value ...]`\n"
+        "With no field updates, shows the editable fields for a note, including current values, unset editable "
+        "fields, and example `!fix` commands. Add one or more `field=value` pairs to update allowed fields on an "
+        "existing note. Quote values containing spaces (for example `next_action=\"Call dentist\"`). The target can "
+        "be an ID or a row number from your latest numbered list (for example, after `!recent`, `!active`, `!find`, "
+        "`!status`, or `!weekly`)."
     ),
     "confirm": (
         "`!confirm <pending_id>`\n"

@@ -1,1 +1,1 @@
-No active items.
+No active plan items.

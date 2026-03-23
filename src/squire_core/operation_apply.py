@@ -185,6 +185,10 @@ def apply_operations(
         if object_type == "people":
             _require("name", fields)
         if object_type == "projects":
+            if not fields.get("next_action") and fields.get("title"):
+                fields["next_action"] = fields["title"]
+            if not fields.get("status"):
+                fields["status"] = "planning"
             _require("next_action", fields)
             _require("status", fields)
         if object_type == "ideas":

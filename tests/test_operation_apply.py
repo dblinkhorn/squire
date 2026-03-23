@@ -117,3 +117,59 @@ def test_apply_operations_update_due_date_clears_existing_due_at(tmp_path) -> No
     frontmatter = load_frontmatter(result.written_paths[0])
     assert frontmatter["due_date"] == "2026-02-09"
     assert "due_at" not in frontmatter
+
+
+def test_apply_operations_project_create_falls_back_next_action_to_title(tmp_path) -> None:
+    result = apply_operations(
+        {
+            "object_type": "projects",
+            "raw_event_id": "R_PROJECT_1",
+            "extracted_fields": {},
+            "proposed_operations": [
+                {
+                    "op": "create",
+                    "target_id": None,
+                    "fields": {
+                        "title": "Replace moldy baseboard in bathrooms",
+                        "status": "planning",
+                    },
+                }
+            ],
+        },
+        objects_root=tmp_path,
+        canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+        derived_schema_path=None,
+    )
+
+    frontmatter = load_frontmatter(result.written_paths[0])
+    assert frontmatter["title"] == "Replace moldy baseboard in bathrooms"
+    assert frontmatter["status"] == "planning"
+    assert frontmatter["next_action"] == "Replace moldy baseboard in bathrooms"
+
+
+def test_apply_operations_project_create_defaults_status_to_planning(tmp_path) -> None:
+    result = apply_operations(
+        {
+            "object_type": "projects",
+            "raw_event_id": "R_PROJECT_2",
+            "extracted_fields": {},
+            "proposed_operations": [
+                {
+                    "op": "create",
+                    "target_id": None,
+                    "fields": {
+                        "title": "Repaint house",
+                        "next_action": "Repaint house",
+                    },
+                }
+            ],
+        },
+        objects_root=tmp_path,
+        canonical_schema_path=Path("config/schemas/canonical_object_v1.json"),
+        derived_schema_path=None,
+    )
+
+    frontmatter = load_frontmatter(result.written_paths[0])
+    assert frontmatter["title"] == "Repaint house"
+    assert frontmatter["status"] == "planning"
+    assert frontmatter["next_action"] == "Repaint house"

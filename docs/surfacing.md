@@ -31,6 +31,7 @@ ID behavior:
 
 - scheduled digests/reviews omit IDs by default (configurable via `surfacing.output.show_ids_daily_weekly`)
 - manual pull lists (`!recent`, `!find`, `!show`) include IDs
+- `!active` groups live notes by type and includes numbered rows for follow-up commands
 
 ## Configuration Defaults
 
@@ -39,5 +40,6 @@ Surfacing rules are configurable in `config.yaml`. Default behavior is:
 - Admin: overdue, due-today, and due-soon sections.
 - Admin: an additional without-due-dates section appears after the scheduled admin sections.
 - Projects: surfaced when status is blocked or stale.
+- Active list: `!active` shows non-archived notes grouped by type and excludes completed/done items.
 - Ideas: included in the weekly review when `surfacing.ideas.weekly_review` is true.
 - People: surfaced when `next_contact` is due.

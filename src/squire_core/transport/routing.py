@@ -1057,7 +1057,7 @@ def _clarification_for_plan_reason(reason_code: str, *, object_type: str | None 
         suffix = f" for {object_type}" if object_type else ""
         return (
             f"I couldn't determine a valid field{suffix}.",
-            ["Tell me the exact field name", "Use a due/date phrasing", "Use `!fix <id|number> <field=value>`"],
+            ["Tell me the exact field name", "Use a due/date phrasing", "Use `!fix <id|number>` to inspect editable fields"],
         )
     if reason_code == "value_parse_failed":
         return (

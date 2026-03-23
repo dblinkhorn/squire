@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 from squire_core.llm.openai_provider import OpenAIProvider
+from squire_core.schema_loader import load_json_schema
 
 def test_interpret_uses_configured_timeout(monkeypatch) -> None:
     captured: dict[str, float] = {}
@@ -147,3 +149,49 @@ def test_sync_methods_raise_inside_active_event_loop(monkeypatch) -> None:
             )
 
     asyncio.run(_run())
+
+
+def test_interpret_sanitizes_local_refs_for_response_format(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def _fake_post_json(self, url, body, *, timeout_seconds, error_prefix):
+        del self, url, timeout_seconds, error_prefix
+        captured["schema"] = body["text"]["format"]["schema"]
+        return {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": json.dumps({"title": "Call dentist"})}],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(OpenAIProvider, "_post_json", _fake_post_json)
+    provider = OpenAIProvider(api_key="test")
+    schema = load_json_schema(Path("config/schemas/derived_event_admin_v1.json"))
+
+    asyncio.run(
+        provider.interpret_async(
+            text="call dentist",
+            schema=schema,
+            model="gpt-5-mini",
+            system_prompt="Extract",
+        )
+    )
+
+    sent_schema = captured["schema"]
+    assert isinstance(sent_schema, dict)
+    assert "$schema" not in sent_schema
+    assert "$id" not in sent_schema
+    assert "definitions" not in sent_schema
+    assert "$ref" not in json.dumps(sent_schema)
+    assert "format" not in json.dumps(sent_schema)
+    assert sorted(sent_schema["required"]) == sorted(sent_schema["properties"].keys())
+    assert sent_schema["properties"]["extracted_fields"]["type"] == "object"
+    assert sorted(sent_schema["properties"]["extracted_fields"]["required"]) == sorted(
+        sent_schema["properties"]["extracted_fields"]["properties"].keys()
+    )
+    assert sent_schema["properties"]["proposed_operations"]["items"]["type"] == "object"
+    assert sorted(sent_schema["properties"]["proposed_operations"]["items"]["required"]) == sorted(
+        sent_schema["properties"]["proposed_operations"]["items"]["properties"].keys()
+    )

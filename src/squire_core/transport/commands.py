@@ -117,6 +117,16 @@ class CommandRuntime(Protocol):
     ) -> _SurfacedListLike:
         ...
 
+    def build_active_list(
+        self,
+        objects_root: str | Path,
+        config: dict[str, Any],
+        *,
+        limit: int | None = None,
+        object_type: str | None = None,
+    ) -> _SurfacedListLike:
+        ...
+
     def build_find_list(
         self,
         objects_root: str | Path,
@@ -219,6 +229,18 @@ class CommandRuntime(Protocol):
     def build_item_detail(self, objects_root: str | Path, object_id: str, config: dict[str, Any]) -> str:
         ...
 
+    def build_item_object_dump(self, objects_root: str | Path, object_id: str) -> str | None:
+        ...
+
+    def build_fix_guidance(
+        self,
+        objects_root: str | Path,
+        object_id: str,
+        *,
+        target_token: str,
+    ) -> str | None:
+        ...
+
     def now_iso(self) -> str:
         ...
 
@@ -229,6 +251,10 @@ def _normalize_recent_category(value: str) -> str | None:
 
 def _recent_usage() -> str:
     return "Usage: !recent [number] [category]"
+
+
+def _active_usage() -> str:
+    return "Usage: !active [number] [category]"
 
 
 def _valid_commands(runtime: CommandRuntime) -> list[str]:
@@ -413,6 +439,64 @@ async def handle_command(
             + runtime.numbered_command_tip_with_recent_limit,
         )
         return True
+    if command == "!active":
+        limit: int | None = None
+        object_type: str | None = None
+        if len(parts) > 3:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, _active_usage())
+            return True
+
+        for token in parts[1:]:
+            parsed = runtime.parse_positive_int(token)
+            if parsed is not None:
+                if limit is not None:
+                    await runtime.swap_reaction(context, "⏳", "⚠️")
+                    telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                    await _send_traced_response(runtime, context, _active_usage())
+                    return True
+                limit = parsed
+                continue
+
+            normalized_category = _normalize_recent_category(token)
+            if normalized_category is not None:
+                if object_type is not None:
+                    await runtime.swap_reaction(context, "⏳", "⚠️")
+                    telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+                    await _send_traced_response(runtime, context, _active_usage())
+                    return True
+                object_type = normalized_category
+                continue
+
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, _active_usage())
+            return True
+
+        with telemetry.start_span("active.build"):
+            surfaced = runtime.build_active_list(objects_root, config, limit=limit, object_type=object_type)
+        active_label = _RECENT_CATEGORY_DISPLAY.get(object_type, "active")
+        if not surfaced.lines:
+            await runtime.swap_reaction(context, "⏳", "✅")
+            telemetry.set_span_attribute("squire.outcome", "active_empty", span=root_span)
+            if object_type:
+                await _send_traced_response(runtime, context, f"No active {active_label} notes found.")
+            else:
+                await _send_traced_response(runtime, context, "No active notes found.")
+            return True
+        runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="active")
+        await runtime.swap_reaction(context, "⏳", "✅")
+        header = "Active notes:"
+        if object_type:
+            header = f"Active {active_label} notes:"
+        telemetry.set_span_attribute("squire.outcome", "active_sent", span=root_span)
+        await _send_traced_response(
+            runtime,
+            context,
+            header + "\n" + "\n".join(surfaced.lines) + "\n\n" + runtime.numbered_command_tip_with_recent_limit,
+        )
+        return True
     if command == "!find":
         if len(parts) < 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
@@ -460,7 +544,7 @@ async def handle_command(
             await _send_traced_response(
                 runtime,
                 context,
-                "No active result list for that number. Run !recent, !find, !status, or !weekly first.",
+                "No active result list for that number. Run !recent, !active, !find, !status, or !weekly first.",
             )
             return True
         telemetry.set_span_attribute("squire.row_number", number, span=root_span)
@@ -473,6 +557,40 @@ async def handle_command(
             return True
         await runtime.swap_reaction(context, "⏳", "✅")
         telemetry.set_span_attribute("squire.outcome", "show_sent", span=root_span)
+        await _send_traced_response(runtime, context, detail)
+        return True
+    if command == "!detail":
+        if len(parts) != 2:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !detail <number>")
+            return True
+        number = runtime.parse_positive_int(parts[1])
+        if number is None:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !detail <number>")
+            return True
+        object_id = runtime.resolve_result_cursor(context, number)
+        if object_id is None:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "detail_missing_cursor", span=root_span)
+            await _send_traced_response(
+                runtime,
+                context,
+                "No active result list for that number. Run !recent, !active, !find, !status, or !weekly first.",
+            )
+            return True
+        telemetry.set_span_attribute("squire.row_number", number, span=root_span)
+        with telemetry.start_span("detail.build"):
+            detail = runtime.build_item_object_dump(objects_root, object_id)
+        if not detail:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "detail_missing_note", span=root_span)
+            await _send_traced_response(runtime, context, "That note is no longer available.")
+            return True
+        await runtime.swap_reaction(context, "⏳", "✅")
+        telemetry.set_span_attribute("squire.outcome", "detail_sent", span=root_span)
         await _send_traced_response(runtime, context, detail)
         return True
     if command == "!append":
@@ -579,10 +697,10 @@ async def handle_command(
             telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
             await _send_traced_response(runtime, context, "Invalid !fix syntax. Quote values containing spaces.")
             return True
-        if len(fix_parts) < 3:
+        if len(fix_parts) < 2:
             await runtime.swap_reaction(context, "⏳", "⚠️")
             telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
-            await _send_traced_response(runtime, context, "Usage: !fix <id|number> <field=value> [field=value ...]")
+            await _send_traced_response(runtime, context, "Usage: !fix <id|number> [field=value ...]")
             return True
         target_resolution = runtime.resolve_command_target(context, fix_parts[1])
         if target_resolution.reason and target_resolution.row_number is not None:
@@ -602,7 +720,30 @@ async def handle_command(
         if not target_id:
             await runtime.swap_reaction(context, "⏳", "⚠️")
             telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
-            await _send_traced_response(runtime, context, "Usage: !fix <id|number> <field=value> [field=value ...]")
+            await _send_traced_response(runtime, context, "Usage: !fix <id|number> [field=value ...]")
+            return True
+        if len(fix_parts) == 2:
+            telemetry.set_span_attributes(
+                {
+                    "squire.source_view": target_resolution.source_view,
+                    "squire.row_number": target_resolution.row_number,
+                },
+                span=root_span,
+            )
+            with telemetry.start_span("fix.guidance.build"):
+                detail = runtime.build_fix_guidance(
+                    objects_root,
+                    target_id,
+                    target_token=fix_parts[1],
+                )
+            if not detail:
+                await runtime.swap_reaction(context, "⏳", "⚠️")
+                telemetry.set_span_attribute("squire.outcome", "fix_guidance_missing_note", span=root_span)
+                await _send_traced_response(runtime, context, "That note is no longer available.")
+                return True
+            await runtime.swap_reaction(context, "⏳", "✅")
+            telemetry.set_span_attribute("squire.outcome", "fix_guidance_sent", span=root_span)
+            await _send_traced_response(runtime, context, detail)
             return True
         updates: dict[str, Any] = {}
         for token in fix_parts[2:]:

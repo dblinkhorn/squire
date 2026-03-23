@@ -134,6 +134,10 @@ _SECTION_EMOJI = {
     "Blocked or stale projects": "🧱",
     "People overdue for contact": "🤝",
     "Ideas updated recently": "💡",
+    "Active admin": "📂",
+    "Active projects": "🧱",
+    "Active people": "🤝",
+    "Active ideas": "💡",
 }
 _SECTION_DIVIDER_WIDTH = {
     "Admin overdue": 15,
@@ -146,7 +150,17 @@ _SECTION_DIVIDER_WIDTH = {
     "Blocked or stale projects": 24,
     "People overdue for contact": 25,
     "Ideas updated recently": 21,
+    "Active admin": 12,
+    "Active projects": 15,
+    "Active people": 13,
+    "Active ideas": 12,
 }
+_ACTIVE_SECTION_ORDER = (
+    ("admin", "Active admin"),
+    ("projects", "Active projects"),
+    ("people", "Active people"),
+    ("ideas", "Active ideas"),
+)
 
 
 def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
@@ -1167,6 +1181,65 @@ def build_recent_list(
         for index, item in enumerate(selected)
     ]
     object_ids = [item.object_id for item in selected]
+    return SurfacedList(lines=lines, object_ids=object_ids)
+
+
+def _is_active_item(item: CanonicalItem) -> bool:
+    if _is_archived(item.frontmatter.get("archived")):
+        return False
+    status = str(item.frontmatter.get("status") or "").strip().lower()
+    if item.object_type == "admin":
+        return status != "done"
+    if item.object_type == "projects":
+        return status != "completed"
+    if item.object_type == "ideas":
+        return status != "done"
+    if item.object_type == "people":
+        return True
+    return True
+
+
+def build_active_list(
+    objects_root: str | Path,
+    config: dict[str, Any],
+    *,
+    limit: int | None = None,
+    object_type: str | None = None,
+) -> SurfacedList:
+    tz = resolve_timezone(config.get("timezone"))
+    items = [item for item in _load_items(objects_root) if _is_active_item(item)]
+    if object_type:
+        items = [item for item in items if item.object_type == object_type]
+    items.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
+    if limit is not None:
+        items = items[:_clamp_limit(limit, limit)]
+
+    reference_date = datetime.now(tz).date()
+    lines: list[str] = []
+    object_ids: list[str] = []
+    row_number = 1
+
+    for section_object_type, section_title in _ACTIVE_SECTION_ORDER:
+        section_items = [item for item in items if item.object_type == section_object_type]
+        if not section_items:
+            continue
+        if lines:
+            lines.append("")
+        lines.append(_format_section_title(section_title))
+        lines.append(_section_divider(section_title))
+        for item in section_items:
+            lines.append(
+                _render_list_row(
+                    row_number,
+                    item,
+                    include_ids=False,
+                    tz=tz,
+                    reference_date=reference_date,
+                )
+            )
+            object_ids.append(item.object_id)
+            row_number += 1
+
     return SurfacedList(lines=lines, object_ids=object_ids)
 
 

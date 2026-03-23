@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 import discord
+import yaml
 
 from squire_core.canonical_store import find_object_path, load_frontmatter
 from squire_core.config_utils import MatchingConfig, load_matching_config
 from squire_core.operation_apply import apply_operations
 from squire_core.pending_actions import load_pending_action, update_pending_action_status
 from squire_core.surfacing import (
+    build_active_list,
     build_daily_digest,
     build_find_list,
     build_item_detail,
@@ -53,6 +55,63 @@ from squire_core.transport.targeting import (
     resolve_result_cursor as _resolve_result_cursor,
     store_result_cursor as _store_result_cursor,
 )
+from squire_core.transport.validation import FIX_ALLOWED_FIELDS, FIX_ENUM_VALUES
+
+
+_FIX_FIELD_DISPLAY_ORDER = {
+    "admin": (
+        "title",
+        "status",
+        "next_action",
+        "due_date",
+        "due_at",
+        "priority",
+        "blocked_reason",
+        "completed_at",
+        "gcal_event_id",
+    ),
+    "projects": (
+        "title",
+        "status",
+        "next_action",
+        "goal",
+        "due",
+        "blocked_reason",
+    ),
+    "people": (
+        "title",
+        "name",
+        "context",
+        "follow_ups",
+        "last_contacted",
+        "next_contact",
+    ),
+    "ideas": (
+        "title",
+        "one_liner",
+        "status",
+        "next_step",
+    ),
+}
+
+_FIX_DETAIL_EXAMPLES = {
+    "admin": (
+        '!fix {target} status=blocked priority=high',
+        '!fix {target} blocked_reason="Waiting on vendor"',
+    ),
+    "projects": (
+        '!fix {target} status=blocked',
+        '!fix {target} blocked_reason="Waiting on dependency"',
+    ),
+    "people": (
+        '!fix {target} context="Met at the design meetup"',
+        '!fix {target} next_contact=2026-03-30',
+    ),
+    "ideas": (
+        '!fix {target} status=active',
+        '!fix {target} next_step="Draft outline"',
+    ),
+}
 
 
 # Module-level seams intentionally kept for focused test patching.
@@ -127,6 +186,136 @@ def _log_numbered_mutation_resolution_failed(
         source_view=source_view,
         row_number=row_number,
     )
+
+
+def _load_body(path: Path) -> str:
+    content = path.read_text(encoding="utf-8")
+    parts = content.split("---", 2)
+    if len(parts) != 3:
+        return ""
+    return parts[2].lstrip("\n").rstrip()
+
+
+def _is_present_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, tuple, set)):
+        return bool(value)
+    return True
+
+
+def _ordered_fix_fields(object_type: str) -> tuple[str, ...]:
+    ordered = _FIX_FIELD_DISPLAY_ORDER.get(object_type)
+    if ordered is not None:
+        return ordered
+    allowed = FIX_ALLOWED_FIELDS.get(object_type, set())
+    return tuple(sorted(allowed))
+
+
+def _dump_yaml_block(mapping: dict[str, Any]) -> str:
+    return yaml.safe_dump(
+        mapping,
+        sort_keys=False,
+        default_flow_style=False,
+        allow_unicode=True,
+    ).rstrip()
+
+
+def build_fix_guidance(
+    objects_root: str | Path,
+    object_id: str,
+    *,
+    target_token: str,
+) -> str | None:
+    path = find_object_path(objects_root, object_id)
+    if not path:
+        return None
+    try:
+        frontmatter = load_frontmatter(path)
+    except Exception:
+        return None
+
+    title = frontmatter.get("title")
+    object_type = frontmatter.get("type")
+    if not isinstance(title, str) or not isinstance(object_type, str):
+        return None
+
+    allowed_fields = FIX_ALLOWED_FIELDS.get(object_type)
+    if not allowed_fields:
+        return None
+
+    ordered_fields = _ordered_fix_fields(object_type)
+    current_fields = {
+        field_name: frontmatter[field_name]
+        for field_name in ordered_fields
+        if field_name in allowed_fields and _is_present_value(frontmatter.get(field_name))
+    }
+    unset_fields = [
+        field_name
+        for field_name in ordered_fields
+        if field_name in allowed_fields and field_name not in current_fields
+    ]
+
+    lines = [
+        f"**Fix guidance for:** {title}",
+        f"**Type:** {object_type}",
+        "",
+        "**Current fields:**",
+        "```yaml",
+        _dump_yaml_block(current_fields),
+        "```",
+    ]
+
+    if unset_fields:
+        lines.extend(
+            [
+                "",
+                "**Unset but editable:**",
+                "```text",
+                "\n".join(unset_fields),
+                "```",
+            ]
+        )
+
+    enum_entries = [
+        (field_name, FIX_ENUM_VALUES[(object_type, field_name)])
+        for field_name in ordered_fields
+        if (object_type, field_name) in FIX_ENUM_VALUES
+    ]
+    if enum_entries:
+        lines.extend(["", "**Allowed values:**"])
+        for field_name, values in enum_entries:
+            rendered_values = " | ".join(f"`{value}`" for value in sorted(values))
+            lines.append(f"- `{field_name}`: {rendered_values}")
+
+    body = _load_body(path)
+    if body.strip():
+        lines.extend(["", "**Note:** Use `!append {target} <text>` to add or change note body text.".format(target=target_token)])
+
+    examples = _FIX_DETAIL_EXAMPLES.get(object_type, ())
+    if examples:
+        lines.extend(["", "**Examples:**"])
+        for example in examples:
+            lines.append(f"- `{example.format(target=target_token)}`")
+
+    lines.extend(["", "Quote values containing spaces in `!fix` commands."])
+    return "\n".join(lines)
+
+
+def build_item_object_dump(objects_root: str | Path, object_id: str) -> str | None:
+    path = find_object_path(objects_root, object_id)
+    if not path:
+        return None
+    try:
+        frontmatter = load_frontmatter(path)
+    except Exception:
+        return None
+
+    payload = dict(frontmatter)
+    payload["body"] = _load_body(path)
+    return "```yaml\n" + _dump_yaml_block(payload) + "\n```"
 
 
 class _DiscordCommandRuntime:
@@ -215,6 +404,16 @@ class _DiscordCommandRuntime:
         object_type: str | None = None,
     ) -> Any:
         return build_recent_list(objects_root, config, limit=limit, object_type=object_type)
+
+    def build_active_list(
+        self,
+        objects_root: str | Path,
+        config: dict[str, Any],
+        *,
+        limit: int | None = None,
+        object_type: str | None = None,
+    ) -> Any:
+        return build_active_list(objects_root, config, limit=limit, object_type=object_type)
 
     def build_find_list(
         self,
@@ -401,6 +600,12 @@ class _DiscordCommandRuntime:
 
     def build_item_detail(self, objects_root: str | Path, object_id: str, config: dict[str, Any]) -> str:
         return build_item_detail(objects_root, object_id, config)
+
+    def build_item_object_dump(self, objects_root: str | Path, object_id: str) -> str | None:
+        return build_item_object_dump(objects_root, object_id)
+
+    def build_fix_guidance(self, objects_root: str | Path, object_id: str, *, target_token: str) -> str | None:
+        return build_fix_guidance(objects_root, object_id, target_token=target_token)
 
     def now_iso(self) -> str:
         return now_iso()

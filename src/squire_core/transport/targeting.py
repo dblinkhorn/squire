@@ -157,14 +157,14 @@ def resolve_command_target(
     if reason == "expired":
         return CommandTargetResolution(
             target_id=None,
-            error="Your last numbered list expired. Run `!recent`, `!find`, `!status`, or `!weekly` first.",
+            error="Your last numbered list expired. Run `!recent`, `!active`, `!find`, `!status`, or `!weekly` first.",
             reason="expired",
             row_number=number,
             source_view=None,
         )
     return CommandTargetResolution(
         target_id=None,
-        error="No active numbered list for that command. Run `!recent`, `!find`, `!status`, or `!weekly` first.",
+        error="No active numbered list for that command. Run `!recent`, `!active`, `!find`, `!status`, or `!weekly` first.",
         reason="no_cursor",
         row_number=number,
         source_view=None,
