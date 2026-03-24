@@ -16,6 +16,7 @@ from squire_core.pending_actions import PendingAction, write_pending_action
 from squire_core.transport import inbound, routing
 from squire_core.transport.contracts import TransportMessageContext
 from squire_core.transport.discord import message_entry
+from squire_core.transport.mutations import extract_ids_from_written_paths, extract_target_ids_from_derived
 from squire_core.transport.discord.views import MutationPendingView, PendingActionView
 from squire_core.transport.state import RuntimeStateStore
 
@@ -109,6 +110,61 @@ class _Interaction:
         self.user = SimpleNamespace(id=user_id)
         self.response = _InteractionResponse()
         self.message = _InteractionMessage(content=content)
+
+
+class _PendingRuntime:
+    def __init__(self, *, written_paths: list[Path]) -> None:
+        self.written_paths = written_paths
+        self.refreshed: list[tuple[str | Path, str | Path, object | None]] = []
+
+    def load_pending_action(self, root: str | Path, pending_id: str) -> PendingAction | None:
+        from squire_core.pending_actions import load_pending_action
+
+        return load_pending_action(root, pending_id)
+
+    def write_pending_action(self, pending: PendingAction, root: str | Path) -> Path:
+        from squire_core.pending_actions import write_pending_action
+
+        return write_pending_action(pending, root)
+
+    def apply_operations(
+        self,
+        derived: dict[str, Any],
+        *,
+        objects_root: str | Path,
+        canonical_schema_path: Path,
+        derived_schema_path: Path | None,
+        last_decision_id: str | None = None,
+    ) -> Any:
+        del derived, objects_root, canonical_schema_path, derived_schema_path, last_decision_id
+        return SimpleNamespace(written_paths=self.written_paths)
+
+    async def refresh_index_async(
+        self,
+        objects_root: str | Path,
+        index_db: str | Path,
+        *,
+        matching: object | None = None,
+    ) -> None:
+        self.refreshed.append((objects_root, index_db, matching))
+
+    def notify_due_time_reminder_schedule_changed(self, *, clear_state: bool = False) -> None:
+        del clear_state
+
+    def extract_target_ids_from_derived(self, derived: dict[str, Any]) -> list[str]:
+        return extract_target_ids_from_derived(derived)
+
+    def extract_ids_from_written_paths(self, paths: list[Path]) -> list[str]:
+        return extract_ids_from_written_paths(paths, load_frontmatter_fn=self.load_frontmatter)
+
+    def record_affinity_touches(self, key: tuple[int, int], object_ids: list[str], *, matching: object) -> None:
+        del key, object_ids, matching
+
+    def load_frontmatter(self, path: str | Path) -> dict[str, Any]:
+        target = Path(path)
+        if target.name == "A_1.md":
+            return {"id": "A_1", "title": "Call dentist"}
+        return {}
 
 
 def test_initialize_tracing_is_noop_without_otlp_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -821,12 +877,12 @@ def test_nl_mutation_pending_flow_emits_pending_spans(
 
 def test_pending_action_confirm_emits_interaction_spans(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     span_exporter: InMemorySpanExporter,
 ) -> None:
     pending_root = tmp_path / "pending"
     objects_root = tmp_path / "objects"
     index_db = tmp_path / "index.sqlite"
+    runtime = _PendingRuntime(written_paths=[objects_root / "admin" / "A_1.md"])
     pending = PendingAction(
         schema_version=1,
         pending_action_id="PA_CONFIRM",
@@ -842,15 +898,9 @@ def test_pending_action_confirm_emits_interaction_spans(
     )
     write_pending_action(pending, pending_root)
 
-    monkeypatch.setattr(
-        "squire_core.transport.discord.views.apply_operations",
-        lambda *args, **kwargs: SimpleNamespace(written_paths=[objects_root / "admin" / "A_1.md"]),
-    )
-
-    refreshed: list[tuple[str | Path, str | Path]] = []
-
     async def _run() -> None:
         view = PendingActionView(
+            runtime=runtime,
             pending_id="PA_CONFIRM",
             pending_root=pending_root,
             objects_root=objects_root,
@@ -861,20 +911,10 @@ def test_pending_action_confirm_emits_interaction_spans(
             default_target_id="A_1",
             matching=None,
             affinity_key=(1, 2),
-            refresh_index_async=lambda current_objects_root, current_index_db: _record_refresh(
-                refreshed,
-                current_objects_root,
-                current_index_db,
-            ),
+            confirm_action="confirm",
         )
-        await view._apply_pending(_Interaction(user_id=1))
-
-    async def _record_refresh(
-        store: list[tuple[str | Path, str | Path]],
-        current_objects_root: str | Path,
-        current_index_db: str | Path,
-    ) -> None:
-        store.append((current_objects_root, current_index_db))
+        confirm_button = next(child for child in view.children if getattr(child, "label", "") == "Yes, apply update")
+        await confirm_button.callback(_Interaction(user_id=1))
 
     asyncio.run(_run())
 
@@ -886,7 +926,7 @@ def test_pending_action_confirm_emits_interaction_spans(
     assert "canonical.apply" in _span_names(span_exporter)
     assert "index.refresh" in _span_names(span_exporter)
     assert "response.send" in _span_names(span_exporter)
-    assert refreshed == [(objects_root, index_db)]
+    assert runtime.refreshed == [(objects_root, index_db, None)]
 
 
 def test_mutation_pending_cancel_emits_interaction_spans(
@@ -908,6 +948,7 @@ def test_mutation_pending_cancel_emits_interaction_spans(
 
     async def _run() -> None:
         view = MutationPendingView(
+            runtime=_PendingRuntime(written_paths=[]),
             pending_id="PA_CANCEL",
             pending_root=pending_root,
             objects_root=tmp_path / "objects",

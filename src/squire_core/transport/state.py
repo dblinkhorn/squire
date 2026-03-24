@@ -212,6 +212,31 @@ class RuntimeStateStore:
                 scores[touch.object_id] = decayed
         return scores
 
+    def load_recent_affinity_ids(
+        self,
+        key: InteractionKey,
+        *,
+        matching: MatchingConfig,
+        now: datetime | None = None,
+    ) -> list[str]:
+        current = now or datetime.now(timezone.utc)
+        ttl = timedelta(days=max(1, matching.affinity_ttl_days))
+        cutoff = current - ttl
+        touches = [touch for touch in self.matching_affinity.get(key, []) if touch.touched_at >= cutoff]
+        if not touches:
+            self.matching_affinity.pop(key, None)
+            return []
+
+        self.matching_affinity[key] = touches[-matching.affinity_recent_ids_per_thread :]
+        recent_ids: list[str] = []
+        seen: set[str] = set()
+        for touch in reversed(self.matching_affinity[key]):
+            if touch.object_id in seen:
+                continue
+            seen.add(touch.object_id)
+            recent_ids.append(touch.object_id)
+        return recent_ids
+
     def prune_archive_clear_confirmations(self, *, now: datetime | None = None) -> None:
         current = now or datetime.now(timezone.utc)
         expired = [key for key, value in self.archive_clear_confirmations.items() if value.expires_at <= current]
@@ -370,6 +395,20 @@ def load_affinity_scores(
     state_store: RuntimeStateStore,
 ) -> dict[str, float]:
     return state_store.load_affinity_scores(
+        key,
+        matching=matching,
+        now=now,
+    )
+
+
+def load_recent_affinity_ids(
+    key: InteractionKey,
+    *,
+    matching: MatchingConfig,
+    now: datetime | None = None,
+    state_store: RuntimeStateStore,
+) -> list[str]:
+    return state_store.load_recent_affinity_ids(
         key,
         matching=matching,
         now=now,

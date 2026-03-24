@@ -50,6 +50,44 @@ class _Message:
         self.content = content
 
 
+class _PendingRuntime:
+    def load_pending_action(self, root, pending_id):
+        del root, pending_id
+        return None
+
+    def write_pending_action(self, pending, root):
+        del pending, root
+        return Path("/tmp/pending/PA_1.json")
+
+    def apply_operations(self, *args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(written_paths=[])
+
+    async def refresh_index_async(self, objects_root, index_db, *, matching=None):
+        del objects_root, index_db, matching
+        return None
+
+    def notify_due_time_reminder_schedule_changed(self, *, clear_state=False):
+        del clear_state
+        return None
+
+    def extract_target_ids_from_derived(self, derived):
+        del derived
+        return []
+
+    def extract_ids_from_written_paths(self, paths):
+        del paths
+        return []
+
+    def record_affinity_touches(self, key, object_ids, *, matching):
+        del key, object_ids, matching
+        return None
+
+    def load_frontmatter(self, path):
+        del path
+        return {}
+
+
 def _button_labels(view) -> list[str]:
     labels: list[str] = []
     for child in view.children:
@@ -102,6 +140,7 @@ def test_format_apply_success_message_lists_multiple_titles(monkeypatch) -> None
 def test_pending_action_view_shows_primary_buttons() -> None:
     async def _run() -> None:
         view = PendingActionView(
+            runtime=_PendingRuntime(),
             pending_id="PA_1",
             pending_root="/tmp/pending",
             objects_root="/tmp/objects",
@@ -122,6 +161,7 @@ def test_pending_action_view_shows_primary_buttons() -> None:
 def test_pending_action_view_shows_confirmation_buttons() -> None:
     async def _run() -> None:
         view = PendingActionView(
+            runtime=_PendingRuntime(),
             pending_id="PA_1",
             pending_root="/tmp/pending",
             objects_root="/tmp/objects",

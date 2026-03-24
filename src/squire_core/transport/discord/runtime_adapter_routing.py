@@ -8,10 +8,12 @@ from typing import Any, Callable
 import discord
 
 from squire_core.canonical_store import find_object_path, load_frontmatter
-from squire_core.config_utils import NLCommandRoutingConfig
+from squire_core.config_utils import NLCommandRoutingConfig, load_matching_config
 from squire_core.interpreter import interpret_text_async
 from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.llm.prompts import load_prompt
+from squire_core.operation_apply import apply_operations
+from squire_core.pending_actions import load_pending_action, write_pending_action
 from squire_core.transport import commands as _transport_commands
 from squire_core.transport import routing as _transport_routing
 from squire_core.transport.contracts import TransportMessageContext
@@ -31,6 +33,7 @@ from squire_core.transport.state import (
     RuntimeStateStore,
     clear_nl_clarification_context as _state_clear_nl_clarification_context,
     get_nl_clarification_context as _state_get_nl_clarification_context,
+    load_recent_affinity_ids as _state_load_recent_affinity_ids,
     record_affinity_touches as _state_record_affinity_touches,
     store_nl_clarification_context as _state_store_nl_clarification_context,
 )
@@ -99,6 +102,17 @@ class _DiscordRoutingRuntime:
             content=content,
             raw_id=raw_id,
             config=config,
+        )
+
+    def load_recent_affinity_ids(
+        self,
+        context: TransportMessageContext,
+        config: dict[str, Any],
+    ) -> list[str]:
+        return _state_load_recent_affinity_ids(
+            _cursor_key(context),
+            matching=load_matching_config(config),
+            state_store=self._state_store,
         )
 
     async def queue_nl_mutation_confirmation(
@@ -224,6 +238,63 @@ class _DiscordRoutingRuntime:
     def load_frontmatter(self, path: str | Path) -> dict[str, Any]:
         return load_frontmatter(path)
 
+    def load_pending_action(self, root: str | Path, pending_id: str):
+        return load_pending_action(root, pending_id)
+
+    def write_pending_action(self, pending, root: str | Path) -> Path:
+        return write_pending_action(pending, root)
+
+    def apply_operations(
+        self,
+        derived: dict[str, Any],
+        *,
+        objects_root: str | Path,
+        canonical_schema_path: Path,
+        derived_schema_path: Path | None,
+        last_decision_id: str | None = None,
+    ) -> Any:
+        return apply_operations(
+            derived,
+            objects_root=objects_root,
+            canonical_schema_path=canonical_schema_path,
+            derived_schema_path=derived_schema_path,
+            last_decision_id=last_decision_id,
+        )
+
+    async def refresh_index_async(
+        self,
+        objects_root: str | Path,
+        index_db: str | Path,
+        *,
+        matching: Any = None,
+    ) -> None:
+        await _refresh_index_async(
+            objects_root,
+            index_db,
+            matching=matching,
+            embedding_provider=self._embedding_provider,
+        )
+
+    def extract_target_ids_from_derived(self, derived: dict[str, Any]) -> list[str]:
+        return _extract_target_ids_from_derived(derived)
+
+    def extract_ids_from_written_paths(self, paths: list[Path]) -> list[str]:
+        return _extract_ids_from_written_paths(paths)
+
+    def record_affinity_touches(
+        self,
+        key: tuple[int, int],
+        object_ids: list[str],
+        *,
+        matching: Any,
+    ) -> None:
+        _state_record_affinity_touches(
+            key,
+            object_ids,
+            matching=matching,
+            state_store=self._state_store,
+        )
+
     def write_nl_mutation_normalized_trace(
         self,
         *,
@@ -247,9 +318,9 @@ class _DiscordRoutingRuntime:
         author_id: int,
         matching,
         affinity_key: tuple[int, int],
-        on_canonical_change: Callable[[], None] | None = None,
     ) -> Any:
         return MutationPendingView(
+            runtime=self,
             pending_id=pending_id,
             pending_root=pending_root,
             objects_root=objects_root,
@@ -257,21 +328,6 @@ class _DiscordRoutingRuntime:
             author_id=author_id,
             matching=matching,
             affinity_key=affinity_key,
-            on_canonical_change=on_canonical_change,
-            refresh_index_async=lambda root, db: _refresh_index_async(
-                root,
-                db,
-                matching=matching,
-                embedding_provider=self._embedding_provider,
-            ),
-            extract_target_ids_from_derived=_extract_target_ids_from_derived,
-            extract_ids_from_written_paths=_extract_ids_from_written_paths,
-            record_affinity_touches=lambda key, ids, match: _state_record_affinity_touches(
-                key,
-                ids,
-                matching=match,
-                state_store=self._state_store,
-            ),
             now_iso=now_iso,
             log_confirm_applied=lambda pending_id: _log_nl_plan_confirm_applied(pending_id=pending_id),
         )

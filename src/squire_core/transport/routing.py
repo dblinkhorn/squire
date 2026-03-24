@@ -88,6 +88,34 @@ _WEEKDAY_MAP = {
     "SUN": 6,
     "SUNDAY": 6,
 }
+_TARGET_INFERENCE_STOPWORDS = {
+    "actually",
+    "appointment",
+    "appointments",
+    "appt",
+    "appts",
+    "change",
+    "correct",
+    "edit",
+    "fix",
+    "item",
+    "items",
+    "note",
+    "notes",
+    "schedule",
+    "scheduled",
+    "set",
+    "task",
+    "tasks",
+    "time",
+    "update",
+}
+_TARGET_INFERENCE_SYNONYMS = {
+    "appt": "appointment",
+    "appts": "appointments",
+}
+
+
 @dataclass(frozen=True)
 class _CaptureClassificationV1:
     object_type: str
@@ -148,6 +176,13 @@ class RoutingRuntime(Protocol):
         raw_id: str,
         config: dict[str, Any],
     ) -> bool:
+        ...
+
+    def load_recent_affinity_ids(
+        self,
+        context: TransportMessageContext,
+        config: dict[str, Any],
+    ) -> list[str]:
         ...
 
     async def queue_nl_mutation_confirmation(
@@ -246,7 +281,6 @@ class RoutingRuntime(Protocol):
         author_id: int,
         matching: Any,
         affinity_key: tuple[int, int],
-        on_canonical_change: Callable[[], None] | None = None,
     ) -> Any:
         ...
 
@@ -491,6 +525,208 @@ def _normalize_nl_raw_user_phrases(payload: Any) -> dict[str, str]:
         for key, value in payload.items()
         if str(key).strip() and isinstance(value, str) and value.strip()
     }
+
+
+def _target_inference_tokens(value: str) -> set[str]:
+    tokens: set[str] = set()
+    for raw_token in re.findall(r"[A-Za-z0-9']+", value.lower()):
+        token = raw_token.strip("'")
+        if not token:
+            continue
+        token = _TARGET_INFERENCE_SYNONYMS.get(token, token)
+        if len(token) < 4 or token in _TARGET_INFERENCE_STOPWORDS:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _resolve_recent_affinity_target(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    content_tokens: set[str],
+    config: dict[str, Any],
+    object_type_hint: str | None = None,
+    required_object_type: str | None = None,
+    require_due_anchor: bool = False,
+) -> tuple[str, str | None] | None:
+    if not content_tokens:
+        return None
+
+    recent_ids = runtime.load_recent_affinity_ids(context, config)
+    if not recent_ids:
+        return None
+
+    objects_root = config.get("paths", {}).get("objects_root", "objects")
+    best_id: str | None = None
+    best_object_type: str | None = None
+    best_score = 0
+    tied_best = False
+
+    for recency_index, object_id in enumerate(recent_ids[:5]):
+        object_path = runtime.find_object_path(objects_root, object_id)
+        if object_path is None:
+            continue
+        frontmatter = runtime.load_frontmatter(object_path)
+        object_type = _coerce_non_empty_str(frontmatter.get("type"))
+        if required_object_type and object_type != required_object_type:
+            continue
+        if object_type_hint and object_type and object_type != object_type_hint:
+            continue
+        if require_due_anchor and _parse_existing_datetime_value(frontmatter.get("due_at")) is None and _parse_existing_date_value(
+            frontmatter.get("due_date")
+        ) is None:
+            continue
+        title = _coerce_non_empty_str(frontmatter.get("title")) or ""
+        overlap = content_tokens & _target_inference_tokens(title)
+        if not overlap:
+            continue
+        score = (len(overlap) * 10) - recency_index
+        if score > best_score:
+            best_id = object_id
+            best_object_type = object_type
+            best_score = score
+            tied_best = False
+            continue
+        if score == best_score:
+            tied_best = True
+
+    if best_id is None or tied_best:
+        return None
+    return best_id, best_object_type
+
+
+def _extract_simple_due_time_fix_value(content: str) -> str | None:
+    text = content.strip()
+    if not text:
+        return None
+    patterns = (
+        r"\bis\s+at\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
+        r"\bat\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        value = _coerce_non_empty_str(match.group("time"))
+        if value:
+            return value
+    return None
+
+
+def _maybe_infer_recent_target_refs(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    content: str,
+    config: dict[str, Any],
+    raw_plan: dict[str, Any],
+) -> dict[str, Any]:
+    operations = raw_plan.get("operations")
+    if not isinstance(operations, list) or len(operations) != 1:
+        return raw_plan
+
+    operation = operations[0]
+    if not isinstance(operation, dict):
+        return raw_plan
+
+    raw_target_refs = operation.get("target_refs")
+    if isinstance(raw_target_refs, list) and raw_target_refs:
+        return raw_plan
+    if isinstance(operation.get("target_ref"), dict):
+        return raw_plan
+
+    content_tokens = _target_inference_tokens(content)
+    if not content_tokens:
+        return raw_plan
+
+    object_type_hint = _coerce_non_empty_str(raw_plan.get("object_type_hint"))
+    resolved_target = _resolve_recent_affinity_target(
+        runtime=runtime,
+        context=context,
+        content_tokens=content_tokens,
+        config=config,
+        object_type_hint=object_type_hint,
+    )
+    if resolved_target is None:
+        return raw_plan
+
+    best_id, _ = resolved_target
+    updated_operation = dict(operation)
+    updated_operation["target_refs"] = [{"kind": "object_id", "value": best_id}]
+    updated_plan = dict(raw_plan)
+    updated_plan["operations"] = [updated_operation]
+    return updated_plan
+
+
+def _build_simple_due_time_fix_plan(
+    *,
+    target_id: str,
+    object_type: str | None,
+    value_text: str,
+    confidence: float,
+) -> dict[str, Any]:
+    return {
+        "operations": [
+            {
+                "operation_id": "op_1",
+                "action_type": "set_fields",
+                "target_refs": [{"kind": "object_id", "value": target_id}],
+                "field_updates": [
+                    {
+                        "value_text": value_text,
+                        "source_phrase": "due time",
+                        "field_candidates": {
+                            "primary": {"field_id": "due_at", "confidence": 0.95},
+                            "alternates": [],
+                        },
+                    }
+                ],
+                "append_text": None,
+                "raw_user_phrases": {},
+                "confidence": confidence,
+                "requires_clarification": False,
+                "clarification_reason": None,
+            }
+        ],
+        "confidence": confidence,
+        "requires_clarification": False,
+        "clarification_reason": None,
+        "object_type_hint": object_type,
+        "raw_user_phrases": {},
+    }
+
+
+def _maybe_recover_mutation_plan_from_context(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    content: str,
+    config: dict[str, Any],
+    confidence: float,
+) -> dict[str, Any] | None:
+    content_tokens = _target_inference_tokens(content)
+    value_text = _extract_simple_due_time_fix_value(content)
+    if value_text is None:
+        return None
+
+    resolved_target = _resolve_recent_affinity_target(
+        runtime=runtime,
+        context=context,
+        content_tokens=content_tokens,
+        config=config,
+        required_object_type="admin",
+        require_due_anchor=True,
+    )
+    if resolved_target is None:
+        return None
+    target_id, object_type = resolved_target
+    return _build_simple_due_time_fix_plan(
+        target_id=target_id,
+        object_type=object_type,
+        value_text=value_text,
+        confidence=confidence,
+    )
 
 
 def normalize_nl_mutation_plan_input(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
@@ -759,6 +995,40 @@ def _parse_time_text(value: str) -> time | None:
     return time(hour=hour, minute=minute)
 
 
+def _is_ambiguous_time_text(value: str) -> bool:
+    text = value.strip().lower()
+    if not text or text in {"noon", "midnight"}:
+        return False
+    match = re.match(r"^(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)?$", text)
+    if not match or match.group("ampm"):
+        return False
+    hour = int(match.group("hour"))
+    minute_text = match.group("minute")
+    minute = int(minute_text) if minute_text is not None else 0
+    if minute < 0 or minute > 59:
+        return False
+    return 1 <= hour <= 12
+
+
+def _ambiguous_time_candidates(value: str) -> tuple[time, time] | None:
+    text = value.strip().lower()
+    if not _is_ambiguous_time_text(text):
+        return None
+    match = re.match(r"^(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)?$", text)
+    if not match:
+        return None
+    hour = int(match.group("hour"))
+    minute_text = match.group("minute")
+    minute = int(minute_text) if minute_text is not None else 0
+    am_hour = 0 if hour == 12 else hour
+    pm_hour = 12 if hour == 12 else hour + 12
+    return time(hour=am_hour, minute=minute), time(hour=pm_hour, minute=minute)
+
+
+def _minutes_since_midnight(value: time) -> int:
+    return (value.hour * 60) + value.minute
+
+
 def _parse_date_text(value: str, *, now: datetime) -> date | None:
     text = value.strip()
     if not text:
@@ -863,12 +1133,22 @@ def _normalize_anchored_due_at_time(
     existing_frontmatter: dict[str, Any] | None,
     tz: tzinfo,
 ) -> str | None:
+    frontmatter = existing_frontmatter if isinstance(existing_frontmatter, dict) else {}
+    existing_due_at = _parse_existing_datetime_value(frontmatter.get("due_at"))
+
     parsed_time = _parse_time_text(value_text)
     if parsed_time is None:
         return None
-    frontmatter = existing_frontmatter if isinstance(existing_frontmatter, dict) else {}
 
-    existing_due_at = _parse_existing_datetime_value(frontmatter.get("due_at"))
+    if existing_due_at is not None and _is_ambiguous_time_text(value_text):
+        candidates = _ambiguous_time_candidates(value_text)
+        if candidates is not None:
+            anchor_local_time = existing_due_at.astimezone(tz).timetz().replace(tzinfo=None)
+            parsed_time = min(
+                candidates,
+                key=lambda candidate: abs(_minutes_since_midnight(candidate) - _minutes_since_midnight(anchor_local_time)),
+            )
+
     if existing_due_at is not None:
         local_anchor_date = existing_due_at.astimezone(tz).date()
         anchored = datetime.combine(
@@ -882,6 +1162,28 @@ def _normalize_anchored_due_at_time(
     if existing_due_date is None:
         return None
     return datetime.combine(existing_due_date, parsed_time, tzinfo=tz).isoformat()
+
+
+def _extract_due_at_time_component(value_text: str, *, now: datetime) -> str | None:
+    text = value_text.strip()
+    if not text:
+        return None
+    if _parse_time_text(text) is not None:
+        return text
+    split = re.match(r"^(?P<date_part>.+?)\s+at\s+(?P<time_part>.+)$", text, flags=re.IGNORECASE)
+    if not split:
+        split = re.match(
+            r"^(?P<date_part>.+?)\s+(?P<time_part>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+    if not split:
+        return None
+    date_part = split.group("date_part").strip()
+    time_part = split.group("time_part").strip()
+    if _parse_date_text(date_part, now=now) is None:
+        return None
+    return time_part
 
 
 def _normalize_value_for_field(
@@ -916,6 +1218,13 @@ def _normalize_value_for_field(
         return parsed.isoformat(), None
 
     if (object_type, field_id) in _FIX_DATETIME_FIELDS:
+        if (object_type, field_id) == ("admin", "due_at"):
+            time_component = _extract_due_at_time_component(raw, now=now)
+            if time_component is not None and _is_ambiguous_time_text(time_component):
+                if time_component != raw or not _parse_existing_datetime_value(
+                    (existing_frontmatter or {}).get("due_at")
+                ):
+                    return None, "time_of_day_ambiguous"
         parsed = _parse_datetime_text(raw, now=now, tz=tz)
         if parsed is None and (object_type, field_id) == ("admin", "due_at"):
             anchored_due_at = _normalize_anchored_due_at_time(
@@ -1063,6 +1372,11 @@ def _clarification_for_plan_reason(reason_code: str, *, object_type: str | None 
         return (
             "I couldn't parse that value safely.",
             ["Use `YYYY-MM-DD` for date fields", "Use `YYYY-MM-DDTHH:MM:SS+00:00` for datetime fields", "Try simpler wording"],
+        )
+    if reason_code == "time_of_day_ambiguous":
+        return (
+            "I need to know whether that time is AM or PM.",
+            ["Reply with `am` or `pm`", "Include the full date and time", "Use an unambiguous 24-hour time"],
         )
     if reason_code == "validation_failed":
         return (
@@ -1576,7 +1890,6 @@ async def queue_nl_mutation_confirmation(
         author_id=author_id,
         matching=matching_config,
         affinity_key=runtime.cursor_key(context),
-        on_canonical_change=lambda: runtime.notify_due_time_reminder_schedule_changed(),
     )
     lines: list[str] = []
     if len(resolved_entries) == 1:
@@ -1796,6 +2109,33 @@ async def handle_message_triage(
         return True
 
     if route.route == "clarify":
+        if intent in _NL_MUTATION_INTENTS and band != "low":
+            recovered_plan = _maybe_recover_mutation_plan_from_context(
+                runtime=runtime,
+                context=context,
+                content=content,
+                config=config,
+                confidence=confidence,
+            )
+            if recovered_plan is not None:
+                recovered_input, recovered_error = normalize_nl_mutation_plan_input(recovered_plan)
+                if recovered_input is not None and recovered_error is None:
+                    _log_nl_route_evaluated(
+                        raw_event_id=raw_id,
+                        route_result="needs_confirmation",
+                        intent=intent,
+                        risk_tier="mutation",
+                        confidence_band=band,
+                        mapped_command=mapped_command,
+                    )
+                    return await runtime.queue_nl_mutation_confirmation(
+                        context=context,
+                        raw_id=raw_id,
+                        config=config,
+                        plan_input=recovered_input,
+                        confidence=confidence,
+                        routing=routing,
+                    )
         if routing.clarify_on_ambiguous and band != "low":
             clarification = _format_nl_clarification_message(
                 question=clarification_question,
@@ -1948,7 +2288,13 @@ async def handle_message_triage(
                 )
             return True
 
-        raw_plan = route.mutation_plan or {}
+        raw_plan = _maybe_infer_recent_target_refs(
+            runtime=runtime,
+            context=context,
+            content=content,
+            config=config,
+            raw_plan=route.mutation_plan or {},
+        )
         plan_input, plan_error = normalize_nl_mutation_plan_input(raw_plan)
         if plan_error:
             if routing.clarify_on_ambiguous and band != "low":
@@ -1985,7 +2331,7 @@ async def handle_message_triage(
                 mapped_command=mapped_command,
             )
             return False
-        if band == "high" and plan_input is not None:
+        if band in {"high", "medium"} and plan_input is not None:
             _log_nl_route_evaluated(
                 raw_event_id=raw_id,
                 route_result="needs_confirmation",
@@ -2002,26 +2348,6 @@ async def handle_message_triage(
                 confidence=confidence,
                 routing=routing,
             )
-        if routing.clarify_on_ambiguous and band == "medium":
-            clarification = _format_nl_clarification_message(
-                question=clarification_question,
-                options=clarification_options,
-                fallback="I can apply that update, but I need a bit more detail.",
-            )
-            _log_nl_route_clarified(raw_event_id=raw_id, options=clarification_options)
-            _log_nl_route_evaluated(
-                raw_event_id=raw_id,
-                route_result="clarified",
-                intent=intent,
-                risk_tier=risk_tier,
-                confidence_band=band,
-                mapped_command=mapped_command,
-            )
-            await runtime.swap_reaction(context, "⏳", "❓")
-            telemetry.set_span_attribute("squire.outcome", "nl_clarified", span=root_span)
-            with telemetry.start_span("response.send"):
-                await runtime.send_response(context, clarification)
-            return True
         _log_nl_route_evaluated(
             raw_event_id=raw_id,
             route_result="fallthrough",

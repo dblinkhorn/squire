@@ -262,3 +262,10 @@
   - `llm.decision_prompt_path` now supplies candidate-aware routing instructions layered onto the base extraction prompt, not a standalone decision-only JSON contract.
   - when the fused candidate-aware capture call fails, inbound falls back to the old plain extract path so decision-routing failures still preserve basic capture behavior.
   - validation baseline: full suite `191 passed`.
+- Pending interaction modularity follow-on complete (2026-03-23):
+  - added shared orchestration module `src/squire_core/transport/pending_interactions.py` as the canonical home for capture/NL pending confirm-create-cancel workflows.
+  - `src/squire_core/transport/discord/views.py` is now a thin Discord UI shell:
+    no direct pending persistence, canonical apply, frontmatter-load, or index/affinity orchestration imports remain there.
+  - Discord inbound/routing adapters now implement the pending workflow runtime contract directly and pass themselves into views instead of threading per-view business callbacks.
+  - `src/squire_core/transport/discord/runtime_adapter_inbound.py::send_unrecognized_category` now routes through `src/squire_core/transport/discord/io.py`.
+  - validation baseline after refactor: full suite `210 passed`.

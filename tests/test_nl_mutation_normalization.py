@@ -138,6 +138,56 @@ def test_normalize_set_fields_rejects_time_only_due_at_without_anchor() -> None:
     assert notes == []
 
 
+def test_normalize_set_fields_infers_meridiem_from_existing_due_at_anchor() -> None:
+    la_tz = ZoneInfo("America/Los_Angeles")
+    fields, reason, notes = transport_routing.normalize_set_fields(
+        object_type="admin",
+        field_updates=[
+            {
+                "value_text": "1",
+                "source_phrase": "due time",
+                "field_candidates": {
+                    "primary": {"field_id": "due_at", "confidence": 0.95},
+                    "alternates": [],
+                },
+            }
+        ],
+        routing=_routing_config(),
+        now=datetime(2026, 3, 23, 21, 0, tzinfo=timezone.utc),
+        tz=la_tz,
+        existing_frontmatter={"due_at": "2026-03-24T14:00:00-07:00"},
+    )
+
+    assert reason is None
+    assert fields == {"due_at": "2026-03-24T13:00:00-07:00"}
+    assert notes == []
+
+
+def test_normalize_set_fields_rejects_ambiguous_time_only_due_at_with_existing_due_date_anchor() -> None:
+    la_tz = ZoneInfo("America/Los_Angeles")
+    fields, reason, notes = transport_routing.normalize_set_fields(
+        object_type="admin",
+        field_updates=[
+            {
+                "value_text": "1",
+                "source_phrase": "due time",
+                "field_candidates": {
+                    "primary": {"field_id": "due_at", "confidence": 0.95},
+                    "alternates": [],
+                },
+            }
+        ],
+        routing=_routing_config(),
+        now=datetime(2026, 3, 23, 21, 0, tzinfo=timezone.utc),
+        tz=la_tz,
+        existing_frontmatter={"due_date": "2026-03-24"},
+    )
+
+    assert fields is None
+    assert reason == "time_of_day_ambiguous"
+    assert notes == []
+
+
 def test_normalize_nl_mutation_plan_input_accepts_object_id_target() -> None:
     plan, error = transport_routing.normalize_nl_mutation_plan_input(
         {

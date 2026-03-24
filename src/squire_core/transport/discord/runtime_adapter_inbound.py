@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from squire_core.canonical_store import load_frontmatter
 from squire_core.config_utils import MatchingConfig
 from squire_core.interpreter import interpret_text_async
 from squire_core.llm.provider import AsyncLLMProvider, LLMProvider
 from squire_core.llm.prompts import load_prompt
 from squire_core.operation_apply import apply_operations
+from squire_core.pending_actions import load_pending_action, write_pending_action
 from squire_core.transport import routing as _transport_routing
 from squire_core.transport.contracts import TransportMessageContext
 from squire_core.transport.discord import io as _discord_io
@@ -97,7 +99,7 @@ class _DiscordInboundRuntime:
 
     async def send_unrecognized_category(self, context: TransportMessageContext) -> None:
         del context
-        await self._message.channel.send("Unrecognized category. Please use a prefix.")
+        await _discord_io.send_response(self._message, "Unrecognized category. Please use a prefix.")
 
     def load_prompt(self, path: str) -> str:
         return load_prompt(path)
@@ -162,6 +164,15 @@ class _DiscordInboundRuntime:
             last_decision_id=last_decision_id,
         )
 
+    def load_pending_action(self, root: str | Path, pending_id: str):
+        return load_pending_action(root, pending_id)
+
+    def write_pending_action(self, pending, root: str | Path) -> Path:
+        return write_pending_action(pending, root)
+
+    def load_frontmatter(self, path: str | Path) -> dict[str, Any]:
+        return load_frontmatter(path)
+
     async def refresh_index_async(
         self,
         objects_root: str | Path,
@@ -225,6 +236,7 @@ class _DiscordInboundRuntime:
         if schema_path is None:
             return None
         return PendingActionView(
+            runtime=self,
             pending_id=pending_id,
             pending_root=pending_root,
             objects_root=objects_root,
@@ -235,21 +247,6 @@ class _DiscordInboundRuntime:
             default_target_id=default_target_id,
             matching=matching,
             affinity_key=affinity_key,
-            on_canonical_change=lambda: _invoke_due_time_reminder_notifier(self._due_time_reminder_notifier),
-            refresh_index_async=lambda root, db: _refresh_index_async(
-                root,
-                db,
-                matching=matching,
-                embedding_provider=self._embedding_provider,
-            ),
-            extract_target_ids_from_derived=_extract_target_ids_from_derived,
-            extract_ids_from_written_paths=_extract_ids_from_written_paths,
-            record_affinity_touches=lambda key, ids, match: _state_record_affinity_touches(
-                key,
-                ids,
-                matching=match,
-                state_store=self._state_store,
-            ),
             now_iso=now_iso,
         )
 
