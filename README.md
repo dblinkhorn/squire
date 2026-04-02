@@ -37,7 +37,8 @@ Core commands:
 - `!detail <number>` - show the full note object for one result from your latest numbered list
 - `!help [command]` - show available commands or detailed help for one command
 - `!append <id|number> <text>` - add text to a note (`<number>` uses your latest numbered list)
-- `!done <id|number>` - mark a task as done (`<number>` uses your latest numbered list)
+- `!done <id|number>` - mark a note as done (`<number>` uses your latest numbered list)
+- `!reopen <id|number>` - reopen a done note (`<number>` uses your latest numbered list)
 - `!fix <id|number> [field=value ...]` - show or edit note fields (`<number>` uses your latest numbered list)
 - `!confirm <pending_id>` / `!cancel <pending_id>` - approve or cancel a suggested change
 - `!clear-archive` then `DELETE` - clear archive data (keeps `.git`)

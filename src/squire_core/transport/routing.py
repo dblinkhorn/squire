@@ -48,6 +48,7 @@ _NL_INTENTS = {
     "find",
     "show",
     "done",
+    "reopen",
     "append",
     "fix",
     "clear_archive",
@@ -57,7 +58,7 @@ _NL_INTENTS = {
 }
 _NL_EXPLICIT_ONLY_INTENTS = {"clear_archive", "confirm_pending", "cancel_pending"}
 _NL_READ_INTENTS = {"status", "weekly", "recent", "find", "show"}
-_NL_MUTATION_INTENTS = {"done", "append", "fix"}
+_NL_MUTATION_INTENTS = {"done", "reopen", "append", "fix"}
 _NL_COMMAND_FOR_INTENT = {
     "status": "!status",
     "weekly": "!weekly",
@@ -65,13 +66,14 @@ _NL_COMMAND_FOR_INTENT = {
     "find": "!find",
     "show": "!show",
     "done": "!done",
+    "reopen": "!reopen",
     "append": "!append",
     "fix": "!fix",
     "clear_archive": "!clear-archive",
     "confirm_pending": "!confirm",
     "cancel_pending": "!cancel",
 }
-_NL_MUTATION_ACTIONS = {"mark_done", "append_body", "set_fields"}
+_NL_MUTATION_ACTIONS = {"mark_done", "mark_open", "append_body", "set_fields"}
 _WEEKDAY_MAP = {
     "MON": 0,
     "MONDAY": 0,
@@ -1458,7 +1460,7 @@ def _merge_clarification_plan_input(
 
 
 def _command_name_for_action_type(action_type: str) -> str:
-    mapping = {"mark_done": "done", "append_body": "append", "set_fields": "fix"}
+    mapping = {"mark_done": "done", "mark_open": "reopen", "append_body": "append", "set_fields": "fix"}
     return mapping.get(action_type, "fix")
 
 
@@ -1467,6 +1469,8 @@ def _action_phrase_for_entry(entry: dict[str, Any]) -> str:
     title = _coerce_non_empty_str(entry.get("target_title")) or _coerce_non_empty_str(entry.get("target_resolved_id")) or "item"
     if action_type == "mark_done":
         return f'Mark "{title}" done'
+    if action_type == "mark_open":
+        return f'Reopen "{title}"'
     if action_type == "append_body":
         return f'Append to "{title}"'
     return f'Update "{title}"'
@@ -1608,16 +1612,22 @@ async def queue_nl_mutation_confirmation(
 
                 if action_type == "mark_done":
                     notes.append("action:mark_done")
-                    if object_type != "admin":
-                        reason_code = "target_wrong_type"
-                    else:
-                        normalized_fields = {"status": "done", "completed_at": now_iso}
-                        proposed_operation = {
-                            "op": "update",
-                            "target_id": target_id,
-                            "fields": dict(normalized_fields),
-                            "object_type": object_type,
-                        }
+                    normalized_fields = {"status": "done", "done_at": now_iso}
+                    proposed_operation = {
+                        "op": "update",
+                        "target_id": target_id,
+                        "fields": dict(normalized_fields),
+                        "object_type": object_type,
+                    }
+                elif action_type == "mark_open":
+                    notes.append("action:mark_open")
+                    normalized_fields = {"status": "open", "done_at": None}
+                    proposed_operation = {
+                        "op": "update",
+                        "target_id": target_id,
+                        "fields": dict(normalized_fields),
+                        "object_type": object_type,
+                    }
                 elif action_type == "append_body":
                     append_text = _coerce_non_empty_str(operation.get("append_text"))
                     notes.append("action:append_body")
@@ -2284,7 +2294,7 @@ async def handle_message_triage(
             with telemetry.start_span("response.send"):
                 await runtime.send_response(
                     context,
-                    "Natural-language mutations are disabled. Use explicit commands like `!done`, `!append`, or `!fix`.",
+                    "Natural-language mutations are disabled. Use explicit commands like `!done`, `!reopen`, `!append`, or `!fix`.",
                 )
             return True
 

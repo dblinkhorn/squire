@@ -24,7 +24,7 @@ FIX_ALLOWED_FIELDS = {
         "due_at",
         "priority",
         "blocked_reason",
-        "completed_at",
+        "done_at",
         "gcal_event_id",
     },
     "projects": {
@@ -37,6 +37,7 @@ FIX_ALLOWED_FIELDS = {
     },
     "people": {
         "title",
+        "status",
         "name",
         "context",
         "follow_ups",
@@ -52,10 +53,11 @@ FIX_ALLOWED_FIELDS = {
 }
 
 FIX_ENUM_VALUES = {
-    ("admin", "status"): {"open", "done", "blocked"},
+    ("admin", "status"): {"open", "done"},
     ("admin", "priority"): {"low", "normal", "high"},
-    ("projects", "status"): {"planning", "in_progress", "blocked", "completed", "on_hold"},
-    ("ideas", "status"): {"seed", "incubating", "active", "parked", "done"},
+    ("projects", "status"): {"open", "done"},
+    ("people", "status"): {"open", "done"},
+    ("ideas", "status"): {"open", "done"},
 }
 
 FIX_DATE_FIELDS = {
@@ -66,7 +68,7 @@ FIX_DATE_FIELDS = {
 
 FIX_DATETIME_FIELDS = {
     ("admin", "due_at"),
-    ("admin", "completed_at"),
+    ("admin", "done_at"),
 }
 
 

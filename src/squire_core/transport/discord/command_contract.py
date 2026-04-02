@@ -17,14 +17,14 @@ PENDING_CONTROLS_INSTRUCTION = (
     "Use the buttons below to confirm which note should be updated, choose to create a new note, or cancel (do nothing):"
 )
 NUMBERED_COMMAND_TIP = (
-    "Tip: `!show <number>` · `!detail <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> [field=value ...]`"
+    "Tip: `!show <number>` · `!detail <number>` · `!done <number>` · `!reopen <number>` · `!append <number> <text>` · `!fix <number> [field=value ...]`"
 )
 NUMBERED_COMMAND_TIP_WITH_RECENT_LIMIT = (
-    "Tip: `!show <number>` · `!detail <number>` · `!done <number>` · `!append <number> <text>` · `!fix <number> [field=value ...]` · `!recent <number> [category]` (up to 50)"
+    "Tip: `!show <number>` · `!detail <number>` · `!done <number>` · `!reopen <number>` · `!append <number> <text>` · `!fix <number> [field=value ...]` · `!recent <number> [category]` (up to 50)"
 )
 NUMBERED_LIST_ACTION_HELP_COPY = (
     "After this command shows a numbered list, you can use those numbers to take action on items (for example: "
-    "`!show 2`, `!detail 2`, `!append 2 <text>`, `!fix 2`, or `!done 2` for admin items)."
+    "`!show 2`, `!detail 2`, `!done 2`, `!reopen 2`, `!append 2 <text>`, or `!fix 2`)."
 )
 HELP_COPY = (
     "Available commands:\n"
@@ -37,7 +37,8 @@ HELP_COPY = (
     "- `!show <number>` - open one result\n"
     "- `!detail <number>` - show the full note object for one result\n"
     "- `!append <id|number> <text>` - append note text\n"
-    "- `!done <id|number>` - mark admin done\n"
+    "- `!done <id|number>` - mark a note done\n"
+    "- `!reopen <id|number>` - reopen a done note\n"
     "- `!fix <id|number> [field=value ...]` - show or edit note fields\n"
     "- `!confirm <pending_id>` - apply pending change\n"
     "- `!cancel <pending_id>` - cancel pending change\n"
@@ -90,7 +91,13 @@ HELP_DETAILS = {
     ),
     "done": (
         "`!done <id|number>`\n"
-        "Marks an admin item as done. This sets `status=done` and records `completed_at`. The target can be an ID "
+        "Marks a note as done. This sets `status=done` and records `done_at`. The target can be an ID "
+        "or a row number from your latest numbered list (for example, after `!recent`, `!active`, `!find`, `!status`, or "
+        "`!weekly`)."
+    ),
+    "reopen": (
+        "`!reopen <id|number>`\n"
+        "Reopens a done note. This sets `status=open` and clears `done_at`. The target can be an ID "
         "or a row number from your latest numbered list (for example, after `!recent`, `!active`, `!find`, `!status`, or "
         "`!weekly`)."
     ),

@@ -172,7 +172,7 @@ def test_handle_command_done_delegates_to_apply_operation() -> None:
     assert captured["validate_fix"] is False
     fields = captured["fields"]
     assert isinstance(fields, dict)
-    assert fields == {"status": "done", "completed_at": "2026-02-21T12:00:00+00:00"}
+    assert fields == {"status": "done", "done_at": "2026-02-21T12:00:00+00:00"}
 
 
 def test_handle_command_detail_uses_object_dump_builder() -> None:

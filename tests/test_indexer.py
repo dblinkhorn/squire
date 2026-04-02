@@ -24,7 +24,6 @@ type: admin
 title: Call dentist
 status: open
 updated_at: "2026-03-18T00:00:00Z"
-archived: false
 tags: []
 ---
 Call dentist tomorrow.
@@ -38,7 +37,6 @@ type: admin
 title: Investigate bug: broken yaml
 status: open
 updated_at: "2026-03-18T00:00:00Z"
-archived: false
 ---
 This note has malformed frontmatter.
 """,
@@ -50,7 +48,6 @@ id: A_MISSING_TITLE
 type: admin
 status: open
 updated_at: "2026-03-18T00:00:00Z"
-archived: false
 tags: []
 ---
 This note is parseable YAML but missing a required field.
@@ -64,7 +61,6 @@ type: admin
 title: Duplicate id
 status: open
 updated_at: "2026-03-18T01:00:00Z"
-archived: false
 tags: []
 ---
 This note conflicts on primary key.

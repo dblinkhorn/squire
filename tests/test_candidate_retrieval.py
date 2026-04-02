@@ -22,7 +22,6 @@ type: admin
 title: Pay rent
 status: open
 updated_at: "2026-01-01T00:00:00Z"
-archived: false
 tags:
   - home
 ---
@@ -35,9 +34,8 @@ Remember to pay rent on Friday.
 id: PR_1
 type: projects
 title: Renovate kitchen
-status: planning
+status: open
 updated_at: "2026-01-01T00:00:00Z"
-archived: false
 tags: []
 ---
 Collect contractor estimates.
@@ -71,7 +69,6 @@ type: admin
 title: Pay rent
 status: open
 updated_at: "2026-01-01T00:00:00Z"
-archived: false
 tags: []
 ---
 Remember to pay rent on Friday.

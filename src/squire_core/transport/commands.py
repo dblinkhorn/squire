@@ -684,8 +684,52 @@ async def handle_command(
             config,
             target_id=target_id,
             op="update",
-            fields={"status": "done", "completed_at": runtime.now_iso()},
+            fields={"status": "done", "done_at": runtime.now_iso()},
             command_name="done",
+            row_number=target_resolution.row_number,
+            source_view=target_resolution.source_view,
+        )
+    if command == "!reopen":
+        if len(parts) != 2:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !reopen <id|number>")
+            return True
+        target_resolution = runtime.resolve_command_target(context, parts[1])
+        if target_resolution.reason and target_resolution.row_number is not None:
+            runtime.log_numbered_mutation_resolution_failed(
+                raw_event_id=raw_id,
+                command="reopen",
+                reason=target_resolution.reason,
+                source_view=target_resolution.source_view,
+                row_number=target_resolution.row_number,
+            )
+        if target_resolution.error:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "target_resolution_failed", span=root_span)
+            await _send_traced_response(runtime, context, target_resolution.error)
+            return True
+        target_id = target_resolution.target_id
+        if not target_id:
+            await runtime.swap_reaction(context, "⏳", "⚠️")
+            telemetry.set_span_attribute("squire.outcome", "usage_error", span=root_span)
+            await _send_traced_response(runtime, context, "Usage: !reopen <id|number>")
+            return True
+        telemetry.set_span_attributes(
+            {
+                "squire.source_view": target_resolution.source_view,
+                "squire.row_number": target_resolution.row_number,
+            },
+            span=root_span,
+        )
+        return await runtime.apply_command_operation(
+            context,
+            raw_id,
+            config,
+            target_id=target_id,
+            op="update",
+            fields={"status": "open", "done_at": None},
+            command_name="reopen",
             row_number=target_resolution.row_number,
             source_view=target_resolution.source_view,
         )

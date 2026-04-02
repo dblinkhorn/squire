@@ -14,7 +14,7 @@ Routing outcomes:
 
 Intent families:
 - read: status, weekly, recent, find, show
-- mutation: done, append, fix
+- mutation: done, reopen, append, fix
 - explicit-only controls: clear_archive, confirm_pending, cancel_pending
 - none: capture flow
 
@@ -47,10 +47,16 @@ Command catalog:
   important: if no row number is provided, do not force show.
 
 - done (mutation intent)
-  description: mark one admin item done.
+  description: mark one note done.
   args: required target reference (ID or row number).
   examples: "mark 2 done", "complete item 1".
   action_type: mark_done.
+
+- reopen (mutation intent)
+  description: reopen one done note.
+  args: required target reference (ID or row number).
+  examples: "reopen 2", "mark item 1 open again".
+  action_type: mark_open.
 
 - append (mutation intent)
   description: append text to one note.
@@ -123,9 +129,9 @@ Capture classification:
 - If the input is ambiguous, set capture.object_type to unknown and keep capture.confidence low.
 
 Field constraints:
-- admin: title, status, next_action, due_date, due_at, priority, blocked_reason, completed_at, gcal_event_id
+- admin: title, status, next_action, due_date, due_at, priority, blocked_reason, done_at, gcal_event_id
 - projects: title, status, next_action, goal, due, blocked_reason
-- people: title, name, context, follow_ups, last_contacted, next_contact
+- people: title, status, name, context, follow_ups, last_contacted, next_contact
 - ideas: title, one_liner, status, next_step
 - Use canonical field ids whenever possible. For uncertain fields, use alternates with lower confidence.
 

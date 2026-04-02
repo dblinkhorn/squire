@@ -49,7 +49,7 @@ def _iter_canonical_files(objects_root: str | Path) -> list[Path]:
     return sorted((path for path in root.rglob("*.md") if path.is_file()), key=lambda path: path.as_posix())
 
 
-def _build_index_row(frontmatter: dict[str, Any], body: str) -> tuple[str, str, str, str | None, str, int, str, str]:
+def _build_index_row(frontmatter: dict[str, Any], body: str) -> tuple[str, str, str, str | None, str, str, str]:
     object_id = frontmatter.get("id")
     if not isinstance(object_id, str) or not object_id.strip():
         raise ValueError("Missing required string field: id")
@@ -84,7 +84,6 @@ def _build_index_row(frontmatter: dict[str, Any], body: str) -> tuple[str, str, 
         title.strip(),
         status,
         updated_at.strip(),
-        1 if frontmatter.get("archived") else 0,
         ",".join(tags),
         body,
     )
@@ -108,7 +107,6 @@ def rebuild_index(objects_root: str | Path, db_path: str | Path) -> IndexRebuild
                 title TEXT NOT NULL,
                 status TEXT,
                 updated_at TEXT NOT NULL,
-                archived INTEGER NOT NULL,
                 tags TEXT,
                 body TEXT
             )
@@ -136,8 +134,8 @@ def rebuild_index(objects_root: str | Path, db_path: str | Path) -> IndexRebuild
                 row = _build_index_row(frontmatter, body)
                 cursor.execute(
                     """
-                    INSERT INTO objects (id, type, title, status, updated_at, archived, tags, body)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO objects (id, type, title, status, updated_at, tags, body)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     row,
                 )
@@ -266,7 +264,6 @@ def search_lexical_candidates(
             FROM objects_fts
             JOIN objects ON objects_fts.rowid = objects.rowid
             WHERE objects_fts MATCH ?
-              AND objects.archived = 0
               {type_filter}
             ORDER BY rank
             LIMIT ?

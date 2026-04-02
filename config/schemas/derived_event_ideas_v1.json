@@ -39,15 +39,16 @@
     "ideas_fields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "one_liner", "status", "next_step"],
+      "required": ["title", "one_liner", "status", "next_step", "done_at"],
       "properties": {
         "title": { "type": ["string", "null"] },
         "one_liner": { "type": ["string", "null"] },
         "status": {
           "type": ["string", "null"],
-          "enum": ["seed", "incubating", "active", "parked", "done", null]
+          "enum": ["open", "done", null]
         },
-        "next_step": { "type": ["string", "null"] }
+        "next_step": { "type": ["string", "null"] },
+        "done_at": { "type": ["string", "null"] }
       }
     },
     "operation": {

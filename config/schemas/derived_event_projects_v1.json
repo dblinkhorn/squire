@@ -46,18 +46,20 @@
         "goal",
         "due",
         "blocked_reason",
-        "stakeholders"
+        "stakeholders",
+        "done_at"
       ],
       "properties": {
         "title": { "type": ["string", "null"] },
         "status": {
           "type": ["string", "null"],
-          "enum": ["planning", "in_progress", "blocked", "completed", "on_hold", null]
+          "enum": ["open", "done", null]
         },
         "next_action": { "type": ["string", "null"] },
         "goal": { "type": ["string", "null"] },
         "due": { "type": ["string", "null"] },
         "blocked_reason": { "type": ["string", "null"] },
+        "done_at": { "type": ["string", "null"] },
         "stakeholders": {
           "type": ["array", "null"],
           "items": { "type": "string" }

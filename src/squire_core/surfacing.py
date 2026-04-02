@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -42,8 +42,6 @@ class WeeklyReview:
 @dataclass(frozen=True)
 class SurfacingConfig:
     admin_due_soon_days: int
-    projects_stale_days: int
-    projects_blocked_limit: int
     ideas_weekly_review: bool
     people_next_contact_days: int
     show_ids_daily_weekly: bool
@@ -110,7 +108,6 @@ class DueTimeReminderEvent:
 
 _DEFAULT_SURFACING_CONFIG = {
     "admin": {"due_soon_days": 1},
-    "projects": {"stale_days": 14, "blocked_limit": 3},
     "ideas": {"weekly_review": True},
     "people": {"next_contact_days": 0},
     "output": {"show_ids_daily_weekly": False},
@@ -127,11 +124,11 @@ _SECTION_EMOJI = {
     "Admin overdue": "🔴",
     "Admin due today": "🟠",
     "Admin due soon": "🟡",
-    "Projects needing attention": "🧱",
+    "Open projects": "🧱",
     "People to follow up": "🤝",
-    "Completed this week": "✅",
+    "Done this week": "✅",
     "Admin without due dates": "📂",
-    "Blocked or stale projects": "🧱",
+    "Blocked projects": "🧱",
     "People overdue for contact": "🤝",
     "Ideas updated recently": "💡",
     "Active admin": "📂",
@@ -143,11 +140,11 @@ _SECTION_DIVIDER_WIDTH = {
     "Admin overdue": 15,
     "Admin due today": 16,
     "Admin due soon": 16,
-    "Projects needing attention": 24,
+    "Open projects": 13,
     "People to follow up": 18,
-    "Completed this week": 19,
+    "Done this week": 14,
     "Admin without due dates": 22,
-    "Blocked or stale projects": 24,
+    "Blocked projects": 16,
     "People overdue for contact": 25,
     "Ideas updated recently": 21,
     "Active admin": 12,
@@ -201,10 +198,6 @@ def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
 
     return SurfacingConfig(
         admin_due_soon_days=_get_int("admin", "due_soon_days", _DEFAULT_SURFACING_CONFIG["admin"]["due_soon_days"]),
-        projects_stale_days=_get_int("projects", "stale_days", _DEFAULT_SURFACING_CONFIG["projects"]["stale_days"]),
-        projects_blocked_limit=_get_int(
-            "projects", "blocked_limit", _DEFAULT_SURFACING_CONFIG["projects"]["blocked_limit"]
-        ),
         ideas_weekly_review=_get_bool("ideas", "weekly_review", _DEFAULT_SURFACING_CONFIG["ideas"]["weekly_review"]),
         people_next_contact_days=_get_int(
             "people", "next_contact_days", _DEFAULT_SURFACING_CONFIG["people"]["next_contact_days"]
@@ -279,15 +272,6 @@ def _is_numbered_row(line: str) -> bool:
     if not first_token.endswith("."):
         return False
     return first_token[:-1].isdigit()
-
-
-def _is_archived(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y"}
-    return False
-
 
 def _safe_int(value: Any, fallback: int) -> int:
     if isinstance(value, int):
@@ -428,8 +412,6 @@ def _admin_entries(items: Iterable[CanonicalItem], tz: tzinfo) -> list[AdminEntr
     for item in items:
         if item.object_type != "admin":
             continue
-        if _is_archived(item.frontmatter.get("archived")):
-            continue
         status = str(item.frontmatter.get("status") or "open")
         if status == "done":
             continue
@@ -461,9 +443,9 @@ def _project_entries(items: Iterable[CanonicalItem], tz: tzinfo) -> list[Project
     for item in items:
         if item.object_type != "projects":
             continue
-        if _is_archived(item.frontmatter.get("archived")):
-            continue
         status = str(item.frontmatter.get("status") or "")
+        if status != "open":
+            continue
         updated_at = _coerce_datetime(item.frontmatter.get("updated_at"), tz)
         entries.append(
             ProjectEntry(
@@ -483,7 +465,7 @@ def _people_entries(items: Iterable[CanonicalItem], tz: tzinfo) -> list[PeopleEn
     for item in items:
         if item.object_type != "people":
             continue
-        if _is_archived(item.frontmatter.get("archived")):
+        if str(item.frontmatter.get("status") or "").strip().lower() != "open":
             continue
         next_contact = _coerce_date(item.frontmatter.get("next_contact"))
         updated_at = _coerce_datetime(item.frontmatter.get("updated_at"), tz)
@@ -588,55 +570,46 @@ def _format_people_lines(
     return lines, object_ids
 
 
-def _build_project_attention_lines(
+def _build_open_project_lines(
     projects: list[ProjectEntry],
     *,
-    now: datetime,
-    stale_days: int,
-    limit: int,
     include_ids: bool,
 ) -> tuple[list[str], list[str]]:
-    min_dt = _min_datetime(now.tzinfo)
-    blocked = [item for item in projects if item.status == "blocked"]
-    blocked.sort(key=lambda item: item.updated_at or min_dt)
-
-    stale_cutoff = now.date() - timedelta(days=stale_days)
-    stale = [
-        item
-        for item in projects
-        if item.status in {"planning", "in_progress"} and item.updated_at and item.updated_at.date() <= stale_cutoff
-    ]
-    stale.sort(key=lambda item: item.updated_at or min_dt)
-
+    ordered = sorted(
+        projects,
+        key=lambda item: (item.updated_at or _min_datetime(timezone.utc), item.title.lower()),
+        reverse=True,
+    )
     lines: list[str] = []
     object_ids: list[str] = []
-    seen: set[str] = set()
-
-    def _add(line: str, object_id: str) -> None:
-        if object_id in seen:
-            return
-        if len(lines) >= limit:
-            return
-        seen.add(object_id)
-        lines.append(line)
-        object_ids.append(object_id)
-
-    for item in blocked:
+    for item in ordered:
         title = _format_title(item.title, item.object_id, include_ids)
-        reason = f": {item.blocked_reason}" if item.blocked_reason else ""
-        _add(f"{title} - blocked{reason}", item.object_id)
-
-    for item in stale:
-        if len(lines) >= limit:
-            break
-        title = _format_title(item.title, item.object_id, include_ids)
-        updated = _format_human_date(item.updated_at.date(), now.date(), include_relative=False) if item.updated_at else "unknown"
-        _add(f"{title} - stale (last updated {updated})", item.object_id)
-
+        if item.blocked_reason:
+            lines.append(f"{title} - blocked: {item.blocked_reason}")
+        else:
+            lines.append(title)
+        object_ids.append(item.object_id)
     return lines, object_ids
 
 
-def _build_completed_this_week_lines(
+def _build_blocked_project_lines(
+    projects: list[ProjectEntry],
+    *,
+    include_ids: bool,
+) -> tuple[list[str], list[str]]:
+    blocked = [item for item in projects if isinstance(item.blocked_reason, str) and item.blocked_reason.strip()]
+    blocked.sort(key=lambda item: (item.updated_at or _min_datetime(timezone.utc), item.title.lower()))
+
+    lines: list[str] = []
+    object_ids: list[str] = []
+    for item in blocked:
+        title = _format_title(item.title, item.object_id, include_ids)
+        lines.append(f"{title} - blocked: {item.blocked_reason}")
+        object_ids.append(item.object_id)
+    return lines, object_ids
+
+
+def _build_done_this_week_lines(
     items: list[CanonicalItem],
     *,
     now: datetime,
@@ -650,33 +623,14 @@ def _build_completed_this_week_lines(
     for item in items:
         frontmatter = item.frontmatter
         status = str(frontmatter.get("status") or "").strip().lower()
-        archived = _is_archived(frontmatter.get("archived"))
-        completed_at: datetime | None = None
-        state_label: str | None = None
-
-        if archived:
-            completed_at = _object_updated_at(item, tz)
-            state_label = "archived"
-        elif item.object_type == "admin" and status == "done":
-            completed_at = _coerce_datetime(frontmatter.get("completed_at"), tz) or _object_updated_at(item, tz)
-            state_label = "done"
-        elif item.object_type == "projects" and status == "completed":
-            completed_at = _object_updated_at(item, tz)
-            state_label = "completed"
-        elif item.object_type == "ideas" and status == "done":
-            completed_at = _object_updated_at(item, tz)
-            state_label = "done"
-
-        if completed_at is None or state_label is None:
+        if status != "done":
             continue
-        if completed_at < cutoff:
+        done_at = _coerce_datetime(frontmatter.get("done_at"), tz)
+        if done_at is None or done_at < cutoff:
             continue
         title = _format_title(item.title, item.object_id, include_ids)
-        line = (
-            f"{title} - {_render_type_label(item.object_type)}, "
-            f"{state_label} {_format_human_date(completed_at.date(), now.date())}"
-        )
-        rows.append((completed_at, line, item.object_id))
+        line = f"{title} - {_render_type_label(item.object_type)}, done {_format_human_date(done_at.date(), now.date())}"
+        rows.append((done_at, line, item.object_id))
 
     rows.sort(key=lambda row: row[0], reverse=True)
 
@@ -699,7 +653,7 @@ def _build_admin_without_due_lines(
     unscheduled = [
         entry
         for entry in entries
-        if entry.status in {"open", "blocked"} and entry.due_at is None and entry.due_date is None
+        if entry.status == "open" and entry.due_at is None and entry.due_date is None
     ]
     unscheduled.sort(key=lambda entry: entry.created_at or entry.updated_at or min_dt)
 
@@ -707,11 +661,8 @@ def _build_admin_without_due_lines(
     object_ids: list[str] = []
     for entry in unscheduled[:limit]:
         title = _format_title(entry.title, entry.object_id, include_ids)
-        if entry.status == "blocked":
-            if entry.blocked_reason:
-                lines.append(f"{title} - blocked: {entry.blocked_reason}")
-            else:
-                lines.append(f"{title} - blocked")
+        if entry.blocked_reason:
+            lines.append(f"{title} - blocked: {entry.blocked_reason}")
         else:
             lines.append(title)
         object_ids.append(entry.object_id)
@@ -753,7 +704,7 @@ def _build_recent_idea_lines(
         item
         for item in items
         if item.object_type == "ideas"
-        and not _is_archived(item.frontmatter.get("archived"))
+        and str(item.frontmatter.get("status") or "").strip().lower() == "open"
         and _object_updated_at(item, tz) >= cutoff
     ]
     ideas.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
@@ -924,7 +875,7 @@ def build_due_time_reminder_events(
     admin_items = _admin_entries(items, tz)
     for entry in admin_items:
         status = entry.status.strip().lower()
-        if status not in {"open", "blocked"}:
+        if status != "open":
             continue
         if entry.due_at is None:
             continue
@@ -1038,11 +989,8 @@ def build_daily_digest(
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
     )
-    project_lines, project_ids = _build_project_attention_lines(
+    project_lines, project_ids = _build_open_project_lines(
         project_items,
-        now=now,
-        stale_days=surfacing.projects_stale_days,
-        limit=surfacing.projects_blocked_limit,
         include_ids=surfacing.show_ids_daily_weekly,
     )
 
@@ -1064,7 +1012,7 @@ def build_daily_digest(
             lines=unscheduled_admin_lines,
             object_ids=unscheduled_admin_ids,
         ),
-        DigestSection(title="Projects needing attention", lines=project_lines, object_ids=project_ids),
+        DigestSection(title="Open projects", lines=project_lines, object_ids=project_ids),
         DigestSection(title="People to follow up", lines=people_lines, object_ids=people_ids),
     ]
 
@@ -1091,7 +1039,7 @@ def build_weekly_review(
     project_items = _project_entries(items, tz)
     people_items = _people_entries(items, tz)
 
-    completed_lines, completed_ids = _build_completed_this_week_lines(
+    done_lines, done_ids = _build_done_this_week_lines(
         items,
         now=now,
         tz=tz,
@@ -1102,11 +1050,8 @@ def build_weekly_review(
         tz=tz,
         include_ids=surfacing.show_ids_daily_weekly,
     )
-    project_lines, project_ids = _build_project_attention_lines(
+    project_lines, project_ids = _build_blocked_project_lines(
         project_items,
-        now=now,
-        stale_days=surfacing.projects_stale_days,
-        limit=surfacing.projects_blocked_limit,
         include_ids=surfacing.show_ids_daily_weekly,
     )
     overdue_people_lines, overdue_people_ids = _build_overdue_people_lines(
@@ -1117,12 +1062,12 @@ def build_weekly_review(
     )
 
     sections: list[DigestSection] = []
-    if completed_lines:
+    if done_lines:
         sections.append(
             DigestSection(
-                title="Completed this week",
-                lines=completed_lines,
-                object_ids=completed_ids,
+                title="Done this week",
+                lines=done_lines,
+                object_ids=done_ids,
             )
         )
     sections.extend(
@@ -1132,7 +1077,7 @@ def build_weekly_review(
                 lines=unscheduled_admin_lines,
                 object_ids=unscheduled_admin_ids,
             ),
-            DigestSection(title="Blocked or stale projects", lines=project_lines, object_ids=project_ids),
+            DigestSection(title="Blocked projects", lines=project_lines, object_ids=project_ids),
             DigestSection(
                 title="People overdue for contact",
                 lines=overdue_people_lines,
@@ -1169,7 +1114,7 @@ def build_recent_list(
     surfacing = load_surfacing_config(config)
     effective_limit = _clamp_limit(limit, surfacing.pull_default_recent_limit)
 
-    items = [item for item in _load_items(objects_root) if not _is_archived(item.frontmatter.get("archived"))]
+    items = _load_items(objects_root)
     if object_type:
         items = [item for item in items if item.object_type == object_type]
     items.sort(key=lambda item: _object_updated_at(item, tz), reverse=True)
@@ -1185,18 +1130,8 @@ def build_recent_list(
 
 
 def _is_active_item(item: CanonicalItem) -> bool:
-    if _is_archived(item.frontmatter.get("archived")):
-        return False
     status = str(item.frontmatter.get("status") or "").strip().lower()
-    if item.object_type == "admin":
-        return status != "done"
-    if item.object_type == "projects":
-        return status != "completed"
-    if item.object_type == "ideas":
-        return status != "done"
-    if item.object_type == "people":
-        return True
-    return True
+    return status == "open"
 
 
 def build_active_list(
@@ -1277,8 +1212,6 @@ def build_find_list(
             frontmatter = load_frontmatter(path)
         except Exception:
             continue
-        if _is_archived(frontmatter.get("archived")):
-            continue
         title = frontmatter.get("title")
         object_type = frontmatter.get("type")
         if not isinstance(title, str) or not isinstance(object_type, str):
@@ -1329,6 +1262,7 @@ def build_item_detail(
 
     field_map = [
         ("status", "Status"),
+        ("done_at", "Done at"),
         ("priority", "Priority"),
         ("due_at", "Due at"),
         ("due_date", "Due date"),

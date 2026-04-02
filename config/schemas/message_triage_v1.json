@@ -40,6 +40,7 @@
         "find",
         "show",
         "done",
+        "reopen",
         "append",
         "fix",
         "clear_archive",
@@ -139,7 +140,7 @@
               },
               "action_type": {
                 "type": "string",
-                "enum": ["mark_done", "append_body", "set_fields"]
+                "enum": ["mark_done", "mark_open", "append_body", "set_fields"]
               },
               "target_refs": {
                 "type": "array",

@@ -23,7 +23,6 @@ def _fill_common(frontmatter: dict[str, Any]) -> dict[str, Any]:
     now = _now_iso()
     frontmatter.setdefault("created_at", now)
     frontmatter.setdefault("updated_at", now)
-    frontmatter.setdefault("archived", False)
     frontmatter.setdefault("tags", [])
     return frontmatter
 
@@ -127,6 +126,7 @@ def apply_operations(
 
         incoming_fields = op.get("fields") or {}
         fields = incoming_fields
+        clear_fields = {key for key, value in incoming_fields.items() if value is None}
         extracted = derived.get("extracted_fields") or {}
         if extracted:
             merged = dict(extracted)
@@ -147,6 +147,9 @@ def apply_operations(
             if existing_type and existing_type != object_type:
                 raise ValueError("Target object type does not match operation type")
             fields = dict(existing_frontmatter) | dict(fields)
+            for field_name in clear_fields:
+                fields.pop(field_name, None)
+                existing_frontmatter.pop(field_name, None)
             fields["id"] = object_id
             fields["updated_at"] = _now_iso()
             if due_mode == "due_at":
@@ -184,15 +187,19 @@ def apply_operations(
 
         if object_type == "people":
             _require("name", fields)
+            if not fields.get("status"):
+                fields["status"] = "open"
         if object_type == "projects":
             if not fields.get("next_action") and fields.get("title"):
                 fields["next_action"] = fields["title"]
             if not fields.get("status"):
-                fields["status"] = "planning"
+                fields["status"] = "open"
             _require("next_action", fields)
             _require("status", fields)
         if object_type == "ideas":
             _require("one_liner", fields)
+            if not fields.get("status"):
+                fields["status"] = "open"
         if object_type == "admin":
             if not fields.get("next_action") and fields.get("title"):
                 fields["next_action"] = fields["title"]

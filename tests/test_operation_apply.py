@@ -131,7 +131,7 @@ def test_apply_operations_project_create_falls_back_next_action_to_title(tmp_pat
                     "target_id": None,
                     "fields": {
                         "title": "Replace moldy baseboard in bathrooms",
-                        "status": "planning",
+                        "status": "open",
                     },
                 }
             ],
@@ -143,11 +143,11 @@ def test_apply_operations_project_create_falls_back_next_action_to_title(tmp_pat
 
     frontmatter = load_frontmatter(result.written_paths[0])
     assert frontmatter["title"] == "Replace moldy baseboard in bathrooms"
-    assert frontmatter["status"] == "planning"
+    assert frontmatter["status"] == "open"
     assert frontmatter["next_action"] == "Replace moldy baseboard in bathrooms"
 
 
-def test_apply_operations_project_create_defaults_status_to_planning(tmp_path) -> None:
+def test_apply_operations_project_create_defaults_status_to_open(tmp_path) -> None:
     result = apply_operations(
         {
             "object_type": "projects",
@@ -171,5 +171,5 @@ def test_apply_operations_project_create_defaults_status_to_planning(tmp_path) -
 
     frontmatter = load_frontmatter(result.written_paths[0])
     assert frontmatter["title"] == "Repaint house"
-    assert frontmatter["status"] == "planning"
+    assert frontmatter["status"] == "open"
     assert frontmatter["next_action"] == "Repaint house"

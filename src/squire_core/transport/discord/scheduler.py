@@ -38,7 +38,7 @@ from squire_core.transport.state import DueTimeReminderSentLedgerEntry
 _DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS = 48
 _DUE_TIME_REMINDER_HORIZON_HOURS = 36
 _DUE_TIME_REMINDER_EMPTY_QUEUE_WAIT_SECONDS = 300
-_DUE_TIME_REMINDER_ALLOWED_STATUSES = {"open", "blocked"}
+_DUE_TIME_REMINDER_ALLOWED_STATUSES = {"open"}
 
 
 def _coerce_timezone_datetime(value: Any, timezone_hint) -> datetime | None:
@@ -241,14 +241,6 @@ class DiscordSchedulerMixin:
             return False, "ineligible"
         status_value = str(frontmatter.get("status") or "").strip().lower()
         if status_value not in _DUE_TIME_REMINDER_ALLOWED_STATUSES:
-            return False, "ineligible"
-        archived_value = frontmatter.get("archived")
-        archived = False
-        if isinstance(archived_value, bool):
-            archived = archived_value
-        elif isinstance(archived_value, str):
-            archived = archived_value.strip().lower() in {"1", "true", "yes", "y"}
-        if archived:
             return False, "ineligible"
         due_at = _coerce_timezone_datetime(frontmatter.get("due_at"), self._timezone)
         if due_at is None or due_at != event.due_at:

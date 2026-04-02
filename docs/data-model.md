@@ -24,7 +24,7 @@ Pending actions capture updates that require user confirmation. They are stored 
 
 ## Canonical Objects (mutable)
 
-Canonical objects are stored as markdown with YAML frontmatter. Supported object types are people, projects, ideas, and admin. Common required fields are id, type, title, created_at, updated_at, and archived (bool, default false). Common optional fields are tags, links (array of {to, rel}), source_event_ids, and last_decision_id.
+Canonical objects are stored as markdown with YAML frontmatter. Supported object types are people, projects, ideas, and admin. Common required fields are id, type, title, created_at, updated_at, and status (`open|done`). Common optional fields are tags, links (array of {to, rel}), source_event_ids, last_decision_id, and `done_at`.
 source_event_ids links a canonical object to the raw events that created or updated it. Each apply operation appends the current raw_event_id to this list for auditability.
 last_decision_id stores the most recent decision artifact identifier (relative path under events/derived) that influenced an update or create.
 
@@ -36,15 +36,15 @@ People are relationship records that evolve over time. Required fields include t
 
 ### Projects
 
-Projects track ongoing work with state and next actions. Required fields include the common fields plus status (planning|in_progress|blocked|completed|on_hold) and next_action. Optional fields include goal, due (date or ISO8601), blocked_reason, and stakeholders (list of strings).
+Projects track ongoing work with next actions. Required fields include the common fields plus next_action. Optional fields include goal, due (date or ISO8601), blocked_reason, and stakeholders (list of strings). A truthy `blocked_reason` marks an open project as blocked for weekly surfacing.
 
 ### Ideas
 
-Ideas are captured insights or proposals. Required fields include the common fields plus one_liner. Optional fields include status (seed|incubating|active|parked|done, default seed) and next_step.
+Ideas are captured insights or proposals. Required fields include the common fields plus one_liner. Optional fields include next_step.
 
 ### Admin
 
-Admin items are tasks and commitments that need completion (including calendarable items). Required fields include the common fields plus status (open|done|blocked, default open) and next_action. Optional fields include due_date (YYYY-MM-DD) or due_at (ISO datetime with timezone offset), priority (low|normal|high), blocked_reason, completed_at (set when done), and gcal_event_id when a calendar event is created.
+Admin items are tasks and commitments that need completion (including calendarable items). Required fields include the common fields plus next_action. Optional fields include due_date (YYYY-MM-DD) or due_at (ISO datetime with timezone offset), priority (low|normal|high), blocked_reason, `done_at` (set when done), and gcal_event_id when a calendar event is created.
 
 `due_date` and `due_at` are mutually exclusive in canonical state. When an update sets `due_at`, existing `due_date` is removed. When an update sets `due_date`, existing `due_at` is removed.
 

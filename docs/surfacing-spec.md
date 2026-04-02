@@ -33,7 +33,7 @@ Sections:
 - Admin overdue
 - Admin due today
 - Admin due soon (within configurable window)
-- Blocked or stale projects (max 1-3)
+- Open projects
 - People to follow up (where `next_contact` is due)
 
 Rules:
@@ -54,9 +54,9 @@ Schedule:
 
 Sections:
 
-- Completed this week (done/archived/completed notes in last 7 days)
-- Admin items without due dates (oldest first; open and blocked only)
-- Blocked/stale projects
+- Done this week (notes with `status=done` and recent `done_at`)
+- Admin items without due dates (oldest first; open items only)
+- Blocked projects
 - People overdue for contact
 - Ideas updated recently (optional)
 
@@ -66,7 +66,7 @@ Rules:
 - no object IDs in output
 - include a weekly summary count line
 - use the same section emoji and human-readable date style as daily digest
-- omit `Completed this week` when empty
+- omit `Done this week` when empty
 - for other weekly sections, if empty show `All clear`
 
 ## Pull Surfacing
@@ -120,9 +120,6 @@ surfacing:
     show_ids_daily_weekly: false
   admin:
     due_soon_days: 1
-  projects:
-    stale_days: 14
-    blocked_limit: 3
   people:
     next_contact_days: 0
   pull:

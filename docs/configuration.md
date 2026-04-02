@@ -153,8 +153,6 @@ Surfacing behavior is configured under `surfacing` in `config.yaml`.
 
 - `surfacing.output.show_ids_daily_weekly`: include canonical IDs in daily/weekly digest output (default false).
 - `surfacing.admin.due_soon_days`: include admin items due within this many days in the due-soon section.
-- `surfacing.projects.stale_days`: threshold for stale project surfacing.
-- `surfacing.projects.blocked_limit`: maximum blocked/stale projects shown in digest.
 - `surfacing.ideas.weekly_review`: include (or omit) the weekly “Ideas updated recently” section.
 - `surfacing.people.next_contact_days`: include people with `next_contact` due within this window.
 - `surfacing.pull.default_recent_limit`: default row count for `!recent`.

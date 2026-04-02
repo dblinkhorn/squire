@@ -579,7 +579,6 @@ def test_build_fix_guidance_lists_current_and_unset_fix_fields(tmp_path: Path) -
                 "title": "Call dentist",
                 "created_at": "2026-03-20T10:00:00+00:00",
                 "updated_at": "2026-03-21T10:00:00+00:00",
-                "archived": False,
                 "status": "open",
                 "next_action": "Call dentist",
                 "due_date": "2026-03-25",
@@ -608,7 +607,7 @@ def test_build_fix_guidance_lists_current_and_unset_fix_fields(tmp_path: Path) -
     assert "`open`" in detail
     assert "`priority`:" in detail
     assert "!append 1 <text>" in detail
-    assert '!fix 1 status=blocked priority=high' in detail
+    assert '!fix 1 status=done' in detail
 
 
 def test_build_item_object_dump_returns_full_note_object(tmp_path: Path) -> None:
@@ -621,7 +620,6 @@ def test_build_item_object_dump_returns_full_note_object(tmp_path: Path) -> None
                 "title": "Call dentist",
                 "created_at": "2026-03-20T10:00:00+00:00",
                 "updated_at": "2026-03-21T10:00:00+00:00",
-                "archived": False,
                 "status": "open",
                 "next_action": "Call dentist",
                 "due_date": "2026-03-25",
@@ -748,7 +746,7 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch, runtime_state
                     object_ids=["A_1", "A_2"],
                 ),
                 DigestSection(
-                    title="Projects needing attention",
+                    title="Open projects",
                     lines=["Blocked launch - blocked: Waiting on vendor"],
                     object_ids=["P_1"],
                 ),
@@ -803,7 +801,7 @@ def test_handle_command_status_admin_without_due_renders_blocked_metadata_only_w
                     object_ids=["A_9", "A_10"],
                 ),
                 DigestSection(
-                    title="Projects needing attention",
+                    title="Open projects",
                     lines=["Blocked launch - blocked: Waiting on vendor"],
                     object_ids=["P_1"],
                 ),
@@ -982,7 +980,7 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch, runtime_state
             generated_at=datetime(2026, 2, 16, 12, 0, tzinfo=timezone.utc),
             sections=[
                 DigestSection(
-                    title="Completed this week",
+                    title="Done this week",
                     lines=["New unscheduled admin - admin, updated Mon Feb 16 (today)"],
                     object_ids=["A_10"],
                 ),
@@ -1064,7 +1062,7 @@ def test_handle_command_done_resolves_numbered_target(monkeypatch, runtime_state
     assert captured["op"] == "update"
     assert isinstance(captured["fields"], dict)
     assert captured["fields"]["status"] == "done"
-    assert isinstance(captured["fields"]["completed_at"], str)
+    assert isinstance(captured["fields"]["done_at"], str)
 
 
 def test_handle_command_append_resolves_numbered_target(monkeypatch, runtime_state: RuntimeStateStore) -> None:
@@ -1306,32 +1304,32 @@ def test_handle_command_done_number_out_of_range_shows_guidance(
     assert any("That number is out of range for your last list." in call for call in calls)
 
 
-def test_handle_command_done_number_wrong_type_is_rejected_and_logged(
-    monkeypatch, caplog, runtime_state: RuntimeStateStore
-) -> None:
-    calls: list[str] = []
+def test_handle_command_done_number_accepts_project_target(monkeypatch, runtime_state: RuntimeStateStore) -> None:
+    captured: dict[str, object] = {}
     runtime_state.result_cursors.clear()
 
-    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
-        calls.append(f"swap:{remove_emoji}:{add_emoji}")
+    async def _fake_apply_command_operation(
+        runtime,
+        context,
+        raw_id,
+        config,
+        target_id,
+        op,
+        fields,
+        *,
+        validate_fix=False,
+        command_name=None,
+        row_number=None,
+        source_view=None,
+    ):
+        captured["target_id"] = target_id
+        captured["op"] = op
+        captured["fields"] = fields
+        captured["row_number"] = row_number
+        captured["source_view"] = source_view
+        return True
 
-    async def _fake_send_response(message, content, thread_title=None, view=None):
-        calls.append(f"send:{content}")
-
-    def _fake_find_object_path(objects_root, target_id):
-        return Path(f"/tmp/projects/{target_id}.md")
-
-    def _fake_load_frontmatter(path):
-        return {"type": "projects", "title": "Website refresh"}
-
-    def _fake_apply_operations(*args, **kwargs):
-        raise AssertionError("apply_operations should not run for wrong-type !done")
-
-    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
-    monkeypatch.setattr(command_adapter, "find_object_path", _fake_find_object_path)
-    monkeypatch.setattr(command_adapter, "load_frontmatter", _fake_load_frontmatter)
-    monkeypatch.setattr(command_adapter, "apply_operations", _fake_apply_operations)
+    monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 1", user_id=11, channel_id=22)
     key = cursor_key(message)
@@ -1341,7 +1339,6 @@ def test_handle_command_done_number_wrong_type_is_rejected_and_logged(
         source_view="weekly",
     )
 
-    caplog.set_level(logging.INFO)
     config = {
         "llm": {"provider": "openai", "model": "gpt-5-mini"},
         "matching": {"semantic_weight": 0},
@@ -1352,9 +1349,11 @@ def test_handle_command_done_number_wrong_type_is_rejected_and_logged(
     )
 
     assert handled is True
-    assert "swap:⏳:⚠️" in calls
-    assert any("Only admin items can be marked done." in call for call in calls)
-    assert any("numbered_mutation_resolution_failed" in rec.message and "reason=wrong_type" in rec.message for rec in caplog.records)
+    assert captured["target_id"] == "PR_1"
+    assert captured["op"] == "update"
+    assert captured["row_number"] == 1
+    assert captured["source_view"] == "weekly"
+    assert captured["fields"]["status"] == "done"
 
 
 def test_handle_command_done_with_id_keeps_id_path(monkeypatch, runtime_state: RuntimeStateStore) -> None:

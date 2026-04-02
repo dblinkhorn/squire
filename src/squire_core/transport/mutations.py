@@ -295,20 +295,6 @@ async def apply_command_operation(
             with telemetry.start_span("response.send"):
                 await runtime.send_response(context, validation_error)
             return True
-    if op == "update" and object_type != "admin" and fields.get("status") == "done":
-        if command_name and row_number is not None:
-            runtime.log_numbered_mutation_resolution_failed(
-                raw_event_id=raw_id,
-                command=command_name,
-                reason="wrong_type",
-                source_view=source_view,
-                row_number=row_number,
-            )
-        telemetry.set_span_attribute("squire.outcome", "wrong_type", span=root_span)
-        await runtime.swap_reaction(context, "⏳", "⚠️")
-        with telemetry.start_span("response.send"):
-            await runtime.send_response(context, "Only admin items can be marked done.")
-        return True
     if command_name and row_number is not None:
         runtime.log_numbered_mutation_resolved(
             raw_event_id=raw_id,

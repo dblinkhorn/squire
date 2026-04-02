@@ -162,7 +162,6 @@ Object-state behavior:
 
 - `status=done` (or equivalent closed status) remains indexed and searchable.
 - Retrieval may apply a small deterministic down-rank for done/closed status, but must not hard-exclude those objects.
-- `archived=true` objects are excluded from active semantic retrieval.
 - If an object is deleted from canonical storage, remove its semantic rows.
 
 Storage and clearing behavior:
@@ -244,7 +243,7 @@ Track:
 - no increase in unintended auto-applies vs baseline test corpus.
 - all matching and gating outcomes logged in derived artifacts.
 - done/closed objects remain retrievable via semantic search.
-- archived/deleted objects are excluded from active semantic retrieval.
+- deleted objects are removed from semantic retrieval.
 
 ## Rollout Plan
 

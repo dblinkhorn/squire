@@ -67,7 +67,7 @@ _FIX_FIELD_DISPLAY_ORDER = {
         "due_at",
         "priority",
         "blocked_reason",
-        "completed_at",
+        "done_at",
         "gcal_event_id",
     ),
     "projects": (
@@ -80,6 +80,7 @@ _FIX_FIELD_DISPLAY_ORDER = {
     ),
     "people": (
         "title",
+        "status",
         "name",
         "context",
         "follow_ups",
@@ -96,25 +97,23 @@ _FIX_FIELD_DISPLAY_ORDER = {
 
 _FIX_DETAIL_EXAMPLES = {
     "admin": (
-        '!fix {target} status=blocked priority=high',
+        '!fix {target} status=done',
         '!fix {target} blocked_reason="Waiting on vendor"',
     ),
     "projects": (
-        '!fix {target} status=blocked',
+        '!fix {target} status=done',
         '!fix {target} blocked_reason="Waiting on dependency"',
     ),
     "people": (
+        '!fix {target} status=done',
         '!fix {target} context="Met at the design meetup"',
-        '!fix {target} next_contact=2026-03-30',
     ),
     "ideas": (
-        '!fix {target} status=active',
+        '!fix {target} status=done',
         '!fix {target} next_step="Draft outline"',
     ),
 }
 
-
-# Module-level seams intentionally kept for focused test patching.
 def _refresh_index(
     objects_root: str | Path,
     index_db: str | Path,

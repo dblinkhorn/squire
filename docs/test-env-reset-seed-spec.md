@@ -82,27 +82,26 @@ Required coverage:
   - overdue open,
   - due today open,
   - due soon open,
-  - items without due dates, including open and blocked examples,
+  - items without due dates, including open items with and without `blocked_reason`,
   - timed (`due_at`) open,
   - timed (`due_at`) overdue open,
-  - timed (`due_at`) blocked,
-  - blocked,
-  - done (with `completed_at`).
+  - timed (`due_at`) open with `blocked_reason`,
+  - done (with `done_at`).
 - Projects:
-  - blocked with `blocked_reason`,
-  - stale `in_progress`,
-  - completed.
+  - open project,
+  - blocked project with `blocked_reason`,
+  - done project.
 - People:
   - overdue `next_contact`,
   - due today `next_contact`.
 - Ideas:
-  - active recent,
+  - open recent,
   - done recent.
 
 Date strategy:
 
 - Use relative dates from startup `now` to keep surfacing behavior stable over time.
-- Include timezone-aware ISO datetimes where required (`created_at`, `updated_at`, `due_at`, `completed_at`).
+- Include timezone-aware ISO datetimes where required (`created_at`, `updated_at`, `due_at`, `done_at`).
 
 ### Makefile UX
 

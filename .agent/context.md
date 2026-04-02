@@ -22,9 +22,16 @@
 
 ## Durable Runtime Decisions
 
+### Unified Lifecycle
+
+- All canonical note types now use one lifecycle field: `status` with values `open|done`.
+- `!done` sets `status=done` and records `done_at`; `!reopen` sets `status=open` and clears `done_at`.
+- `blocked_reason` remains as informational metadata; blocked project/admin surfacing is derived from whether that field is present.
+- No compatibility seams remain for `archived`, `completed_at`, or legacy per-type active status vocabularies.
+
 ### Numbered Mutation UX
 
-- `!done`, `!append`, and `!fix` support `<id|number>` targets.
+- `!done`, `!reopen`, `!append`, and `!fix` support `<id|number>` targets.
 - Numbered targets resolve from the latest numbered cursor in user/channel context.
 - Cursor sources include `!recent`, `!find`, `!status`, and `!weekly`.
 - Thread-parent fallback is implemented so numbered follow-ups from thread replies resolve correctly.
@@ -74,12 +81,12 @@
 - `SQUIRE_ENV=test` runs destructive reset + deterministic seed + index rebuild.
 - Guardrails require a test-safe archive path.
 - `test_archive_root` can override `archive_root` only in test mode.
-- Test seed now includes two `admin` notes with `due_at` (`TEST_ADMIN_DUE_AT_OPEN`, `TEST_ADMIN_DUE_AT_BLOCKED`) so reminder scheduling can be smoke-tested immediately.
+- Test seed includes timed open admin notes, including one with `blocked_reason`, so reminder scheduling can be smoke-tested immediately.
 
 ### Due-Time Reminders
 
 - Optional due-time reminders are implemented for `admin` items with `due_at` only.
-- Eligibility is strict: `status in {open, blocked}` and `archived != true`; `due_date`-only items are excluded.
+- Eligibility is strict: `status=open`; `due_date`-only items are excluded.
 - Scheduling model is event-driven + reconcile:
   - startup queue build
   - local-midnight queue rebuild
@@ -189,7 +196,7 @@
   - Track this in `.agent/future-plans.md` under routing hardening.
 - Due-time reminder scheduler assumes single-process runtime ownership of queue/ledger writes.
 - Canonical frontmatter parsing is still permissive at write time. Index rebuild is now tolerant of malformed canonical files and logs explicit warnings while skipping them, but malformed writes should still be prevented earlier in the write path as follow-on hardening.
-- Daily digest and weekly review now share the `Admin without due dates` section for open/blocked admin items lacking due dates.
+- Daily digest and weekly review now share the `Admin without due dates` section for open admin items lacking due dates; blocked presentation is derived from `blocked_reason`.
 
 ## Canonical References
 

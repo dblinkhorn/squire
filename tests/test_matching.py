@@ -41,7 +41,7 @@ def _write_object(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_sync_semantic_index_is_incremental_and_removes_archived(tmp_path: Path) -> None:
+def test_sync_semantic_index_is_incremental_and_updates_done_items(tmp_path: Path) -> None:
     objects_root = tmp_path / "objects"
     db_path = tmp_path / "index.sqlite"
     provider = _FakeEmbeddingProvider()
@@ -63,7 +63,6 @@ type: admin
 title: Call dentist
 status: open
 updated_at: "2026-02-14T00:00:00Z"
-archived: false
 ---
 Call dentist tomorrow.
 """,
@@ -94,9 +93,9 @@ Call dentist tomorrow.
 id: A_1
 type: admin
 title: Call dentist
-status: open
+status: done
 updated_at: "2026-02-15T00:00:00Z"
-archived: true
+done_at: "2026-02-15T00:00:00Z"
 ---
 Call dentist tomorrow.
 """,
@@ -108,7 +107,8 @@ Call dentist tomorrow.
         matching_config=matching,
         embedding_provider=provider,
     )
-    assert third.removed_count == 1
+    assert third.indexed_count == 1
+    assert third.removed_count == 0
 
 
 def test_build_matching_candidates_async_returns_none_when_retrieval_unavailable(tmp_path: Path) -> None:
@@ -158,7 +158,6 @@ type: admin
 title: Call dentist
 status: open
 updated_at: "2026-02-14T00:00:00Z"
-archived: false
 ---
 Need to schedule a dentist appointment.
 """,
@@ -171,7 +170,6 @@ type: admin
 title: File taxes
 status: open
 updated_at: "2026-02-14T00:00:00Z"
-archived: false
 ---
 Complete tax filing checklist.
 """,

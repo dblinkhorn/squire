@@ -34,7 +34,6 @@ def _base_frontmatter(
     title: str,
     created_at: str,
     updated_at: str,
-    archived: bool = False,
 ) -> dict:
     return {
         "id": object_id,
@@ -42,7 +41,7 @@ def _base_frontmatter(
         "title": title,
         "created_at": created_at,
         "updated_at": updated_at,
-        "archived": archived,
+        "status": "open",
     }
 
 
@@ -136,7 +135,6 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
                 created_at=created_at,
                 updated_at="2026-01-10T00:00:00+00:00",
             ),
-            "status": "blocked",
             "next_action": "Wait on vendor",
             "blocked_reason": "Waiting on vendor",
         },
@@ -161,7 +159,6 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
         "surfacing": {
             "output": {"show_ids_daily_weekly": False},
             "admin": {"due_soon_days": 1},
-            "projects": {"stale_days": 14, "blocked_limit": 2},
             "people": {"next_contact_days": 0},
         },
     }
@@ -175,21 +172,21 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     assert any("Call vet" in line for line in sections["Admin due today"])
     assert any("Submit report" in line for line in sections["Admin due soon"])
     assert any("Clean desk" in line for line in sections["Admin without due dates"])
-    assert any("Launch beta" in line for line in sections["Projects needing attention"])
+    assert any("Launch beta" in line for line in sections["Open projects"])
     assert any("Alex" in line for line in sections["People to follow up"])
     assert [section.title for section in digest.sections] == [
         "Admin overdue",
         "Admin due today",
         "Admin due soon",
         "Admin without due dates",
-        "Projects needing attention",
+        "Open projects",
         "People to follow up",
     ]
     assert section_objects["Admin overdue"] == ["ADM001"]
     assert section_objects["Admin due today"] == ["ADM005", "ADM002"]
     assert section_objects["Admin due soon"] == ["ADM003"]
     assert section_objects["Admin without due dates"] == ["ADM004"]
-    assert section_objects["Projects needing attention"] == ["PR001"]
+    assert section_objects["Open projects"] == ["PR001"]
     assert section_objects["People to follow up"] == ["P001"]
 
     all_lines = [line for lines in sections.values() for line in lines]
@@ -202,7 +199,7 @@ def test_daily_digest_sections_without_ids(tmp_path: Path) -> None:
     assert "🟠 **Admin due today**" in rendered
     assert "🟡 **Admin due soon**" in rendered
     assert "📂 **Admin without due dates**" in rendered
-    assert "🧱 **Projects needing attention**" in rendered
+    assert "🧱 **Open projects**" in rendered
     assert "🤝 **People to follow up**" in rendered
     assert "────────────" in rendered
     assert "• Pay rent - due Tue Jan 20 (2 days ago)" in rendered
@@ -372,9 +369,9 @@ def test_build_due_time_reminder_events_filters_and_offsets(tmp_path: Path) -> N
                 created_at="2026-01-01T00:00:00+00:00",
                 updated_at="2026-01-22T00:00:00+00:00",
             ),
-            "status": "blocked",
             "next_action": "Blocked admin",
             "due_at": "2026-01-22T12:30:00+00:00",
+            "blocked_reason": "Waiting on vendor",
         },
     )
     _write_object(
@@ -411,16 +408,16 @@ def test_build_due_time_reminder_events_filters_and_offsets(tmp_path: Path) -> N
         objects_root,
         {
             **_base_frontmatter(
-                object_id="ADM_ARCHIVED",
+                object_id="ADM_DONE_LATE",
                 object_type="admin",
-                title="Archived admin",
+                title="Done admin later",
                 created_at="2026-01-01T00:00:00+00:00",
                 updated_at="2026-01-22T00:00:00+00:00",
-                archived=True,
             ),
-            "status": "open",
-            "next_action": "Archived admin",
+            "status": "done",
+            "next_action": "Done admin later",
             "due_at": "2026-01-22T14:00:00+00:00",
+            "done_at": "2026-01-22T11:00:00+00:00",
         },
     )
 
@@ -500,7 +497,7 @@ def test_render_due_time_reminder_message_formats_relative_times() -> None:
     assert "• Call vet - due Thu Jan 22 at 3:00 PM (in 2 hours)" in rendered
 
 
-def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:
+def test_build_recent_list_orders_all_items(tmp_path: Path) -> None:
     objects_root = tmp_path / "objects"
 
     _write_object(
@@ -524,12 +521,12 @@ def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:
             **_base_frontmatter(
                 object_id="A_2",
                 object_type="admin",
-                title="Archived note",
+                title="Done note",
                 created_at="2026-01-01T00:00:00+00:00",
                 updated_at="2026-01-26T00:00:00+00:00",
-                archived=True,
             ),
-            "status": "open",
+            "status": "done",
+            "done_at": "2026-01-26T00:00:00+00:00",
             "next_action": "Ignore",
         },
         body="Body B",
@@ -552,13 +549,14 @@ def test_build_recent_list_orders_and_skips_archived(tmp_path: Path) -> None:
     config = {"timezone": "UTC", "surfacing": {"pull": {"default_recent_limit": 2}}}
     surfaced = build_recent_list(objects_root, config)
 
-    assert surfaced.object_ids == ["A_1", "A_3"]
+    assert surfaced.object_ids == ["A_2", "A_1"]
     assert len(surfaced.lines) == 2
-    assert surfaced.lines[0].startswith("1. Newest active")
+    assert surfaced.lines[0].startswith("1. Done note")
     assert "\n   • admin" in surfaced.lines[0]
-    assert "\n   • idea" in surfaced.lines[1]
-    assert "(A_1)" not in surfaced.lines[0]
-    assert "(A_3)" not in surfaced.lines[1]
+    assert "\n   • done" in surfaced.lines[0]
+    assert "\n   • admin" in surfaced.lines[1]
+    assert "(A_2)" not in surfaced.lines[0]
+    assert "(A_1)" not in surfaced.lines[1]
 
 
 def test_build_recent_list_filters_by_category(tmp_path: Path) -> None:
@@ -637,8 +635,8 @@ def test_build_active_list_groups_by_type_and_skips_inactive(tmp_path: Path) -> 
                 created_at="2026-03-20T00:00:00+00:00",
                 updated_at="2026-03-20T00:00:00+00:00",
             ),
-            "status": "blocked",
             "next_action": "Call plumber",
+            "blocked_reason": "Waiting on callback",
         },
     )
     _write_object(
@@ -651,7 +649,6 @@ def test_build_active_list_groups_by_type_and_skips_inactive(tmp_path: Path) -> 
                 created_at="2026-03-21T00:00:00+00:00",
                 updated_at="2026-03-21T00:00:00+00:00",
             ),
-            "status": "planning",
             "next_action": "Repaint house",
         },
     )
@@ -679,7 +676,6 @@ def test_build_active_list_groups_by_type_and_skips_inactive(tmp_path: Path) -> 
                 updated_at="2026-03-23T00:00:00+00:00",
             ),
             "one_liner": "Garage shelving idea",
-            "status": "active",
         },
     )
     _write_object(
@@ -706,8 +702,9 @@ def test_build_active_list_groups_by_type_and_skips_inactive(tmp_path: Path) -> 
                 created_at="2026-03-20T00:00:00+00:00",
                 updated_at="2026-03-20T00:00:00+00:00",
             ),
-            "status": "completed",
+            "status": "done",
             "next_action": "Celebrate",
+            "done_at": "2026-03-20T00:00:00+00:00",
         },
     )
 
@@ -755,7 +752,6 @@ def test_build_active_list_filters_by_category(tmp_path: Path) -> None:
                 created_at="2026-03-21T00:00:00+00:00",
                 updated_at="2026-03-21T00:00:00+00:00",
             ),
-            "status": "planning",
             "next_action": "Repaint house",
         },
     )
@@ -821,7 +817,6 @@ def test_build_item_detail_humanizes_machine_values(tmp_path: Path) -> None:
                 created_at="2026-01-01T00:00:00+00:00",
                 updated_at="2026-01-22T00:00:00+00:00",
             ),
-            "status": "in_progress",
             "next_action": "Draft new homepage copy",
         },
         body="Draft new homepage copy",
@@ -830,7 +825,7 @@ def test_build_item_detail_humanizes_machine_values(tmp_path: Path) -> None:
     detail = build_item_detail(objects_root, "PR_WEB", {"timezone": "UTC"})
     assert detail is not None
     assert "**Type:** Project" in detail
-    assert "**Status:** In progress" in detail
+    assert "**Status:** Open" in detail
     assert "**Next action:** Draft new homepage copy" in detail
 
 
@@ -873,7 +868,6 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
                 created_at="2026-01-15T00:00:00+00:00",
                 updated_at="2026-01-21T00:00:00+00:00",
             ),
-            "status": "blocked",
             "next_action": "Do new item",
             "blocked_reason": "Waiting on receipts from vendor",
         },
@@ -888,7 +882,6 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
                 created_at=created_at,
                 updated_at="2026-01-20T00:00:00+00:00",
             ),
-            "status": "blocked",
             "next_action": "Wait",
             "blocked_reason": "Dependency pending",
         },
@@ -925,7 +918,6 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
         "timezone": "UTC",
         "surfacing": {
             "output": {"show_ids_daily_weekly": False},
-            "projects": {"stale_days": 14, "blocked_limit": 3},
             "ideas": {"weekly_review": True},
         },
     }
@@ -933,14 +925,14 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
     sections = {section.title: section.lines for section in review.sections}
     section_objects = {section.title: section.object_ids for section in review.sections}
 
-    assert "Completed this week" not in sections
+    assert "Done this week" not in sections
     assert sections["Admin without due dates"][0].startswith("Old unscheduled admin")
     assert any("New unscheduled admin - blocked: Waiting on receipts from vendor" in line for line in sections["Admin without due dates"])
-    assert any("Blocked project" in line for line in sections["Blocked or stale projects"])
+    assert any("Blocked project" in line for line in sections["Blocked projects"])
     assert any("Jordan" in line for line in sections["People overdue for contact"])
     assert any("Recent idea" in line for line in sections["Ideas updated recently"])
     assert section_objects["Admin without due dates"][:2] == ["ADM_OLD", "ADM_NEW"]
-    assert section_objects["Blocked or stale projects"] == ["PR_BLOCKED"]
+    assert section_objects["Blocked projects"] == ["PR_BLOCKED"]
     assert section_objects["People overdue for contact"] == ["P_OVERDUE"]
     assert section_objects["Ideas updated recently"] == ["I_RECENT"]
 
@@ -950,17 +942,17 @@ def test_build_weekly_review_sections(tmp_path: Path) -> None:
 
     rendered = review.render()
     assert rendered.startswith("🗓️ **Weekly review** · Thu Jan 22")
-    assert "✅ **Completed this week**" not in rendered
+    assert "✅ **Done this week**" not in rendered
     assert "📂 **Admin without due dates**" in rendered
     assert "• Old unscheduled admin" in rendered
     assert "• New unscheduled admin - blocked: Waiting on receipts from vendor" in rendered
     assert "open, unscheduled" not in rendered
-    assert "🧱 **Blocked or stale projects**" in rendered
+    assert "🧱 **Blocked projects**" in rendered
     assert "🤝 **People overdue for contact**" in rendered
     assert "💡 **Ideas updated recently**" in rendered
 
 
-def test_build_weekly_review_completed_section_when_populated(tmp_path: Path) -> None:
+def test_build_weekly_review_done_section_when_populated(tmp_path: Path) -> None:
     now = datetime(2026, 1, 22, 9, 0, tzinfo=timezone.utc)
     objects_root = tmp_path / "objects"
 
@@ -975,7 +967,7 @@ def test_build_weekly_review_completed_section_when_populated(tmp_path: Path) ->
                 updated_at="2026-01-21T00:00:00+00:00",
             ),
             "status": "done",
-            "completed_at": "2026-01-21T00:00:00+00:00",
+            "done_at": "2026-01-21T00:00:00+00:00",
             "next_action": "Finished admin item",
         },
     )
@@ -984,10 +976,10 @@ def test_build_weekly_review_completed_section_when_populated(tmp_path: Path) ->
     review = build_weekly_review(objects_root, config, now=now)
     sections = {section.title: section.lines for section in review.sections}
 
-    assert "Completed this week" in sections
-    assert any("Finished admin item" in line for line in sections["Completed this week"])
+    assert "Done this week" in sections
+    assert any("Finished admin item" in line for line in sections["Done this week"])
     rendered = review.render()
-    assert "✅ **Completed this week**" in rendered
+    assert "✅ **Done this week**" in rendered
 
 
 def test_build_weekly_review_ideas_section_optional(tmp_path: Path) -> None:

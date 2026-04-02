@@ -39,13 +39,18 @@
     "people_fields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "context", "follow_ups", "last_contacted", "next_contact"],
+      "required": ["name", "status", "context", "follow_ups", "last_contacted", "next_contact", "done_at"],
       "properties": {
         "name": { "type": ["string", "null"] },
+        "status": {
+          "type": ["string", "null"],
+          "enum": ["open", "done", null]
+        },
         "context": { "type": ["string", "null"] },
         "follow_ups": { "type": ["string", "null"] },
         "last_contacted": { "type": ["string", "null"] },
-        "next_contact": { "type": ["string", "null"] }
+        "next_contact": { "type": ["string", "null"] },
+        "done_at": { "type": ["string", "null"] }
       }
     },
     "operation": {

@@ -18,14 +18,13 @@
   "definitions": {
     "base": {
       "type": "object",
-      "required": ["id", "type", "title", "created_at", "updated_at", "archived"],
+      "required": ["id", "type", "title", "created_at", "updated_at"],
       "properties": {
         "id": { "type": "string", "minLength": 3 },
         "type": { "type": "string" },
         "title": { "type": "string", "minLength": 1 },
         "created_at": { "type": "string", "format": "date-time" },
         "updated_at": { "type": "string", "format": "date-time" },
-        "archived": { "type": "boolean" },
         "tags": {
           "type": "array",
           "items": { "type": "string" }
@@ -48,14 +47,22 @@
         },
         "last_decision_id": {
           "type": "string"
+        },
+        "done_at": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },
     "people": {
       "type": "object",
-      "required": ["name"],
+      "required": ["name", "status"],
       "properties": {
         "type": { "const": "people" },
+        "status": {
+          "type": "string",
+          "enum": ["open", "done"]
+        },
         "name": { "type": "string" },
         "context": { "type": "string" },
         "follow_ups": { "type": "string" },
@@ -70,7 +77,7 @@
         "type": { "const": "projects" },
         "status": {
           "type": "string",
-          "enum": ["planning", "in_progress", "blocked", "completed", "on_hold"]
+          "enum": ["open", "done"]
         },
         "next_action": { "type": "string" },
         "goal": { "type": "string" },
@@ -84,13 +91,13 @@
     },
     "ideas": {
       "type": "object",
-      "required": ["one_liner"],
+      "required": ["one_liner", "status"],
       "properties": {
         "type": { "const": "ideas" },
         "one_liner": { "type": "string" },
         "status": {
           "type": "string",
-          "enum": ["seed", "incubating", "active", "parked", "done"]
+          "enum": ["open", "done"]
         },
         "next_step": { "type": "string" }
       }
@@ -102,14 +109,13 @@
         "type": { "const": "admin" },
         "status": {
           "type": "string",
-          "enum": ["open", "done", "blocked"]
+          "enum": ["open", "done"]
         },
             "next_action": { "type": "string" },
-            "due_date": { "type": "string" },
-            "due_at": { "type": "string", "format": "date-time" },
-            "priority": { "type": "string", "enum": ["low", "normal", "high"] },
+        "due_date": { "type": "string" },
+        "due_at": { "type": "string", "format": "date-time" },
+        "priority": { "type": "string", "enum": ["low", "normal", "high"] },
         "blocked_reason": { "type": "string" },
-        "completed_at": { "type": "string", "format": "date-time" },
         "gcal_event_id": { "type": "string" }
       }
     }

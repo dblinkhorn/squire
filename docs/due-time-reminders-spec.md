@@ -29,7 +29,7 @@ This spec is written so a new agent session can implement it without prior proje
 ## Existing Runtime Invariants to Preserve
 
 1. Timezone handling uses configured `timezone` and existing resolver behavior.
-2. `admin` items with `status=done` or `archived=true` are not surfaced as active work.
+2. `admin` items with `status=done` are not surfaced as active work.
 3. Surfacing output remains deterministic and concise.
 4. Feature must be non-breaking when not configured.
 
@@ -88,9 +88,8 @@ Feature is disabled when `due_time_reminder_offsets_minutes` resolves to empty (
 An item is reminder-eligible only if all are true:
 
 1. Object type is `admin`.
-2. `archived` is false.
-3. `status` is one of `open` or `blocked`.
-4. `due_at` exists and parses to timezone-aware datetime.
+2. `status` is `open`.
+3. `due_at` exists and parses to timezone-aware datetime.
 
 `due_date`-only items are excluded from due-time reminder scheduling.
 
@@ -208,9 +207,8 @@ Stale events are skipped and logged; they are not sent.
 Before send, reload current object state and ensure:
 
 1. object still exists
-2. status still in `{open, blocked}`
-3. archived still false
-4. `due_at` unchanged for this key
+2. status is still `open`
+3. `due_at` unchanged for this key
 
 If any fail, skip and log `ineligible`.
 
@@ -369,11 +367,10 @@ Primary implementation files:
 ### Eligibility and Build
 
 1. open + due_at => eligible.
-2. blocked + due_at => eligible.
+2. open + blocked_reason + due_at => eligible.
 3. done + due_at => ineligible.
-4. archived + due_at => ineligible.
-5. due_date-only => ineligible.
-6. multiple offsets generate multiple events.
+4. due_date-only => ineligible.
+5. multiple offsets generate multiple events.
 
 ### Time Semantics
 

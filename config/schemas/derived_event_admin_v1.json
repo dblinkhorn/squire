@@ -39,18 +39,19 @@
     "admin_fields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["title", "status", "next_action", "due_date", "due_at", "priority", "blocked_reason"],
+      "required": ["title", "status", "next_action", "due_date", "due_at", "priority", "blocked_reason", "done_at"],
       "properties": {
         "title": { "type": ["string", "null"] },
         "status": {
           "type": ["string", "null"],
-          "enum": ["open", "done", "blocked", null]
+          "enum": ["open", "done", null]
         },
         "next_action": { "type": ["string", "null"] },
         "due_date": { "type": ["string", "null"] },
         "due_at": { "type": ["string", "null"] },
         "priority": { "type": ["string", "null"], "enum": ["low", "normal", "high", null] },
-        "blocked_reason": { "type": ["string", "null"] }
+        "blocked_reason": { "type": ["string", "null"] },
+        "done_at": { "type": ["string", "null"] }
       }
     },
     "operation": {

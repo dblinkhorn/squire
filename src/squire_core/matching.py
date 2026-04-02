@@ -449,8 +449,6 @@ def _collect_active_object_records(
         title = frontmatter.get("title")
         if not isinstance(object_id, str) or not isinstance(object_type, str) or not isinstance(title, str):
             continue
-        if bool(frontmatter.get("archived")):
-            continue
         embedding_text = _build_embedding_text(frontmatter, body, text_schema_version)
         content_hash = hashlib.sha256(embedding_text.encode("utf-8")).hexdigest()
         records[object_id] = {
@@ -636,7 +634,7 @@ def _semantic_status_modifier(status_value: Any) -> float:
     if not status:
         return 1.0
     lowered = status.lower()
-    if lowered in {"done", "completed"}:
+    if lowered == "done":
         return 0.9
     return 1.0
 

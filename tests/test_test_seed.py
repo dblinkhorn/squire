@@ -62,7 +62,7 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
     due_at_overdue = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DUE_AT_OVERDUE"))
     due_at_blocked = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DUE_AT_BLOCKED"))
     done_admin = load_frontmatter(_object_path(objects_root, "admin", "TEST_ADMIN_DONE"))
-    stale_project = load_frontmatter(_object_path(objects_root, "projects", "TEST_PROJECT_STALE"))
+    open_project = load_frontmatter(_object_path(objects_root, "projects", "TEST_PROJECT_STALE"))
     overdue_person = load_frontmatter(_object_path(objects_root, "people", "TEST_PERSON_OVERDUE"))
     done_idea = load_frontmatter(_object_path(objects_root, "ideas", "TEST_IDEA_DONE_RECENT"))
 
@@ -76,7 +76,7 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
         due_at_overdue,
         due_at_blocked,
         done_admin,
-        stale_project,
+        open_project,
         overdue_person,
         done_idea,
     ):
@@ -85,7 +85,6 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
         assert isinstance(frontmatter.get("title"), str)
         assert isinstance(frontmatter.get("created_at"), str)
         assert isinstance(frontmatter.get("updated_at"), str)
-        assert frontmatter.get("archived") is False
         assert "seed-test" in frontmatter.get("tags", [])
         created_at = datetime.fromisoformat(str(frontmatter["created_at"]))
         updated_at = datetime.fromisoformat(str(frontmatter["updated_at"]))
@@ -107,14 +106,15 @@ def test_seed_test_canonical_objects_writes_expected_dataset(tmp_path: Path) -> 
     assert due_at_blocked_value == now + timedelta(hours=20)
     assert overdue["status"] == "open"
     assert unscheduled_old["status"] == "open"
-    assert unscheduled_new["status"] == "blocked"
+    assert unscheduled_new["status"] == "open"
     assert unscheduled_new["blocked_reason"] == "Waiting on external drive cleanup"
     assert due_at_open["status"] == "open"
     assert due_at_overdue["status"] == "open"
-    assert due_at_blocked["status"] == "blocked"
+    assert due_at_blocked["status"] == "open"
+    assert due_at_blocked["blocked_reason"] == "Awaiting final legal approval"
     assert done_admin["status"] == "done"
-    assert "completed_at" in done_admin
-    assert stale_project["status"] == "in_progress"
+    assert "done_at" in done_admin
+    assert open_project["status"] == "open"
     assert overdue_person["next_contact"] < today
     assert done_idea["status"] == "done"
 
