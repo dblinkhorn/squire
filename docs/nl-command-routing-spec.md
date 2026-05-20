@@ -30,6 +30,7 @@ This creates brittle behavior where valid user intent can be partially interpret
 - Explicit `!` commands keep highest precedence.
 - `clear-archive`, `confirm`, and `cancel` remain explicit-only from NL input.
 - Mutation writes are never applied without explicit confirmation.
+- Mutation routing must be grounded by target evidence: an explicit row/object target, a scoped clarification target, or a strong local match against eligible existing notes.
 - Runtime validators remain authoritative for allowed fields/value formats.
 - Clarification flow is immutable-scope: unresolved parts only.
 
@@ -43,7 +44,7 @@ Read intents:
 
 Mutation intents:
 
-- `done`, `append`, `fix`
+- `done`, `reopen`, `append`, `fix`
 - now interpreted as one or more structured operations
 
 ## Architecture Overview
@@ -183,6 +184,7 @@ For each `target_ref`:
 
 - `row_number`: resolve via existing numbered cursor behavior
 - `object_id`: resolve direct canonical object lookup
+- missing target references: before clarification, runtime may ground a single-target mutation candidate against eligible existing notes using local matching only
 
 Failure reasons include:
 
@@ -190,6 +192,14 @@ Failure reasons include:
 - expired cursor
 - out-of-range row number
 - unknown object ID
+- no grounded local target
+
+Eligibility for local target grounding is intent-specific:
+
+- `append`, `fix`, and `done`: open notes only
+- `reopen`: done notes only
+
+When no local target is grounded and capture classification is confident, runtime falls through to normal capture instead of asking mutation-oriented clarification.
 
 ### 2) Field Resolution
 

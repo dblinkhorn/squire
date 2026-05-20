@@ -15,6 +15,10 @@ from squire_core.id_utils import generate_prefixed_id
 from squire_core.pending_actions import PendingAction, write_pending_action
 from squire_core.timezone_utils import resolve_timezone
 from squire_core.transport.contracts import TransportMessageContext
+from squire_core.transport.mutation_targeting import (
+    MutationTargetGrounding,
+    ground_mutation_target,
+)
 from squire_core.transport.tracing import (
     build_nl_trace_operation as _build_nl_trace_operation,
     build_unresolved_scope_from_entries as _build_unresolved_scope_from_entries,
@@ -90,33 +94,6 @@ _WEEKDAY_MAP = {
     "SUN": 6,
     "SUNDAY": 6,
 }
-_TARGET_INFERENCE_STOPWORDS = {
-    "actually",
-    "appointment",
-    "appointments",
-    "appt",
-    "appts",
-    "change",
-    "correct",
-    "edit",
-    "fix",
-    "item",
-    "items",
-    "note",
-    "notes",
-    "schedule",
-    "scheduled",
-    "set",
-    "task",
-    "tasks",
-    "time",
-    "update",
-}
-_TARGET_INFERENCE_SYNONYMS = {
-    "appt": "appointment",
-    "appts": "appointments",
-}
-
 
 @dataclass(frozen=True)
 class _CaptureClassificationV1:
@@ -384,6 +361,128 @@ def _log_nl_route_clarified(*, raw_event_id: str, options: list[str]) -> None:
     )
 
 
+def _log_nl_mutation_target_grounding(
+    *,
+    raw_event_id: str,
+    intent: str,
+    outcome: str,
+    pool_size: int,
+    best_score: float,
+    margin: float | None,
+    target_id: str | None = None,
+) -> None:
+    logging.info(
+        "nl_mutation_target_grounding raw_event_id=%s intent=%s outcome=%s pool=%s best=%.1f margin=%s target_id=%s",
+        raw_event_id,
+        intent,
+        outcome,
+        pool_size,
+        best_score,
+        f"{margin:.1f}" if margin is not None else "none",
+        target_id or "",
+    )
+
+
+def _set_nl_mutation_grounding_span_attributes(
+    *,
+    span: Any,
+    raw_event_id: str,
+    intent: str,
+    grounding: MutationTargetGrounding,
+    routing_outcome: str,
+    recent_ids: list[str],
+    object_type_hint: str | None,
+    required_object_type: str | None,
+    require_due_anchor: bool,
+) -> None:
+    attributes: dict[str, Any] = {
+        "squire.raw_id": raw_event_id,
+        "squire.nl.grounding.intent": intent,
+        "squire.nl.grounding.outcome": grounding.outcome,
+        "squire.nl.grounding.routing_outcome": routing_outcome,
+        "squire.nl.grounding.pool_size": grounding.pool_size,
+        "squire.nl.grounding.best_score": grounding.best_score,
+        "squire.nl.grounding.recent_affinity_count": len(recent_ids),
+        "squire.nl.grounding.require_due_anchor": require_due_anchor,
+    }
+    if grounding.margin is not None:
+        attributes["squire.nl.grounding.margin"] = grounding.margin
+    if object_type_hint:
+        attributes["squire.nl.grounding.object_type_hint"] = object_type_hint
+    if required_object_type:
+        attributes["squire.nl.grounding.required_object_type"] = required_object_type
+    if grounding.target is not None:
+        attributes.update(
+            {
+                "squire.nl.grounding.target_id": grounding.target.object_id,
+                "squire.nl.grounding.target_type": grounding.target.object_type,
+                "squire.nl.grounding.target_status": grounding.target.status,
+                "squire.nl.grounding.target_score": grounding.target.score,
+                "squire.nl.grounding.target_fuzzy_score": grounding.target.fuzzy_score,
+                "squire.nl.grounding.target_fts_score": grounding.target.fts_score,
+                "squire.nl.grounding.target_recent_score": grounding.target.recent_score,
+            }
+        )
+    telemetry.set_span_attributes(attributes, span=span)
+
+
+def _ground_mutation_target_with_telemetry(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    raw_event_id: str,
+    content: str,
+    config: dict[str, Any],
+    intent: str,
+    object_type_hint: str | None = None,
+    required_object_type: str | None = None,
+    require_due_anchor: bool = False,
+    routing_outcome: Callable[[MutationTargetGrounding], str] | None = None,
+) -> MutationTargetGrounding:
+    recent_ids = runtime.load_recent_affinity_ids(context, config)
+    with telemetry.start_span(
+        "nl.mutation.target_grounding",
+        attributes={
+            "squire.raw_id": raw_event_id,
+            "squire.nl.grounding.intent": intent,
+            "squire.nl.grounding.recent_affinity_count": len(recent_ids),
+            "squire.nl.grounding.require_due_anchor": require_due_anchor,
+        },
+    ) as span:
+        grounding = ground_mutation_target(
+            content=content,
+            intent=intent,
+            objects_root=config.get("paths", {}).get("objects_root", "objects"),
+            index_db=config.get("paths", {}).get("index_db", "index/sb.sqlite"),
+            recent_ids=recent_ids,
+            object_type_hint=object_type_hint,
+            required_object_type=required_object_type,
+            require_due_anchor=require_due_anchor,
+        )
+        logged_outcome = routing_outcome(grounding) if routing_outcome is not None else grounding.outcome
+        _set_nl_mutation_grounding_span_attributes(
+            span=span,
+            raw_event_id=raw_event_id,
+            intent=intent,
+            grounding=grounding,
+            routing_outcome=logged_outcome,
+            recent_ids=recent_ids,
+            object_type_hint=object_type_hint,
+            required_object_type=required_object_type,
+            require_due_anchor=require_due_anchor,
+        )
+        _log_nl_mutation_target_grounding(
+            raw_event_id=raw_event_id,
+            intent=intent,
+            outcome=logged_outcome,
+            pool_size=grounding.pool_size,
+            best_score=grounding.best_score,
+            margin=grounding.margin,
+            target_id=grounding.target.object_id if grounding.target else None,
+        )
+        return grounding
+
+
 def _log_nl_route_blocked(*, raw_event_id: str, intent: str, reason: str) -> None:
     logging.info("nl_route_blocked raw_event_id=%s intent=%s reason=%s", raw_event_id, intent, reason)
 
@@ -529,75 +628,6 @@ def _normalize_nl_raw_user_phrases(payload: Any) -> dict[str, str]:
     }
 
 
-def _target_inference_tokens(value: str) -> set[str]:
-    tokens: set[str] = set()
-    for raw_token in re.findall(r"[A-Za-z0-9']+", value.lower()):
-        token = raw_token.strip("'")
-        if not token:
-            continue
-        token = _TARGET_INFERENCE_SYNONYMS.get(token, token)
-        if len(token) < 4 or token in _TARGET_INFERENCE_STOPWORDS:
-            continue
-        tokens.add(token)
-    return tokens
-
-
-def _resolve_recent_affinity_target(
-    *,
-    runtime: RoutingRuntime,
-    context: TransportMessageContext,
-    content_tokens: set[str],
-    config: dict[str, Any],
-    object_type_hint: str | None = None,
-    required_object_type: str | None = None,
-    require_due_anchor: bool = False,
-) -> tuple[str, str | None] | None:
-    if not content_tokens:
-        return None
-
-    recent_ids = runtime.load_recent_affinity_ids(context, config)
-    if not recent_ids:
-        return None
-
-    objects_root = config.get("paths", {}).get("objects_root", "objects")
-    best_id: str | None = None
-    best_object_type: str | None = None
-    best_score = 0
-    tied_best = False
-
-    for recency_index, object_id in enumerate(recent_ids[:5]):
-        object_path = runtime.find_object_path(objects_root, object_id)
-        if object_path is None:
-            continue
-        frontmatter = runtime.load_frontmatter(object_path)
-        object_type = _coerce_non_empty_str(frontmatter.get("type"))
-        if required_object_type and object_type != required_object_type:
-            continue
-        if object_type_hint and object_type and object_type != object_type_hint:
-            continue
-        if require_due_anchor and _parse_existing_datetime_value(frontmatter.get("due_at")) is None and _parse_existing_date_value(
-            frontmatter.get("due_date")
-        ) is None:
-            continue
-        title = _coerce_non_empty_str(frontmatter.get("title")) or ""
-        overlap = content_tokens & _target_inference_tokens(title)
-        if not overlap:
-            continue
-        score = (len(overlap) * 10) - recency_index
-        if score > best_score:
-            best_id = object_id
-            best_object_type = object_type
-            best_score = score
-            tied_best = False
-            continue
-        if score == best_score:
-            tied_best = True
-
-    if best_id is None or tied_best:
-        return None
-    return best_id, best_object_type
-
-
 def _extract_simple_due_time_fix_value(content: str) -> str | None:
     text = content.strip()
     if not text:
@@ -605,6 +635,7 @@ def _extract_simple_due_time_fix_value(content: str) -> str | None:
     patterns = (
         r"\bis\s+at\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
         r"\bat\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
+        r"\bto\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
     )
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -614,51 +645,6 @@ def _extract_simple_due_time_fix_value(content: str) -> str | None:
         if value:
             return value
     return None
-
-
-def _maybe_infer_recent_target_refs(
-    *,
-    runtime: RoutingRuntime,
-    context: TransportMessageContext,
-    content: str,
-    config: dict[str, Any],
-    raw_plan: dict[str, Any],
-) -> dict[str, Any]:
-    operations = raw_plan.get("operations")
-    if not isinstance(operations, list) or len(operations) != 1:
-        return raw_plan
-
-    operation = operations[0]
-    if not isinstance(operation, dict):
-        return raw_plan
-
-    raw_target_refs = operation.get("target_refs")
-    if isinstance(raw_target_refs, list) and raw_target_refs:
-        return raw_plan
-    if isinstance(operation.get("target_ref"), dict):
-        return raw_plan
-
-    content_tokens = _target_inference_tokens(content)
-    if not content_tokens:
-        return raw_plan
-
-    object_type_hint = _coerce_non_empty_str(raw_plan.get("object_type_hint"))
-    resolved_target = _resolve_recent_affinity_target(
-        runtime=runtime,
-        context=context,
-        content_tokens=content_tokens,
-        config=config,
-        object_type_hint=object_type_hint,
-    )
-    if resolved_target is None:
-        return raw_plan
-
-    best_id, _ = resolved_target
-    updated_operation = dict(operation)
-    updated_operation["target_refs"] = [{"kind": "object_id", "value": best_id}]
-    updated_plan = dict(raw_plan)
-    updated_plan["operations"] = [updated_operation]
-    return updated_plan
 
 
 def _build_simple_due_time_fix_plan(
@@ -703,32 +689,141 @@ def _maybe_recover_mutation_plan_from_context(
     *,
     runtime: RoutingRuntime,
     context: TransportMessageContext,
+    raw_event_id: str,
     content: str,
     config: dict[str, Any],
     confidence: float,
 ) -> dict[str, Any] | None:
-    content_tokens = _target_inference_tokens(content)
     value_text = _extract_simple_due_time_fix_value(content)
     if value_text is None:
         return None
 
-    resolved_target = _resolve_recent_affinity_target(
+    grounding = _ground_mutation_target_with_telemetry(
         runtime=runtime,
         context=context,
-        content_tokens=content_tokens,
+        raw_event_id=raw_event_id,
+        content=content,
         config=config,
+        intent="fix",
         required_object_type="admin",
         require_due_anchor=True,
     )
-    if resolved_target is None:
+    if grounding.target is None:
         return None
-    target_id, object_type = resolved_target
     return _build_simple_due_time_fix_plan(
-        target_id=target_id,
-        object_type=object_type,
+        target_id=grounding.target.object_id,
+        object_type=grounding.target.object_type,
         value_text=value_text,
         confidence=confidence,
     )
+
+
+def _intent_for_action_type(action_type: str) -> str:
+    mapping = {
+        "mark_done": "done",
+        "mark_open": "reopen",
+        "append_body": "append",
+        "set_fields": "fix",
+    }
+    return mapping.get(action_type, action_type)
+
+
+def _capture_confident_for_fallthrough(route: _MessageTriageV1, config: dict[str, Any]) -> bool:
+    object_type = route.capture.object_type
+    confidence = route.capture.confidence
+    threshold = config.get("confidence", {}).get("create_threshold", 0.6)
+    return isinstance(object_type, str) and object_type != "unknown" and confidence >= threshold
+
+
+def _object_type_hint_for_route(route: _MessageTriageV1, raw_plan: dict[str, Any] | None = None) -> str | None:
+    object_type_hint = _coerce_non_empty_str((raw_plan or {}).get("object_type_hint"))
+    if object_type_hint:
+        object_type_hint = object_type_hint.lower()
+        if object_type_hint in {"admin", "projects", "people", "ideas"}:
+            return object_type_hint
+    capture_type = route.capture.object_type
+    if capture_type in {"admin", "projects", "people", "ideas"}:
+        return capture_type
+    return None
+
+
+def _operation_has_target(operation: dict[str, Any]) -> bool:
+    raw_target_refs = operation.get("target_refs")
+    if isinstance(raw_target_refs, list) and any(isinstance(item, dict) for item in raw_target_refs):
+        return True
+    return isinstance(operation.get("target_ref"), dict)
+
+
+def _single_operation_missing_target(raw_plan: dict[str, Any]) -> dict[str, Any] | None:
+    operations = raw_plan.get("operations")
+    if not isinstance(operations, list) or len(operations) != 1:
+        return None
+    operation = operations[0]
+    if not isinstance(operation, dict) or _operation_has_target(operation):
+        return None
+    return operation
+
+
+def _ground_missing_mutation_plan_target(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    raw_event_id: str,
+    route: _MessageTriageV1,
+    content: str,
+    config: dict[str, Any],
+    raw_plan: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    operation = _single_operation_missing_target(raw_plan)
+    if operation is None:
+        return raw_plan, False
+    action_type = _coerce_non_empty_str(operation.get("action_type"))
+    intent = _intent_for_action_type(action_type or route.intent)
+    grounding = _ground_mutation_target_with_telemetry(
+        runtime=runtime,
+        context=context,
+        raw_event_id=raw_event_id,
+        content=content,
+        config=config,
+        intent=intent,
+        object_type_hint=_object_type_hint_for_route(route, raw_plan),
+    )
+    if grounding.target is None:
+        return raw_plan, False
+    updated_operation = dict(operation)
+    updated_operation["target_refs"] = [{"kind": "object_id", "value": grounding.target.object_id}]
+    updated_plan = dict(raw_plan)
+    updated_plan["operations"] = [updated_operation]
+    if not _coerce_non_empty_str(updated_plan.get("object_type_hint")):
+        updated_plan["object_type_hint"] = grounding.target.object_type
+    return updated_plan, True
+
+
+def _should_fall_through_ungrounded_mutation(
+    *,
+    runtime: RoutingRuntime,
+    context: TransportMessageContext,
+    raw_event_id: str,
+    route: _MessageTriageV1,
+    content: str,
+    config: dict[str, Any],
+    intent: str,
+    raw_plan: dict[str, Any] | None = None,
+) -> bool:
+    grounding = _ground_mutation_target_with_telemetry(
+        runtime=runtime,
+        context=context,
+        raw_event_id=raw_event_id,
+        content=content,
+        config=config,
+        intent=intent,
+        object_type_hint=_object_type_hint_for_route(route, raw_plan),
+        routing_outcome=lambda result: (
+            "capture_fallthrough" if result.target is None and _capture_confident_for_fallthrough(route, config) else result.outcome
+        ),
+    )
+    fallthrough = grounding.target is None and _capture_confident_for_fallthrough(route, config)
+    return fallthrough
 
 
 def normalize_nl_mutation_plan_input(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
@@ -1280,7 +1375,12 @@ def _collect_field_ids_from_candidates(update: dict[str, Any]) -> list[str]:
     return field_ids
 
 
-def _resolve_field_for_update(*, object_type: str, update: dict[str, Any]) -> tuple[str | None, str | None, list[str]]:
+def _resolve_field_for_update(
+    *,
+    object_type: str,
+    update: dict[str, Any],
+    existing_frontmatter: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None, list[str]]:
     allowed = _FIX_ALLOWED_FIELDS.get(object_type, set())
     notes: list[str] = []
     candidate_ids = _collect_field_ids_from_candidates(update)
@@ -1297,7 +1397,11 @@ def _resolve_field_for_update(*, object_type: str, update: dict[str, Any]) -> tu
     if len(resolved) == 1:
         return resolved[0], None, notes
     if {"due_date", "due_at"}.issubset(set(resolved)):
-        due_choice = "due_at" if _value_contains_time_hint(value_text) else "due_date"
+        due_choice = "due_date"
+        if _value_contains_time_hint(value_text):
+            due_choice = "due_at"
+        elif _parse_time_text(value_text) is not None and _parse_existing_datetime_value((existing_frontmatter or {}).get("due_at")):
+            due_choice = "due_at"
         notes.append(f"due_choice:{due_choice}")
         return due_choice, None, notes
     return None, "field_ambiguous", notes
@@ -1320,7 +1424,11 @@ def normalize_set_fields(
     for raw_update in field_updates:
         if not isinstance(raw_update, dict):
             continue
-        field_id, field_error, field_notes = _resolve_field_for_update(object_type=object_type, update=raw_update)
+        field_id, field_error, field_notes = _resolve_field_for_update(
+            object_type=object_type,
+            update=raw_update,
+            existing_frontmatter=existing_frontmatter,
+        )
         notes.extend(field_notes)
         if field_error:
             return None, field_error, notes
@@ -2123,6 +2231,7 @@ async def handle_message_triage(
             recovered_plan = _maybe_recover_mutation_plan_from_context(
                 runtime=runtime,
                 context=context,
+                raw_event_id=raw_id,
                 content=content,
                 config=config,
                 confidence=confidence,
@@ -2146,6 +2255,24 @@ async def handle_message_triage(
                         confidence=confidence,
                         routing=routing,
                     )
+            if _should_fall_through_ungrounded_mutation(
+                runtime=runtime,
+                context=context,
+                raw_event_id=raw_id,
+                route=route,
+                content=content,
+                config=config,
+                intent=intent,
+            ):
+                _log_nl_route_evaluated(
+                    raw_event_id=raw_id,
+                    route_result="fallthrough",
+                    intent=intent,
+                    risk_tier=risk_tier,
+                    confidence_band=band,
+                    mapped_command=mapped_command,
+                )
+                return False
         if routing.clarify_on_ambiguous and band != "low":
             clarification = _format_nl_clarification_message(
                 question=clarification_question,
@@ -2298,15 +2425,32 @@ async def handle_message_triage(
                 )
             return True
 
-        raw_plan = _maybe_infer_recent_target_refs(
+        raw_plan = route.mutation_plan or {}
+        raw_plan, grounded_target = _ground_missing_mutation_plan_target(
             runtime=runtime,
             context=context,
+            raw_event_id=raw_id,
+            route=route,
             content=content,
             config=config,
-            raw_plan=route.mutation_plan or {},
+            raw_plan=raw_plan,
         )
         plan_input, plan_error = normalize_nl_mutation_plan_input(raw_plan)
         if plan_error:
+            if (
+                not grounded_target
+                and "which item to target" in plan_error
+                and _capture_confident_for_fallthrough(route, config)
+            ):
+                _log_nl_route_evaluated(
+                    raw_event_id=raw_id,
+                    route_result="fallthrough",
+                    intent=intent,
+                    risk_tier=risk_tier,
+                    confidence_band=band,
+                    mapped_command=mapped_command,
+                )
+                return False
             if routing.clarify_on_ambiguous and band != "low":
                 fallback = "I need more detail before applying that update."
                 if isinstance(plan_input, dict):

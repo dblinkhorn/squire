@@ -34,3 +34,4 @@ Purpose:
 - If natural-language mutation requests become too large/noisy in practice, add deterministic plan-size guardrails:
   - max operations per plan
   - max targets per operation
+- Make route-level clarification options selectable. Current clarification text can still present bullets; a follow-on UX pass should store option state and support numeric replies or Discord controls.

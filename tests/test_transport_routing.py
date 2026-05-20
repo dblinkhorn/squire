@@ -9,6 +9,11 @@ from squire_core.pending_actions import load_pending_action
 from squire_core.transport import routing
 
 
+def _write_object(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
 class _Runtime:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
@@ -313,7 +318,19 @@ def test_triage_message_medium_confidence_mutation_queues_runtime_confirmation()
     assert runtime.responses == []
 
 
-def test_triage_message_infers_recent_target_for_missing_mutation_target() -> None:
+def test_triage_message_infers_recent_target_for_missing_mutation_target(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_1.md",
+        """---
+id: A_1
+type: admin
+title: Dentist appointment
+status: open
+due_at: "2026-03-24T14:00:00-07:00"
+---
+""",
+    )
     runtime = _Runtime(
         {
             "schema_version": 1,
@@ -364,13 +381,6 @@ def test_triage_message_infers_recent_target_for_missing_mutation_target() -> No
         }
     )
     runtime.recent_affinity_ids = ["A_1"]
-    runtime.frontmatter_by_id = {
-        "A_1": {
-            "type": "admin",
-            "title": "Dentist appointment",
-            "due_at": "2026-03-24T14:00:00-07:00",
-        }
-    }
 
     outcome = asyncio.run(
         routing.triage_message(
@@ -387,7 +397,7 @@ def test_triage_message_infers_recent_target_for_missing_mutation_target() -> No
             ),
             content="actually the dentist appt is at 1",
             raw_id="R_4",
-            config={},
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
             provider=object(),
             model="gpt-5-mini",
         )
@@ -400,7 +410,19 @@ def test_triage_message_infers_recent_target_for_missing_mutation_target() -> No
     assert runtime.responses == []
 
 
-def test_triage_message_missing_mutation_target_requires_overlap_instead_of_pure_recency() -> None:
+def test_triage_message_missing_mutation_target_requires_overlap_instead_of_pure_recency(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_1.md",
+        """---
+id: A_1
+type: admin
+title: Dentist appointment
+status: open
+due_at: "2026-03-24T14:00:00-07:00"
+---
+""",
+    )
     runtime = _Runtime(
         {
             "schema_version": 1,
@@ -451,13 +473,6 @@ def test_triage_message_missing_mutation_target_requires_overlap_instead_of_pure
         }
     )
     runtime.recent_affinity_ids = ["A_1"]
-    runtime.frontmatter_by_id = {
-        "A_1": {
-            "type": "admin",
-            "title": "Dentist appointment",
-            "due_at": "2026-03-24T14:00:00-07:00",
-        }
-    }
 
     outcome = asyncio.run(
         routing.triage_message(
@@ -474,7 +489,7 @@ def test_triage_message_missing_mutation_target_requires_overlap_instead_of_pure
             ),
             content="actually it's at 1",
             raw_id="R_4b",
-            config={},
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
             provider=object(),
             model="gpt-5-mini",
         )
@@ -486,7 +501,19 @@ def test_triage_message_missing_mutation_target_requires_overlap_instead_of_pure
     assert "Which note should I update?" in runtime.responses[0]
 
 
-def test_triage_message_clarify_fix_recovers_to_runtime_mutation_plan() -> None:
+def test_triage_message_clarify_fix_recovers_to_runtime_mutation_plan(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_1.md",
+        """---
+id: A_1
+type: admin
+title: Dentist appointment
+status: open
+due_at: "2026-03-24T14:00:00-07:00"
+---
+""",
+    )
     runtime = _Runtime(
         {
             "schema_version": 1,
@@ -508,13 +535,6 @@ def test_triage_message_clarify_fix_recovers_to_runtime_mutation_plan() -> None:
         }
     )
     runtime.recent_affinity_ids = ["A_1"]
-    runtime.frontmatter_by_id = {
-        "A_1": {
-            "type": "admin",
-            "title": "Dentist appointment",
-            "due_at": "2026-03-24T14:00:00-07:00",
-        }
-    }
 
     outcome = asyncio.run(
         routing.triage_message(
@@ -531,7 +551,7 @@ def test_triage_message_clarify_fix_recovers_to_runtime_mutation_plan() -> None:
             ),
             content="actually the dentist appt is at 1",
             raw_id="R_5",
-            config={},
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
             provider=object(),
             model="gpt-5-mini",
         )
@@ -545,7 +565,92 @@ def test_triage_message_clarify_fix_recovers_to_runtime_mutation_plan() -> None:
     assert runtime.responses == []
 
 
-def test_triage_message_clarify_fix_requires_overlap_instead_of_pure_recency() -> None:
+def test_triage_message_clarify_fix_prefers_due_anchor_text_match_over_recent_note(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_RECENT.md",
+        """---
+id: A_RECENT
+type: admin
+title: Put in for on-call shift swap
+status: open
+updated_at: "2026-05-20T06:19:00Z"
+---
+""",
+    )
+    _write_object(
+        objects_root / "admin" / "A_PARTNER.md",
+        """---
+id: A_PARTNER
+type: admin
+title: Join partner onboarding call
+status: open
+due_at: "2026-05-20T09:00:00-07:00"
+updated_at: "2026-05-20T06:20:00Z"
+---
+""",
+    )
+    runtime = _Runtime(
+        {
+            "schema_version": 1,
+            "route": "clarify",
+            "intent": "fix",
+            "risk_tier": "mutation",
+            "confidence": 0.75,
+            "ambiguities": [],
+            "read_command": None,
+            "mutation_plan": None,
+            "clarification": {
+                "question": "Which note should I update?",
+                "options": ["Update partner onboarding call", "Create a new note"],
+            },
+            "capture": {"object_type": "admin", "confidence": 0.9},
+        }
+    )
+    runtime.recent_affinity_ids = ["A_RECENT"]
+
+    outcome = asyncio.run(
+        routing.triage_message(
+            runtime=runtime,
+            context=SimpleNamespace(
+                user_id="1",
+                channel_id="2",
+                thread_id=None,
+                message_id="3",
+                content="change partner onboarding call to 1",
+                source="discord",
+                is_dm=True,
+                created_at=datetime(2026, 5, 20, 0, 0, tzinfo=timezone.utc),
+            ),
+            content="change partner onboarding call to 1",
+            raw_id="R_partner",
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert outcome.handled is True
+    assert runtime.queued is not None
+    plan_input = runtime.queued["plan_input"]
+    assert plan_input["operations"][0]["target_refs"][0]["target_token"] == "A_PARTNER"
+    assert plan_input["operations"][0]["field_updates"][0]["value_text"] == "1"
+    assert runtime.responses == []
+
+
+def test_triage_message_clarify_fix_requires_overlap_instead_of_pure_recency(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_1.md",
+        """---
+id: A_1
+type: admin
+title: Dentist appointment
+status: open
+due_at: "2026-03-24T14:00:00-07:00"
+---
+""",
+    )
     runtime = _Runtime(
         {
             "schema_version": 1,
@@ -567,13 +672,6 @@ def test_triage_message_clarify_fix_requires_overlap_instead_of_pure_recency() -
         }
     )
     runtime.recent_affinity_ids = ["A_1"]
-    runtime.frontmatter_by_id = {
-        "A_1": {
-            "type": "admin",
-            "title": "Dentist appointment",
-            "due_at": "2026-03-24T14:00:00-07:00",
-        }
-    }
 
     outcome = asyncio.run(
         routing.triage_message(
@@ -590,7 +688,7 @@ def test_triage_message_clarify_fix_requires_overlap_instead_of_pure_recency() -
             ),
             content="actually it's at 1",
             raw_id="R_6",
-            config={},
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
             provider=object(),
             model="gpt-5-mini",
         )
@@ -600,6 +698,208 @@ def test_triage_message_clarify_fix_requires_overlap_instead_of_pure_recency() -
     assert runtime.queued is None
     assert runtime.responses
     assert "Options:" in runtime.responses[0]
+
+
+def test_triage_message_ungrounded_append_falls_through_to_confident_capture(tmp_path: Path) -> None:
+    runtime = _Runtime(
+        {
+            "schema_version": 1,
+            "route": "clarify",
+            "intent": "append",
+            "risk_tier": "mutation",
+            "confidence": 0.95,
+            "ambiguities": [],
+            "read_command": None,
+            "mutation_plan": None,
+            "clarification": {
+                "question": "Create a request or append to an existing item?",
+                "options": [
+                    "Create a new on-call swap request for tomorrow",
+                    "Append this note to an existing item",
+                ],
+            },
+            "capture": {"object_type": "admin", "confidence": 0.9},
+        }
+    )
+
+    outcome = asyncio.run(
+        routing.triage_message(
+            runtime=runtime,
+            context=SimpleNamespace(
+                user_id="1",
+                channel_id="2",
+                thread_id=None,
+                message_id="3",
+                content="Put in for on-call shift swap tomorrow",
+                source="discord",
+                is_dm=True,
+                created_at=datetime(2026, 5, 17, 0, 0, tzinfo=timezone.utc),
+            ),
+            content="Put in for on-call shift swap tomorrow",
+            raw_id="R_oncall",
+            config={
+                "paths": {
+                    "objects_root": str(tmp_path / "objects"),
+                    "index_db": str(tmp_path / "index.sqlite"),
+                },
+                "confidence": {"create_threshold": 0.6},
+            },
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert outcome.handled is False
+    assert runtime.queued is None
+    assert runtime.responses == []
+
+
+def test_triage_message_missing_mutation_target_uses_grounded_open_note(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_1.md",
+        """---
+id: A_1
+type: admin
+title: On call shift reminder
+status: open
+updated_at: "2026-05-18T00:00:00Z"
+---
+""",
+    )
+    runtime = _Runtime(
+        {
+            "schema_version": 1,
+            "route": "mutation_plan",
+            "intent": "append",
+            "risk_tier": "mutation",
+            "confidence": 0.95,
+            "ambiguities": [],
+            "read_command": None,
+            "mutation_plan": {
+                "schema_version": 1,
+                "operations": [
+                    {
+                        "operation_id": "op_1",
+                        "action_type": "append_body",
+                        "target_refs": [],
+                        "field_updates": [],
+                        "append_text": "shift moved to Thursday",
+                        "raw_user_phrases": {},
+                        "confidence": 0.95,
+                        "requires_clarification": False,
+                        "clarification_reason": None,
+                    }
+                ],
+                "raw_user_phrases": {},
+                "confidence": 0.95,
+                "object_type_hint": "admin",
+                "requires_clarification": False,
+                "clarification_reason": None,
+            },
+            "clarification": None,
+            "capture": {"object_type": "admin", "confidence": 0.4},
+        }
+    )
+
+    outcome = asyncio.run(
+        routing.triage_message(
+            runtime=runtime,
+            context=SimpleNamespace(
+                user_id="1",
+                channel_id="2",
+                thread_id=None,
+                message_id="3",
+                content="append shift moved to Thursday to on-call shift reminder",
+                source="discord",
+                is_dm=True,
+                created_at=datetime(2026, 5, 18, 0, 0, tzinfo=timezone.utc),
+            ),
+            content="append shift moved to Thursday to on-call shift reminder",
+            raw_id="R_grounded",
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert outcome.handled is True
+    assert runtime.queued is not None
+    plan_input = runtime.queued["plan_input"]
+    assert plan_input["operations"][0]["target_refs"][0]["target_token"] == "A_1"
+
+
+def test_triage_message_missing_append_target_ignores_done_note_for_capture(tmp_path: Path) -> None:
+    objects_root = tmp_path / "objects"
+    _write_object(
+        objects_root / "admin" / "A_1.md",
+        """---
+id: A_1
+type: admin
+title: On call shift reminder
+status: done
+updated_at: "2026-05-18T00:00:00Z"
+---
+""",
+    )
+    runtime = _Runtime(
+        {
+            "schema_version": 1,
+            "route": "mutation_plan",
+            "intent": "append",
+            "risk_tier": "mutation",
+            "confidence": 0.95,
+            "ambiguities": [],
+            "read_command": None,
+            "mutation_plan": {
+                "schema_version": 1,
+                "operations": [
+                    {
+                        "operation_id": "op_1",
+                        "action_type": "append_body",
+                        "target_refs": [],
+                        "field_updates": [],
+                        "append_text": "shift moved to Thursday",
+                        "raw_user_phrases": {},
+                        "confidence": 0.95,
+                        "requires_clarification": False,
+                        "clarification_reason": None,
+                    }
+                ],
+                "raw_user_phrases": {},
+                "confidence": 0.95,
+                "object_type_hint": "admin",
+                "requires_clarification": False,
+                "clarification_reason": None,
+            },
+            "clarification": None,
+            "capture": {"object_type": "admin", "confidence": 0.9},
+        }
+    )
+
+    outcome = asyncio.run(
+        routing.triage_message(
+            runtime=runtime,
+            context=SimpleNamespace(
+                user_id="1",
+                channel_id="2",
+                thread_id=None,
+                message_id="3",
+                content="append shift moved to Thursday to on-call shift reminder",
+                source="discord",
+                is_dm=True,
+                created_at=datetime(2026, 5, 18, 0, 0, tzinfo=timezone.utc),
+            ),
+            content="append shift moved to Thursday to on-call shift reminder",
+            raw_id="R_done_ignored",
+            config={"paths": {"objects_root": str(objects_root), "index_db": str(tmp_path / "index.sqlite")}},
+            provider=object(),
+            model="gpt-5-mini",
+        )
+    )
+
+    assert outcome.handled is False
+    assert runtime.queued is None
 
 
 def test_queue_nl_mutation_confirmation_infers_meridiem_from_existing_note(tmp_path: Path) -> None:

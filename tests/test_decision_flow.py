@@ -122,6 +122,46 @@ def test_apply_decision_sets_target_for_update() -> None:
     assert updated["proposed_operations"][0]["target_id"] == "A_9"
 
 
+def test_apply_decision_omits_null_capture_fields_for_target_updates() -> None:
+    derived = _base_derived()
+    derived["extracted_fields"] = {
+        "title": None,
+        "next_action": None,
+        "due_at": "2026-05-20T13:00:00-07:00",
+        "due_date": None,
+        "status": "open",
+    }
+    derived["proposed_operations"] = [
+        {
+            "op": "create",
+            "target_id": None,
+            "fields": dict(derived["extracted_fields"]),
+        }
+    ]
+    decision = {
+        "confidence": 0.9,
+        "proposed_operations": [{"op": "update", "target_id": "A_9"}],
+    }
+    config = DecisionConfig(
+        auto_apply_threshold=0.85,
+        confirm_threshold=0.65,
+        candidate_limit=3,
+        candidate_score_threshold=0.2,
+        auto_min_score=0.55,
+        auto_min_margin=0.2,
+    )
+    routing = evaluate_decision(decision, config)
+
+    updated = apply_decision_to_derived(derived, routing)
+
+    assert updated["proposed_operations"][0]["op"] == "update"
+    assert updated["proposed_operations"][0]["target_id"] == "A_9"
+    assert updated["proposed_operations"][0]["fields"] == {
+        "due_at": "2026-05-20T13:00:00-07:00",
+        "status": "open",
+    }
+
+
 def test_evaluate_decision_requires_confirmation_when_score_is_too_low() -> None:
     decision = {
         "confidence": 0.95,

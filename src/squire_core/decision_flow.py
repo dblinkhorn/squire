@@ -108,7 +108,7 @@ def apply_decision_to_derived(derived: dict[str, Any], routing: DecisionRouting)
             {
                 "op": decision_op.get("op"),
                 "target_id": decision_op.get("target_id"),
-                "fields": fields_template,
+                "fields": _select_target_fields_template(fields_template),
             }
         )
     updated["proposed_operations"] = updated_ops
@@ -126,6 +126,10 @@ def _select_fields_template(updated: dict[str, Any], existing_ops: list[dict[str
     if isinstance(extracted, dict):
         return dict(extracted)
     return {}
+
+
+def _select_target_fields_template(fields: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in fields.items() if value is not None}
 
 
 def _extract_top_scores(decision: dict[str, Any]) -> tuple[float, float | None]:

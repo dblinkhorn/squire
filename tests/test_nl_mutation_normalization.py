@@ -163,6 +163,35 @@ def test_normalize_set_fields_infers_meridiem_from_existing_due_at_anchor() -> N
     assert notes == []
 
 
+def test_normalize_set_fields_prefers_due_at_alternate_for_time_with_existing_due_at_anchor() -> None:
+    la_tz = ZoneInfo("America/Los_Angeles")
+    fields, reason, notes = transport_routing.normalize_set_fields(
+        object_type="admin",
+        field_updates=[
+            {
+                "value_text": "1",
+                "source_phrase": "to 1",
+                "field_candidates": {
+                    "primary": None,
+                    "alternates": [
+                        {"field_id": "due_at", "confidence": 0.6},
+                        {"field_id": "priority", "confidence": 0.3},
+                        {"field_id": "due_date", "confidence": 0.1},
+                    ],
+                },
+            }
+        ],
+        routing=_routing_config(),
+        now=datetime(2026, 5, 20, 6, 48, tzinfo=timezone.utc),
+        tz=la_tz,
+        existing_frontmatter={"due_at": "2026-05-20T10:41:28+00:00"},
+    )
+
+    assert reason is None
+    assert fields == {"due_at": "2026-05-20T01:00:00-07:00"}
+    assert notes == ["due_choice:due_at"]
+
+
 def test_normalize_set_fields_rejects_ambiguous_time_only_due_at_with_existing_due_date_anchor() -> None:
     la_tz = ZoneInfo("America/Los_Angeles")
     fields, reason, notes = transport_routing.normalize_set_fields(

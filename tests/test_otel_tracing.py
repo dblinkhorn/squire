@@ -875,6 +875,110 @@ def test_nl_mutation_pending_flow_emits_pending_spans(
     assert "response.send" in _span_names(span_exporter)
 
 
+def test_nl_mutation_target_grounding_emits_safe_span_attributes(
+    tmp_path: Path,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    class _Runtime:
+        def load_prompt(self, path: str) -> str:
+            assert path == "config/prompts/message_triage_v1.txt"
+            return "prompt"
+
+        async def interpret_text_async(self, **kwargs: Any) -> Any:
+            del kwargs
+            return SimpleNamespace(
+                derived={
+                    "schema_version": 1,
+                    "route": "clarify",
+                    "intent": "append",
+                    "risk_tier": "mutation",
+                    "confidence": 0.95,
+                    "ambiguities": [],
+                    "read_command": None,
+                    "mutation_plan": None,
+                    "clarification": {
+                        "question": "Create a request or append to an existing item?",
+                        "options": ["Create a new request", "Append to an existing item"],
+                    },
+                    "capture": {"object_type": "admin", "confidence": 0.9},
+                },
+                raw_text="{}",
+            )
+
+        async def handle_command(
+            self,
+            context: TransportMessageContext,
+            content: str,
+            raw_id: str,
+            config: dict[str, Any],
+        ) -> bool:
+            del context, content, raw_id, config
+            raise AssertionError("unexpected")
+
+        def load_recent_affinity_ids(self, context: TransportMessageContext, config: dict[str, Any]) -> list[str]:
+            del context, config
+            return ["A_RECENT"]
+
+        async def queue_nl_mutation_confirmation(self, **kwargs: Any) -> bool:
+            del kwargs
+            raise AssertionError("unexpected")
+
+        def load_nl_clarification_context(self, context: TransportMessageContext) -> Any:
+            del context
+            return None
+
+        def clear_nl_clarification_context(self, context: TransportMessageContext) -> None:
+            del context
+
+        def store_nl_clarification_context(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
+            del context, remove_emoji, add_emoji
+
+        async def send_response(
+            self,
+            context: TransportMessageContext,
+            content: str,
+            *,
+            thread_title: str | None = None,
+            view: Any = None,
+        ) -> None:
+            del context, content, thread_title, view
+
+    config = {
+        "llm": {"provider": "openai", "model": "gpt-5-mini"},
+        "paths": {
+            "objects_root": str(tmp_path / "objects"),
+            "index_db": str(tmp_path / "index.sqlite"),
+        },
+        "confidence": {"create_threshold": 0.6},
+        "nl_command_routing": {"allow_nl_mutations": True},
+    }
+    with telemetry.start_span("discord.message.capture", attributes={"squire.transport": "discord"}):
+        outcome = asyncio.run(
+            routing.triage_message(
+                runtime=_Runtime(),
+                context=_context(content="Put in for on-call shift swap tomorrow"),
+                content="Put in for on-call shift swap tomorrow",
+                raw_id="R_GROUNDING",
+                config=config,
+                provider=object(),
+                model="gpt-5-mini",
+            )
+        )
+
+    assert outcome.handled is False
+    span = _span_by_name(span_exporter, "nl.mutation.target_grounding")
+    assert span.attributes["squire.raw_id"] == "R_GROUNDING"
+    assert span.attributes["squire.nl.grounding.intent"] == "append"
+    assert span.attributes["squire.nl.grounding.outcome"] == "no_pool"
+    assert span.attributes["squire.nl.grounding.routing_outcome"] == "capture_fallthrough"
+    assert span.attributes["squire.nl.grounding.pool_size"] == 0
+    assert span.attributes["squire.nl.grounding.recent_affinity_count"] == 1
+    assert "squire.nl.grounding.target_id" not in span.attributes
+
+
 def test_pending_action_confirm_emits_interaction_spans(
     tmp_path: Path,
     span_exporter: InMemorySpanExporter,

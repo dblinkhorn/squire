@@ -11,6 +11,7 @@ dependencies = [
   "discord.py>=2.7.1",
   "python-dotenv>=1.0",
   "python-ulid>=3.0.0",
+  "rapidfuzz>=3.14.0",
   "typing-extensions~=4.15"
 ]
 
