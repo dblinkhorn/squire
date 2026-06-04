@@ -85,16 +85,15 @@ class CommandRuntime(Protocol):
     def build_weekly_review(self, objects_root: str | Path, config: dict[str, Any]) -> Any:
         ...
 
-    def render_numbered_daily_digest_for_command(self, digest: Any) -> tuple[str, list[str]]:
+    def render_numbered_daily_digest(self, digest: Any) -> tuple[str, list[str]]:
         ...
 
-    def render_numbered_weekly_review_for_command(self, review: Any) -> tuple[str, list[str]]:
+    def render_numbered_weekly_review(self, review: Any) -> tuple[str, list[str]]:
         ...
 
     def store_result_cursor(
         self,
         context: TransportMessageContext,
-        config: dict[str, Any],
         object_ids: list[str],
         *,
         source_view: str = "unknown",
@@ -329,9 +328,8 @@ async def handle_command(
                 await runtime.swap_reaction(context, "⏳", "⚠️")
                 await _send_traced_response(runtime, context, "Failed to build status digest. Check logs for details.")
                 return True
-            rendered, cursor_object_ids = runtime.render_numbered_daily_digest_for_command(digest)
-            if cursor_object_ids:
-                runtime.store_result_cursor(context, config, cursor_object_ids, source_view="status")
+            rendered, cursor_object_ids = runtime.render_numbered_daily_digest(digest)
+            runtime.store_result_cursor(context, cursor_object_ids, source_view="status")
             telemetry.set_span_attribute("squire.outcome", "status_sent", span=root_span)
             await runtime.swap_reaction(context, "⏳", "✅")
             await _send_traced_response(runtime, context, rendered)
@@ -347,9 +345,8 @@ async def handle_command(
                 await runtime.swap_reaction(context, "⏳", "⚠️")
                 await _send_traced_response(runtime, context, "Failed to build weekly review. Check logs for details.")
                 return True
-            rendered, cursor_object_ids = runtime.render_numbered_weekly_review_for_command(review)
-            if cursor_object_ids:
-                runtime.store_result_cursor(context, config, cursor_object_ids, source_view="weekly")
+            rendered, cursor_object_ids = runtime.render_numbered_weekly_review(review)
+            runtime.store_result_cursor(context, cursor_object_ids, source_view="weekly")
             telemetry.set_span_attribute("squire.outcome", "weekly_sent", span=root_span)
             await runtime.swap_reaction(context, "⏳", "✅")
             await _send_traced_response(runtime, context, rendered)
@@ -423,7 +420,7 @@ async def handle_command(
                 telemetry.set_span_attribute("squire.outcome", "recent_empty", span=root_span)
                 await _send_traced_response(runtime, context, "No recent notes found.")
             return True
-        runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="recent")
+        runtime.store_result_cursor(context, surfaced.object_ids, source_view="recent")
         await runtime.swap_reaction(context, "⏳", "✅")
         header = "Recent notes:"
         if object_type:
@@ -485,7 +482,7 @@ async def handle_command(
             else:
                 await _send_traced_response(runtime, context, "No active notes found.")
             return True
-        runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="active")
+        runtime.store_result_cursor(context, surfaced.object_ids, source_view="active")
         await runtime.swap_reaction(context, "⏳", "✅")
         header = "Active notes:"
         if object_type:
@@ -516,7 +513,7 @@ async def handle_command(
             telemetry.set_span_attribute("squire.outcome", "find_empty", span=root_span)
             await _send_traced_response(runtime, context, f'No matches found for "{query}".')
             return True
-        runtime.store_result_cursor(context, config, surfaced.object_ids, source_view="find")
+        runtime.store_result_cursor(context, surfaced.object_ids, source_view="find")
         await runtime.swap_reaction(context, "⏳", "✅")
         telemetry.set_span_attribute("squire.outcome", "find_sent", span=root_span)
         await _send_traced_response(

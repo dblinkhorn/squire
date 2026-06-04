@@ -47,7 +47,6 @@ class SurfacingConfig:
     show_ids_daily_weekly: bool
     pull_default_recent_limit: int
     pull_default_find_limit: int
-    pull_cursor_ttl_minutes: int
 
 
 @dataclass(frozen=True)
@@ -111,7 +110,7 @@ _DEFAULT_SURFACING_CONFIG = {
     "ideas": {"weekly_review": True},
     "people": {"next_contact_days": 0},
     "output": {"show_ids_daily_weekly": False},
-    "pull": {"default_recent_limit": 10, "default_find_limit": 5, "cursor_ttl_minutes": 45},
+    "pull": {"default_recent_limit": 10, "default_find_limit": 5},
 }
 
 _WEEKLY_RECENT_DAYS = 7
@@ -207,7 +206,6 @@ def load_surfacing_config(config: dict[str, Any]) -> SurfacingConfig:
             "pull", "default_recent_limit", _DEFAULT_SURFACING_CONFIG["pull"]["default_recent_limit"]
         ),
         pull_default_find_limit=_get_int("pull", "default_find_limit", _DEFAULT_SURFACING_CONFIG["pull"]["default_find_limit"]),
-        pull_cursor_ttl_minutes=_get_int("pull", "cursor_ttl_minutes", _DEFAULT_SURFACING_CONFIG["pull"]["cursor_ttl_minutes"]),
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,7 +20,7 @@ from squire_core.transport.discord import runtime_adapter_command as command_ada
 from squire_core.transport.discord import runtime_adapter_routing as routing_adapter
 from squire_core.transport.discord.views import PendingActionView
 from squire_core.transport.state import ResultCursor, RuntimeStateStore
-from squire_core.transport.targeting import cursor_key
+from squire_core.transport.targeting import result_cursor_key
 
 
 class _Author:
@@ -548,10 +548,9 @@ def test_handle_command_show_does_not_override_digest_id_flag(monkeypatch, runti
     monkeypatch.setattr(command_adapter, "build_item_detail", _fake_build_item_detail)
 
     message = _Message("!show 1", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["A_2"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     config = {
@@ -662,10 +661,9 @@ def test_handle_command_detail_uses_object_dump_builder(monkeypatch, runtime_sta
     monkeypatch.setattr(command_adapter, "build_item_object_dump", _fake_build_item_object_dump)
 
     message = _Message("!detail 1", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["ADM_DETAIL"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     config = {
@@ -704,10 +702,9 @@ def test_handle_command_fix_without_updates_shows_fix_guidance(
     monkeypatch.setattr(command_adapter, "build_fix_guidance", _fake_build_fix_guidance)
 
     message = _Message("!fix 1", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["ADM_DETAIL"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="find",
     )
 
@@ -775,7 +772,7 @@ def test_handle_command_status_stores_numbered_cursor(monkeypatch, runtime_state
     assert "\n3. Blocked launch" in str(captured["response"])
     assert "\n   • blocked: Waiting on vendor" in str(captured["response"])
     assert "!done <number>" in str(captured["response"])
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     assert runtime_state.result_cursors[key].object_ids == ["A_1", "A_2", "P_1"]
 
 
@@ -1012,7 +1009,7 @@ def test_handle_command_weekly_stores_numbered_cursor(monkeypatch, runtime_state
     assert "\n2. Alex" in str(captured["response"])
     assert "\n   • next contact Sun Feb 15 (yesterday)" in str(captured["response"])
     assert "!append <number> <text>" in str(captured["response"])
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     assert runtime_state.result_cursors[key].object_ids == ["A_10", "P_20"]
 
 
@@ -1042,10 +1039,9 @@ def test_handle_command_done_resolves_numbered_target(monkeypatch, runtime_state
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 2", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["A_1", "A_2"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     config = {
@@ -1094,10 +1090,9 @@ def test_handle_command_append_resolves_numbered_target(monkeypatch, runtime_sta
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!append 1 Added note", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["A_9"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="status",
     )
 
@@ -1155,10 +1150,9 @@ def test_handle_command_fix_resolves_numbered_target(monkeypatch, runtime_state:
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message('!fix 2 next_action="Call back"', user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["A_1", "A_2"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="find",
     )
 
@@ -1221,49 +1215,6 @@ def test_handle_command_done_number_without_cursor_shows_guidance(
     assert any("No active numbered list for that command." in call for call in calls)
 
 
-def test_handle_command_done_number_expired_cursor_shows_guidance(
-    monkeypatch, caplog, runtime_state: RuntimeStateStore
-) -> None:
-    calls: list[str] = []
-    runtime_state.result_cursors.clear()
-
-    async def _fake_swap_reaction(message, remove_emoji, add_emoji):
-        calls.append(f"swap:{remove_emoji}:{add_emoji}")
-
-    async def _fake_send_response(message, content, thread_title=None, view=None):
-        calls.append(f"send:{content}")
-
-    async def _fake_apply_command_operation(*args, **kwargs):
-        raise AssertionError("apply should not run when cursor is expired")
-
-    monkeypatch.setattr(message_entry._discord_io, "swap_reaction", _fake_swap_reaction)
-    monkeypatch.setattr(message_entry._discord_io, "send_response", _fake_send_response)
-    monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
-
-    message = _Message("!done 1", user_id=11, channel_id=22)
-    key = cursor_key(message)
-    runtime_state.result_cursors[key] = ResultCursor(
-        object_ids=["A_1"],
-        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
-        source_view="recent",
-    )
-
-    caplog.set_level(logging.INFO)
-    config = {
-        "llm": {"provider": "openai", "model": "gpt-5-mini"},
-        "matching": {"semantic_weight": 0},
-        "paths": {"objects_root": "/tmp/objects", "index_db": "/tmp/index.sqlite"},
-    }
-    handled = asyncio.run(
-        message_entry.handle_command(message, "!done 1", "R_1", config, runtime_state=runtime_state)
-    )
-
-    assert handled is True
-    assert "swap:⏳:⚠️" in calls
-    assert any("Your last numbered list expired." in call for call in calls)
-    assert any("numbered_mutation_resolution_failed" in rec.message and "reason=expired" in rec.message for rec in caplog.records)
-
-
 def test_handle_command_done_number_out_of_range_shows_guidance(
     monkeypatch, runtime_state: RuntimeStateStore
 ) -> None:
@@ -1284,10 +1235,9 @@ def test_handle_command_done_number_out_of_range_shows_guidance(
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 2", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["A_1"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     config = {
@@ -1332,10 +1282,9 @@ def test_handle_command_done_number_accepts_project_target(monkeypatch, runtime_
     monkeypatch.setattr(transport_mutations, "apply_command_operation", _fake_apply_command_operation)
 
     message = _Message("!done 1", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["PR_1"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="weekly",
     )
 
@@ -1424,10 +1373,9 @@ def test_handle_command_append_number_logs_resolved(
     monkeypatch.setattr(command_adapter, "_refresh_index_async", _fake_refresh_index)
 
     message = _Message("!append 1 update", user_id=11, channel_id=22)
-    key = cursor_key(message)
+    key = result_cursor_key(message)
     runtime_state.result_cursors[key] = ResultCursor(
         object_ids=["A_1"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="status",
     )
 

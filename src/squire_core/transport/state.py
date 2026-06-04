@@ -12,12 +12,12 @@ from squire_core.surfacing import DailyDigest, DigestSection, WeeklyReview
 
 InteractionToken = str | int
 InteractionKey = tuple[InteractionToken, InteractionToken]
+ResultCursorKey = InteractionToken
 
 
 @dataclass(frozen=True)
 class ResultCursor:
     object_ids: list[str]
-    expires_at: datetime
     source_view: str = "unknown"
 
 
@@ -77,7 +77,7 @@ class RuntimeStateStore:
     """Mutable runtime state container scoped to one transport runtime instance."""
 
     def __init__(self) -> None:
-        self.result_cursors: dict[InteractionKey, ResultCursor] = {}
+        self.result_cursors: dict[ResultCursorKey, ResultCursor] = {}
         self.matching_affinity: dict[InteractionKey, list[AffinityTouch]] = {}
         self.archive_clear_confirmations: dict[InteractionKey, ArchiveClearConfirmation] = {}
         self.nl_clarification_contexts: dict[InteractionKey, NLClarificationContext] = {}
@@ -88,57 +88,25 @@ class RuntimeStateStore:
         self.archive_clear_confirmations.clear()
         self.nl_clarification_contexts.clear()
 
-    def prune_result_cursors(self, *, now: datetime | None = None) -> None:
-        current = now or datetime.now(timezone.utc)
-        expired = [key for key, value in self.result_cursors.items() if value.expires_at <= current]
-        for key in expired:
-            self.result_cursors.pop(key, None)
-
     def store_result_cursor(
         self,
-        key: InteractionKey,
+        key: ResultCursorKey,
         object_ids: list[str],
         *,
-        ttl_minutes: int,
         source_view: str = "unknown",
-        now: datetime | None = None,
     ) -> None:
-        current = now or datetime.now(timezone.utc)
-        expires_at = current + timedelta(minutes=max(1, ttl_minutes))
         self.result_cursors[key] = ResultCursor(
             object_ids=list(object_ids),
-            expires_at=expires_at,
             source_view=source_view,
         )
-        self.prune_result_cursors(now=current)
 
     def resolve_result_cursor_with_reason(
         self,
-        key: InteractionKey,
+        key: ResultCursorKey,
         number: int,
-        *,
-        fallback_keys: tuple[InteractionKey, ...] = (),
-        now: datetime | None = None,
     ) -> tuple[str | None, str | None, str | None]:
-        current = now or datetime.now(timezone.utc)
-        saw_expired = False
-        cursor: ResultCursor | None = None
-
-        for candidate_key in (key, *fallback_keys):
-            candidate = self.result_cursors.get(candidate_key)
-            if candidate is None:
-                continue
-            if candidate.expires_at <= current:
-                saw_expired = True
-                self.result_cursors.pop(candidate_key, None)
-                continue
-            cursor = candidate
-            break
-
-        self.prune_result_cursors(now=current)
+        cursor = self.result_cursors.get(key)
         if cursor is None:
-            if saw_expired:
-                return None, "expired", None
             return None, "missing", None
         index = number - 1
         if index < 0 or index >= len(cursor.object_ids):
@@ -147,18 +115,10 @@ class RuntimeStateStore:
 
     def resolve_result_cursor(
         self,
-        key: InteractionKey,
+        key: ResultCursorKey,
         number: int,
-        *,
-        fallback_keys: tuple[InteractionKey, ...] = (),
-        now: datetime | None = None,
     ) -> str | None:
-        object_id, _, _ = self.resolve_result_cursor_with_reason(
-            key,
-            number,
-            fallback_keys=fallback_keys,
-            now=now,
-        )
+        object_id, _, _ = self.resolve_result_cursor_with_reason(key, number)
         return object_id
 
     def record_affinity_touches(
@@ -317,58 +277,36 @@ def clear_runtime_state(*, state_store: RuntimeStateStore) -> None:
     state_store.clear_runtime_state()
 
 
-def prune_result_cursors(*, now: datetime | None = None, state_store: RuntimeStateStore) -> None:
-    state_store.prune_result_cursors(now=now)
-
-
 def store_result_cursor(
-    key: InteractionKey,
+    key: ResultCursorKey,
     object_ids: list[str],
     *,
-    ttl_minutes: int,
     source_view: str = "unknown",
-    now: datetime | None = None,
     state_store: RuntimeStateStore,
 ) -> None:
     state_store.store_result_cursor(
         key,
         object_ids,
-        ttl_minutes=ttl_minutes,
         source_view=source_view,
-        now=now,
     )
 
 
 def resolve_result_cursor_with_reason(
-    key: InteractionKey,
+    key: ResultCursorKey,
     number: int,
     *,
-    fallback_keys: tuple[InteractionKey, ...] = (),
-    now: datetime | None = None,
     state_store: RuntimeStateStore,
 ) -> tuple[str | None, str | None, str | None]:
-    return state_store.resolve_result_cursor_with_reason(
-        key,
-        number,
-        fallback_keys=fallback_keys,
-        now=now,
-    )
+    return state_store.resolve_result_cursor_with_reason(key, number)
 
 
 def resolve_result_cursor(
-    key: InteractionKey,
+    key: ResultCursorKey,
     number: int,
     *,
-    fallback_keys: tuple[InteractionKey, ...] = (),
-    now: datetime | None = None,
     state_store: RuntimeStateStore,
 ) -> str | None:
-    return state_store.resolve_result_cursor(
-        key,
-        number,
-        fallback_keys=fallback_keys,
-        now=now,
-    )
+    return state_store.resolve_result_cursor(key, number)
 
 
 def record_affinity_touches(
@@ -540,7 +478,7 @@ def format_numbered_row(section_title: str, line: str, number: int) -> str:
     return f"{number}. {title}\n{bullet_lines}"
 
 
-def render_numbered_daily_digest_for_command(
+def render_numbered_daily_digest(
     digest: Any,
     *,
     numbered_command_tip: str,
@@ -558,7 +496,7 @@ def render_numbered_daily_digest_for_command(
     return rendered, object_ids
 
 
-def render_numbered_weekly_review_for_command(
+def render_numbered_weekly_review(
     review: Any,
     *,
     numbered_command_tip: str,

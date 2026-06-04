@@ -82,4 +82,3 @@ surfacing:
   pull:
     default_recent_limit: 10
     default_find_limit: 5
-    cursor_ttl_minutes: 45

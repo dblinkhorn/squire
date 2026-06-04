@@ -294,7 +294,7 @@ def test_handle_command_recent_accepts_limit_and_category() -> None:
             captured["object_type"] = object_type
             return SimpleNamespace(lines=["1. Pay rent"], object_ids=["A_1"])
 
-        def store_result_cursor(self, context, config, object_ids, *, source_view="unknown") -> None:
+        def store_result_cursor(self, context, object_ids, *, source_view="unknown") -> None:
             captured["cursor_ids"] = list(object_ids)
             captured["source_view"] = source_view
 
@@ -344,7 +344,7 @@ def test_handle_command_recent_accepts_category_only() -> None:
             captured["object_type"] = object_type
             return SimpleNamespace(lines=["1. Person note"], object_ids=["P_1"])
 
-        def store_result_cursor(self, context, config, object_ids, *, source_view="unknown") -> None:
+        def store_result_cursor(self, context, object_ids, *, source_view="unknown") -> None:
             return None
 
         async def swap_reaction(self, message, remove_emoji: str, add_emoji: str) -> None:
@@ -391,7 +391,7 @@ def test_handle_command_active_accepts_category_only() -> None:
             captured["object_type"] = object_type
             return SimpleNamespace(lines=["🧱 **Active projects**", "───────────────", "1. Repaint house"], object_ids=["PR_1"])
 
-        def store_result_cursor(self, context, config, object_ids, *, source_view="unknown") -> None:
+        def store_result_cursor(self, context, object_ids, *, source_view="unknown") -> None:
             captured["cursor_ids"] = list(object_ids)
             captured["source_view"] = source_view
 

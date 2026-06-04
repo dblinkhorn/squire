@@ -17,7 +17,7 @@ This file is the workflow entrypoint and index for agent sessions.
 
 - During the multi-transport refactor, keep shared runtime/application modules transport-agnostic.
 - Prefer limiting SDK imports (`discord.py`, Slack SDK, etc.) to transport adapter modules.
-- Slack adapter/runtime behavior remains out of scope for this refactor slice; treat it as follow-on work after Stage 6 completion per `docs/multi-transport-refactor-spec.md`.
+- Slack adapter/runtime behavior remains out of scope; treat any Slack integration as separate follow-on work.
 - This is currently a design intention and review guideline, not a strict CI import-boundary gate.
 - Runtime composition root for multi-transport support is `/Users/dblinkhorn/squire/src/squire_core/runtime.py` (invoked as `python -m squire_core.runtime`).
 - Refactor removal gate (required): do not remove code unless it is confirmed orphaned/leftover from the multi-transport refactor.

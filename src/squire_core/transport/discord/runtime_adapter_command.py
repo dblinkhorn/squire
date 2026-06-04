@@ -46,8 +46,8 @@ from squire_core.transport.reminders import invoke_due_time_reminder_notifier as
 from squire_core.transport.state import (
     RuntimeStateStore,
     record_affinity_touches as _state_record_affinity_touches,
-    render_numbered_daily_digest_for_command as _state_render_numbered_daily_digest_for_command,
-    render_numbered_weekly_review_for_command as _state_render_numbered_weekly_review_for_command,
+    render_numbered_daily_digest as _state_render_numbered_daily_digest,
+    render_numbered_weekly_review as _state_render_numbered_weekly_review,
 )
 from squire_core.transport.targeting import (
     cursor_key as _cursor_key,
@@ -360,14 +360,14 @@ class _DiscordCommandRuntime:
     def build_weekly_review(self, objects_root: str | Path, config: dict[str, Any]) -> Any:
         return build_weekly_review(objects_root, config)
 
-    def render_numbered_daily_digest_for_command(self, digest: Any) -> tuple[str, list[str]]:
-        return _state_render_numbered_daily_digest_for_command(
+    def render_numbered_daily_digest(self, digest: Any) -> tuple[str, list[str]]:
+        return _state_render_numbered_daily_digest(
             digest,
             numbered_command_tip=NUMBERED_COMMAND_TIP,
         )
 
-    def render_numbered_weekly_review_for_command(self, review: Any) -> tuple[str, list[str]]:
-        return _state_render_numbered_weekly_review_for_command(
+    def render_numbered_weekly_review(self, review: Any) -> tuple[str, list[str]]:
+        return _state_render_numbered_weekly_review(
             review,
             numbered_command_tip=NUMBERED_COMMAND_TIP,
         )
@@ -375,14 +375,12 @@ class _DiscordCommandRuntime:
     def store_result_cursor(
         self,
         context: TransportMessageContext,
-        config: dict[str, Any],
         object_ids: list[str],
         *,
         source_view: str = "unknown",
     ) -> None:
         _store_result_cursor(
             context,
-            config,
             object_ids,
             source_view=source_view,
             state_store=self._state_store,

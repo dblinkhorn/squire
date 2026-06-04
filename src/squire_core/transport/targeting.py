@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from squire_core.surfacing import load_surfacing_config
 from squire_core.transport.contracts import TransportMessageContext
 from squire_core.transport.state import (
     CommandTargetResolution,
     InteractionKey,
+    ResultCursorKey,
     RuntimeStateStore,
     resolve_result_cursor as _state_resolve_result_cursor,
     resolve_result_cursor_with_reason as _state_resolve_result_cursor_with_reason,
@@ -46,17 +46,14 @@ def cursor_key(context: TransportMessageContext | Any) -> InteractionKey:
     return (int(getattr(context.author, "id", 0)), int(getattr(context.channel, "id", 0)))
 
 
-def parent_cursor_key(context: TransportMessageContext | Any) -> InteractionKey | None:
+def result_cursor_key(context: TransportMessageContext | Any) -> ResultCursorKey:
     if isinstance(context, TransportMessageContext):
-        parent_id = _coerce_context_id(context.thread_id)
-        if parent_id is None:
-            return None
-        user_id = _coerce_context_id(context.user_id) or 0
-        return (user_id, parent_id)
-    parent_id = getattr(context.channel, "parent_id", None)
+        return _coerce_context_id(context.thread_id) or _coerce_context_id(context.channel_id) or 0
+    channel = getattr(context, "channel", None)
+    parent_id = getattr(channel, "parent_id", None)
     if isinstance(parent_id, int):
-        return (int(getattr(context.author, "id", 0)), parent_id)
-    return None
+        return parent_id
+    return int(getattr(channel, "id", 0))
 
 
 def archive_clear_key(context: TransportMessageContext | Any) -> InteractionKey:
@@ -65,17 +62,14 @@ def archive_clear_key(context: TransportMessageContext | Any) -> InteractionKey:
 
 def store_result_cursor(
     context: TransportMessageContext | Any,
-    config: dict[str, Any],
     object_ids: list[str],
     *,
     source_view: str = "unknown",
     state_store: RuntimeStateStore,
 ) -> None:
-    surfacing = load_surfacing_config(config)
     _state_store_result_cursor(
-        cursor_key(context),
+        result_cursor_key(context),
         object_ids,
-        ttl_minutes=surfacing.pull_cursor_ttl_minutes,
         source_view=source_view,
         state_store=state_store,
     )
@@ -87,14 +81,9 @@ def resolve_result_cursor(
     *,
     state_store: RuntimeStateStore,
 ) -> str | None:
-    parent_key = parent_cursor_key(context)
-    fallback_keys: tuple[InteractionKey, ...] = ()
-    if parent_key is not None:
-        fallback_keys = (parent_key,)
     return _state_resolve_result_cursor(
-        cursor_key(context),
+        result_cursor_key(context),
         number,
-        fallback_keys=fallback_keys,
         state_store=state_store,
     )
 
@@ -105,14 +94,9 @@ def resolve_result_cursor_with_reason(
     *,
     state_store: RuntimeStateStore,
 ) -> tuple[str | None, str | None, str | None]:
-    parent_key = parent_cursor_key(context)
-    fallback_keys: tuple[InteractionKey, ...] = ()
-    if parent_key is not None:
-        fallback_keys = (parent_key,)
     return _state_resolve_result_cursor_with_reason(
-        cursor_key(context),
+        result_cursor_key(context),
         number,
-        fallback_keys=fallback_keys,
         state_store=state_store,
     )
 
@@ -154,14 +138,6 @@ def resolve_command_target(
             row_number=number,
             source_view=source_view,
         )
-    if reason == "expired":
-        return CommandTargetResolution(
-            target_id=None,
-            error="Your last numbered list expired. Run `!recent`, `!active`, `!find`, `!status`, or `!weekly` first.",
-            reason="expired",
-            row_number=number,
-            source_view=None,
-        )
     return CommandTargetResolution(
         target_id=None,
         error="No active numbered list for that command. Run `!recent`, `!active`, `!find`, `!status`, or `!weekly` first.",
@@ -174,8 +150,6 @@ def resolve_command_target(
 def map_target_resolution_reason_to_plan_reason(reason: str | None) -> str:
     if reason == "out_of_range":
         return "target_out_of_range"
-    if reason == "expired":
-        return "target_expired"
     if reason == "no_cursor":
         return "target_no_cursor"
     return "target_missing"

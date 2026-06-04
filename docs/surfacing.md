@@ -17,6 +17,10 @@ Weekly review is also supported on a separate weekly schedule. It includes done 
 without due dates, blocked projects, people overdue for contact, and optional recently updated ideas.
 The `Done this week` section is omitted when empty; other weekly sections still use `All clear` when applicable.
 
+Scheduled daily digests and weekly reviews use the same numbered presentation as `!status` and `!weekly`. Each
+scheduled report replaces the current numbered cursor for its destination channel, so follow-up commands such as
+`!done 1`, `!append 2 <text>`, and `!fix 3 ...` can be sent from the channel or any Squire-created thread beneath it.
+
 ## Pull (Interactive)
 
 Pull surfacing is driven by contextual queries via commands and is designed for quick review and drill-down.

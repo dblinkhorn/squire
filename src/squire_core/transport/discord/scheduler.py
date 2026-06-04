@@ -26,6 +26,7 @@ from squire_core.transport.bootstrap import (
     parse_daily_digest_time,
     parse_weekly_review_day,
 )
+from squire_core.transport.discord.command_contract import NUMBERED_COMMAND_TIP
 from squire_core.transport.reminders import (
     due_time_reminder_key,
     due_time_reminder_ledger_path,
@@ -33,7 +34,12 @@ from squire_core.transport.reminders import (
     load_due_time_reminder_ledger_entries,
     load_due_time_reminder_schedule_config,
 )
-from squire_core.transport.state import DueTimeReminderSentLedgerEntry
+from squire_core.transport.state import (
+    DueTimeReminderSentLedgerEntry,
+    RuntimeStateStore,
+    render_numbered_daily_digest,
+    render_numbered_weekly_review,
+)
 
 _DUE_TIME_REMINDER_LEDGER_RETENTION_HOURS = 48
 _DUE_TIME_REMINDER_HORIZON_HOURS = 36
@@ -61,8 +67,14 @@ def _coerce_timezone_datetime(value: Any, timezone_hint) -> datetime | None:
 
 
 class DiscordSchedulerMixin:
-    def _init_scheduler_state(self, config: dict[str, Any]) -> None:
+    def _init_scheduler_state(
+        self,
+        config: dict[str, Any],
+        *,
+        runtime_state: RuntimeStateStore,
+    ) -> None:
         self._config = config
+        self._runtime_state = runtime_state
         schedule = config.get("schedule", {}) if isinstance(config.get("schedule"), dict) else {}
         self._digest_time = parse_daily_digest_time(schedule.get("daily_digest_time"))
         self._weekly_review_day = parse_weekly_review_day(schedule.get("weekly_review_day"))
@@ -431,6 +443,12 @@ class DiscordSchedulerMixin:
                 return None
         return None
 
+    def _scheduled_result_cursor_key(self, channel: discord.abc.Messageable) -> int:
+        parent_id = getattr(channel, "parent_id", None)
+        if isinstance(parent_id, int):
+            return parent_id
+        return int(getattr(channel, "id", 0))
+
     async def _send_daily_digest(self) -> None:
         channel = await self._resolve_digest_channel()
         if not channel:
@@ -438,10 +456,20 @@ class DiscordSchedulerMixin:
             return
         objects_root = self._config.get("paths", {}).get("objects_root", "objects")
         digest = build_daily_digest(objects_root, self._config)
+        content, cursor_object_ids = render_numbered_daily_digest(
+            digest,
+            numbered_command_tip=NUMBERED_COMMAND_TIP,
+        )
         try:
-            await channel.send(content=digest.render())
+            await channel.send(content=content)
         except (discord.HTTPException, discord.Forbidden) as exc:
             logging.warning("daily_digest_send_failed error=%s", exc)
+            return
+        self._runtime_state.store_result_cursor(
+            self._scheduled_result_cursor_key(channel),
+            cursor_object_ids,
+            source_view="status",
+        )
 
     async def _daily_digest_loop(self) -> None:
         if not self._digest_time:
@@ -464,10 +492,20 @@ class DiscordSchedulerMixin:
             return
         objects_root = self._config.get("paths", {}).get("objects_root", "objects")
         review = build_weekly_review(objects_root, self._config)
+        content, cursor_object_ids = render_numbered_weekly_review(
+            review,
+            numbered_command_tip=NUMBERED_COMMAND_TIP,
+        )
         try:
-            await channel.send(content=review.render())
+            await channel.send(content=content)
         except (discord.HTTPException, discord.Forbidden) as exc:
             logging.warning("weekly_review_send_failed error=%s", exc)
+            return
+        self._runtime_state.store_result_cursor(
+            self._scheduled_result_cursor_key(channel),
+            cursor_object_ids,
+            source_view="weekly",
+        )
 
     async def _weekly_review_loop(self) -> None:
         if self._weekly_review_day is None or not self._weekly_review_time:

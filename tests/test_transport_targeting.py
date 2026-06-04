@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from squire_core.transport.contracts import TransportMessageContext
 from squire_core.transport.state import ResultCursor, RuntimeStateStore
-from squire_core.transport.targeting import cursor_key, resolve_command_target
+from squire_core.transport.targeting import resolve_command_target, result_cursor_key
 
 
 def _context(*, user_id: str, channel_id: str, thread_id: str | None = None) -> TransportMessageContext:
@@ -20,16 +20,15 @@ def _context(*, user_id: str, channel_id: str, thread_id: str | None = None) -> 
     )
 
 
-def test_cursor_key_coerces_numeric_string_ids() -> None:
-    key = cursor_key(_context(user_id="11", channel_id="22"))
-    assert key == (11, 22)
+def test_result_cursor_key_uses_root_channel_id() -> None:
+    assert result_cursor_key(_context(user_id="11", channel_id="22")) == 22
+    assert result_cursor_key(_context(user_id="11", channel_id="77", thread_id="22")) == 22
 
 
-def test_resolve_command_target_uses_parent_thread_cursor_fallback() -> None:
+def test_resolve_command_target_uses_conversation_root_cursor() -> None:
     state = RuntimeStateStore()
-    state.result_cursors[(11, 22)] = ResultCursor(
+    state.result_cursors[22] = ResultCursor(
         object_ids=["A_1", "A_2"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         source_view="status",
     )
 
@@ -47,9 +46,8 @@ def test_resolve_command_target_uses_parent_thread_cursor_fallback() -> None:
 
 def test_resolve_command_target_out_of_range_returns_guidance() -> None:
     state = RuntimeStateStore()
-    state.result_cursors[(11, 22)] = ResultCursor(
+    state.result_cursors[22] = ResultCursor(
         object_ids=["A_1"],
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
 
     resolution = resolve_command_target(

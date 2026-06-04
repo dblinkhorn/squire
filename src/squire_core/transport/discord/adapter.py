@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, cast
 import discord
 
 from squire_core.transport.discord.scheduler import DiscordSchedulerMixin
+from squire_core.transport.state import RuntimeStateStore
 
 MessageHandlerFn = Callable[[discord.Message, dict[str, Any]], Awaitable[None]]
 
@@ -72,6 +73,8 @@ class DiscordSquireBot(DiscordSchedulerMixin, discord.Client):
         self,
         config: dict[str, Any],
         message_handler: MessageHandlerFn | None = None,
+        *,
+        runtime_state: RuntimeStateStore,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -83,7 +86,7 @@ class DiscordSquireBot(DiscordSchedulerMixin, discord.Client):
             self._message_handler = _noop_handler
         else:
             self._message_handler = message_handler
-        self._init_scheduler_state(config)
+        self._init_scheduler_state(config, runtime_state=runtime_state)
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user}")

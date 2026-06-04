@@ -9,6 +9,10 @@ Squire currently supports lexical querying via Discord commands:
 - `!detail <number>`: shows the full raw note object for one row from the latest numbered cursor.
 - `!active [number] [category]`: lists active notes grouped by type with numbered rows.
 
+The dedicated Discord channel and its Squire-created threads share one current numbered cursor. Every newly displayed
+numbered list replaces it, including scheduled daily digests and weekly reviews. The cursor remains current until it is
+replaced or the runtime restarts.
+
 This path is deterministic and local-first:
 
 1) User runs `!find <query>`.
@@ -24,5 +28,4 @@ There is no separate LLM query-to-JSON translation layer in current runtime quer
 Squire does use LLMs for capture interpretation and update/append decision routing. That retrieve-then-decide
 pipeline is documented in:
 
-- `docs/matching-spec.md`
 - `docs/commands.md` (update/append strategy section)

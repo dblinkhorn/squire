@@ -239,19 +239,18 @@ def test_discord_command_message_flow_emits_root_and_child_spans(
             del objects_root, config
             return object()
 
-        def render_numbered_daily_digest_for_command(self, digest: object) -> tuple[str, list[str]]:
+        def render_numbered_daily_digest(self, digest: object) -> tuple[str, list[str]]:
             del digest
             return ("Status digest", ["A_1"])
 
         def store_result_cursor(
             self,
             context: TransportMessageContext,
-            config: dict[str, Any],
             object_ids: list[str],
             *,
             source_view: str = "unknown",
         ) -> None:
-            del context, config, object_ids, source_view
+            del context, object_ids, source_view
 
         async def swap_reaction(self, context: TransportMessageContext, remove_emoji: str, add_emoji: str) -> None:
             del context, remove_emoji, add_emoji

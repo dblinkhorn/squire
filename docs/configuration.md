@@ -157,4 +157,3 @@ Surfacing behavior is configured under `surfacing` in `config.yaml`.
 - `surfacing.people.next_contact_days`: include people with `next_contact` due within this window.
 - `surfacing.pull.default_recent_limit`: default row count for `!recent`.
 - `surfacing.pull.default_find_limit`: default row count for `!find`.
-- `surfacing.pull.cursor_ttl_minutes`: how long numbered result selections remain available for `!show <number>`.

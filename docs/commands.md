@@ -27,12 +27,13 @@ Prefixes:
 `!help [command]` returns a compact command summary, or detailed usage for a specific command.
 `!recent [number] [category]` shows the last N notes as a numbered list and can optionally filter to a category (`admin`, `project`, `person`, `idea`). `!find <query>` searches title and body via SQLite FTS and
 returns numbered matches. `!show <number>` prints a compact view for an item from the latest numbered list
-(`!recent`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
+(`!recent`, `!find`, `!status`, or `!weekly`) in the current conversation.
 `!detail <number>` shows the full raw note object for an item from the latest numbered list, including every field and the note body.
 `!active [number] [category]` lists open notes grouped by type.
 `!done <number>`, `!reopen <number>`, `!append <number> <text>`, and `!fix <number> ...` can resolve numbered rows from the latest
-numbered list (`!recent`, `!active`, `!find`, `!status`, or `!weekly`) in the same channel and user context.
-Scheduled/on-demand digest commands (`!status`, `!weekly`) remain list-first and avoid IDs by default.
+numbered list (`!recent`, `!active`, `!find`, `!status`, or `!weekly`) in the current conversation.
+The dedicated Discord channel and its Squire-created threads share one current numbered list. Scheduled and on-demand
+digest/review messages replace that current list.
 Scheduled/on-demand digest commands are currently read-only; explicit `done`/`edit` action buttons are deferred and
 text commands remain the mutation path.
 `!done` sets `status=done` and records `done_at`. `!reopen` sets `status=open` and clears `done_at`. `!append` appends text to the body and updates updated_at. `!fix <id|number>` with no `field=value` pairs shows the editable-field guidance view for that note. `!fix <id|number> <field=value>

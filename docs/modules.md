@@ -29,7 +29,8 @@ The index is rebuildable from canonical objects and is not authoritative state.
 ## Surfacer
 
 The surfacer provides push (scheduled daily/weekly digest/review) and pull (interactive commands), with configurable
-ID visibility for scheduled outputs and ID-inclusive manual pull lists. It is read-only and does not mutate canonical state.
+ID visibility for scheduled outputs and ID-inclusive manual pull lists. Numbered outputs replace the current
+conversation-root cursor so follow-up commands can target them. It is read-only and does not mutate canonical state.
 
 ## Shared Transport Runtime
 

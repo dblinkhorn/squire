@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import discord
 
-from squire_core.surfacing import DueTimeReminderEvent
+from squire_core.surfacing import DailyDigest, DigestSection, DueTimeReminderEvent, WeeklyReview
 from squire_core.transport.bootstrap import next_midnight_run, next_weekly_run, parse_weekly_review_day
 from squire_core.transport.discord import message_entry
 from squire_core.transport.discord import runtime_adapter_command as command_adapter
@@ -92,7 +92,7 @@ def test_due_time_reminder_dispatch_requeues_on_send_failure(monkeypatch) -> Non
             "paths": {"objects_root": "/tmp/objects", "events_derived": "/tmp/events/derived"},
             "schedule": {"due_time_reminder_offsets_minutes": [15]},
         }
-        bot = DiscordSquireBot(config=config)
+        bot = DiscordSquireBot(config=config, runtime_state=RuntimeStateStore())
         now = datetime.now(timezone.utc)
         event = DueTimeReminderEvent(
             object_id="A_1",
@@ -128,7 +128,7 @@ def test_due_time_reminder_loop_flushes_empty_ledger_on_clear_state(monkeypatch)
             "paths": {"objects_root": "/tmp/objects", "events_derived": "/tmp/events/derived"},
             "schedule": {"due_time_reminder_offsets_minutes": [15]},
         }
-        bot = DiscordSquireBot(config=config)
+        bot = DiscordSquireBot(config=config, runtime_state=RuntimeStateStore())
         bot._due_time_reminder_sent_ledger["old"] = DueTimeReminderSentLedgerEntry(
             key="old",
             object_id="A_1",
@@ -180,7 +180,7 @@ def test_due_time_reminder_dispatch_requeues_when_no_channel(monkeypatch) -> Non
             "paths": {"objects_root": "/tmp/objects", "events_derived": "/tmp/events/derived"},
             "schedule": {"due_time_reminder_offsets_minutes": [15]},
         }
-        bot = DiscordSquireBot(config=config)
+        bot = DiscordSquireBot(config=config, runtime_state=RuntimeStateStore())
         now = datetime.now(timezone.utc)
         event = DueTimeReminderEvent(
             object_id="A_1",
@@ -212,7 +212,7 @@ def test_due_time_reminder_dispatch_skips_duplicate_from_sent_ledger(monkeypatch
             "paths": {"objects_root": "/tmp/objects", "events_derived": "/tmp/events/derived"},
             "schedule": {"due_time_reminder_offsets_minutes": [15]},
         }
-        bot = DiscordSquireBot(config=config)
+        bot = DiscordSquireBot(config=config, runtime_state=RuntimeStateStore())
         now = datetime.now(timezone.utc)
         event = DueTimeReminderEvent(
             object_id="A_1",
@@ -247,6 +247,136 @@ def test_due_time_reminder_dispatch_skips_duplicate_from_sent_ledger(monkeypatch
 
         assert len(bot._due_time_reminder_heap) == 0
         assert duplicate_key in bot._due_time_reminder_sent_ledger
+
+    asyncio.run(_run())
+
+
+def test_scheduled_daily_digest_is_numbered_and_replaces_root_cursor(monkeypatch) -> None:
+    async def _run() -> None:
+        runtime_state = RuntimeStateStore()
+        config = {
+            "timezone": "UTC",
+            "paths": {"objects_root": "/tmp/objects"},
+            "schedule": {"daily_digest_channel_id": 22},
+        }
+        bot = DiscordSquireBot(config=config, runtime_state=runtime_state)
+        sent: list[str] = []
+
+        class _Channel:
+            id = 22
+
+            async def send(self, *, content):
+                sent.append(content)
+
+        async def _fake_resolve_channel():
+            return _Channel()
+
+        def _fake_build_daily_digest(objects_root, config):
+            return DailyDigest(
+                generated_at=datetime(2026, 1, 22, 12, 0, tzinfo=timezone.utc),
+                sections=[
+                    DigestSection(
+                        title="Admin overdue",
+                        lines=["Call dentist - due yesterday"],
+                        object_ids=["A_1"],
+                    )
+                ],
+            )
+
+        runtime_state.store_result_cursor(22, ["OLD"], source_view="find")
+        monkeypatch.setattr(bot, "_resolve_digest_channel", _fake_resolve_channel)
+        monkeypatch.setattr(discord_scheduler, "build_daily_digest", _fake_build_daily_digest)
+
+        await bot._send_daily_digest()
+
+        assert "\n1. Call dentist" in sent[0]
+        assert "!done <number>" in sent[0]
+        assert runtime_state.resolve_result_cursor(22, 1) == "A_1"
+        assert runtime_state.result_cursors[22].source_view == "status"
+
+    asyncio.run(_run())
+
+
+def test_scheduled_weekly_review_in_thread_replaces_parent_channel_cursor(monkeypatch) -> None:
+    async def _run() -> None:
+        runtime_state = RuntimeStateStore()
+        config = {
+            "timezone": "UTC",
+            "paths": {"objects_root": "/tmp/objects"},
+            "schedule": {"daily_digest_channel_id": 77},
+        }
+        bot = DiscordSquireBot(config=config, runtime_state=runtime_state)
+        sent: list[str] = []
+
+        class _Thread:
+            id = 77
+            parent_id = 22
+
+            async def send(self, *, content):
+                sent.append(content)
+
+        async def _fake_resolve_channel():
+            return _Thread()
+
+        def _fake_build_weekly_review(objects_root, config):
+            return WeeklyReview(
+                generated_at=datetime(2026, 1, 25, 12, 0, tzinfo=timezone.utc),
+                sections=[
+                    DigestSection(
+                        title="Admin without due dates",
+                        lines=["Renew passport"],
+                        object_ids=["A_2"],
+                    )
+                ],
+            )
+
+        monkeypatch.setattr(bot, "_resolve_digest_channel", _fake_resolve_channel)
+        monkeypatch.setattr(discord_scheduler, "build_weekly_review", _fake_build_weekly_review)
+
+        await bot._send_weekly_review()
+
+        assert "\n1. Renew passport" in sent[0]
+        assert "!done <number>" in sent[0]
+        assert runtime_state.resolve_result_cursor(22, 1) == "A_2"
+        assert runtime_state.result_cursors[22].source_view == "weekly"
+        assert 77 not in runtime_state.result_cursors
+
+    asyncio.run(_run())
+
+
+def test_scheduled_all_clear_report_clears_previous_cursor(monkeypatch) -> None:
+    async def _run() -> None:
+        runtime_state = RuntimeStateStore()
+        config = {
+            "timezone": "UTC",
+            "paths": {"objects_root": "/tmp/objects"},
+            "schedule": {"daily_digest_channel_id": 22},
+        }
+        bot = DiscordSquireBot(config=config, runtime_state=runtime_state)
+
+        class _Channel:
+            id = 22
+
+            async def send(self, *, content):
+                return None
+
+        async def _fake_resolve_channel():
+            return _Channel()
+
+        def _fake_build_daily_digest(objects_root, config):
+            return DailyDigest(
+                generated_at=datetime(2026, 1, 22, 12, 0, tzinfo=timezone.utc),
+                sections=[DigestSection(title="Admin overdue", lines=["All clear"])],
+            )
+
+        runtime_state.store_result_cursor(22, ["OLD"], source_view="find")
+        monkeypatch.setattr(bot, "_resolve_digest_channel", _fake_resolve_channel)
+        monkeypatch.setattr(discord_scheduler, "build_daily_digest", _fake_build_daily_digest)
+
+        await bot._send_daily_digest()
+
+        assert runtime_state.resolve_result_cursor(22, 1) is None
+        assert runtime_state.result_cursors[22].source_view == "status"
 
     asyncio.run(_run())
 

@@ -180,7 +180,11 @@ def main() -> None:
         )
 
     try:
-        bot = DiscordSquireBot(config=config, message_handler=_handle_message)
+        bot = DiscordSquireBot(
+            config=config,
+            message_handler=_handle_message,
+            runtime_state=runtime_state,
+        )
         due_time_reminder_notifier = bot.request_due_time_reminder_schedule_refresh
         bot.run(token)
     finally:
